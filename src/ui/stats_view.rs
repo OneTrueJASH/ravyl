@@ -17,6 +17,7 @@ use ratatui::{
 const TILE_WIDTH: u16 = 5;
 const TILE_HEIGHT: u16 = 3;
 
+/// Combined rack tile display with game statistics and opponent inference.
 pub struct RackStatsWidget<'a> {
     state: &'a SolverState,
     rack: &'a Rack,

@@ -44,6 +44,7 @@ impl EscapeMenuOption {
     }
 }
 
+/// Rendered popup widget for the escape/main menu.
 pub struct EscapeMenuPopup {
     selected: EscapeMenuOption,
 }

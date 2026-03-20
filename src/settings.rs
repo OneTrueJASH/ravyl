@@ -89,7 +89,7 @@ impl DefaultSort {
         }
     }
 
-    pub fn to_sort_mode(&self) -> SortMode {
+    pub fn to_sort_mode(self) -> SortMode {
         match self {
             DefaultSort::Equity => SortMode::Equity,
             DefaultSort::Mcts => SortMode::MctsEquity,
@@ -133,7 +133,7 @@ impl Default for DisplaySettings {
 }
 
 /// Game settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GameSettings {
     /// Lexicon to use
     pub lexicon: Lexicon,
@@ -146,7 +146,7 @@ pub enum Lexicon {
     NWL23,
     CSW21,
     TWL06,
-    SOWPODS,
+    Sowpods,
 }
 
 impl Lexicon {
@@ -155,7 +155,7 @@ impl Lexicon {
             Lexicon::NWL23 => "NWL23",
             Lexicon::CSW21 => "CSW21",
             Lexicon::TWL06 => "TWL06",
-            Lexicon::SOWPODS => "SOWPODS",
+            Lexicon::Sowpods => "SOWPODS",
         }
     }
 
@@ -163,40 +163,27 @@ impl Lexicon {
         match self {
             Lexicon::NWL23 => Lexicon::CSW21,
             Lexicon::CSW21 => Lexicon::TWL06,
-            Lexicon::TWL06 => Lexicon::SOWPODS,
-            Lexicon::SOWPODS => Lexicon::NWL23,
+            Lexicon::TWL06 => Lexicon::Sowpods,
+            Lexicon::Sowpods => Lexicon::NWL23,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            Lexicon::NWL23 => Lexicon::SOWPODS,
+            Lexicon::NWL23 => Lexicon::Sowpods,
             Lexicon::CSW21 => Lexicon::NWL23,
             Lexicon::TWL06 => Lexicon::CSW21,
-            Lexicon::SOWPODS => Lexicon::TWL06,
+            Lexicon::Sowpods => Lexicon::TWL06,
         }
     }
 }
 
-impl Default for GameSettings {
-    fn default() -> Self {
-        Self {
-            lexicon: Lexicon::default(),
-        }
-    }
-}
 
 /// Performance settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PerformanceSettings {
     /// Number of threads (0 = auto)
     pub threads: u32,
-}
-
-impl Default for PerformanceSettings {
-    fn default() -> Self {
-        Self { threads: 0 }
-    }
 }
 
 /// All application settings
@@ -231,5 +218,72 @@ impl Settings {
         }
         let content = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
         fs::write(&path, content).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_settings() {
+        let s = Settings::default();
+        assert_eq!(s.refengine.plies, 2);
+        assert_eq!(s.refengine.iterations, 1000);
+        assert_eq!(s.refengine.num_plays, 150);
+        assert!(s.refengine.adaptive);
+        assert_eq!(s.refengine.endgame_plies, 8);
+        assert_eq!(s.mcts.num_candidates, 10);
+        assert_eq!(s.mcts.iterations_per_candidate, 50);
+        assert!(s.mcts.parallel);
+        assert_eq!(s.display.default_sort, DefaultSort::Equity);
+        assert!(s.display.sidebar_visible);
+        assert_eq!(s.game.lexicon, Lexicon::NWL23);
+        assert_eq!(s.performance.threads, 0);
+    }
+
+    #[test]
+    fn test_settings_toml_roundtrip() {
+        let settings = Settings::default();
+        let toml_str = toml::to_string(&settings).unwrap();
+        let parsed: Settings = toml::from_str(&toml_str).unwrap();
+
+        // Compare fields individually since Settings may not derive PartialEq
+        assert_eq!(parsed.refengine.plies, settings.refengine.plies);
+        assert_eq!(parsed.refengine.iterations, settings.refengine.iterations);
+        assert_eq!(parsed.refengine.num_plays, settings.refengine.num_plays);
+        assert_eq!(parsed.refengine.adaptive, settings.refengine.adaptive);
+        assert_eq!(parsed.refengine.endgame_plies, settings.refengine.endgame_plies);
+        assert_eq!(parsed.mcts.num_candidates, settings.mcts.num_candidates);
+        assert_eq!(
+            parsed.mcts.iterations_per_candidate,
+            settings.mcts.iterations_per_candidate
+        );
+        assert_eq!(parsed.mcts.parallel, settings.mcts.parallel);
+        assert_eq!(parsed.display.default_sort, settings.display.default_sort);
+        assert_eq!(
+            parsed.display.sidebar_visible,
+            settings.display.sidebar_visible
+        );
+        assert_eq!(parsed.game.lexicon, settings.game.lexicon);
+        assert_eq!(parsed.performance.threads, settings.performance.threads);
+    }
+
+    #[test]
+    fn test_lexicon_label() {
+        assert_eq!(Lexicon::NWL23.label(), "NWL23");
+        assert_eq!(Lexicon::CSW21.label(), "CSW21");
+        assert_eq!(Lexicon::TWL06.label(), "TWL06");
+        assert_eq!(Lexicon::Sowpods.label(), "SOWPODS");
+    }
+
+    #[test]
+    fn test_sort_mode_conversion() {
+        assert_eq!(DefaultSort::Equity.to_sort_mode(), SortMode::Equity);
+        assert_eq!(DefaultSort::Mcts.to_sort_mode(), SortMode::MctsEquity);
+        assert_eq!(DefaultSort::Score.to_sort_mode(), SortMode::Score);
+        assert_eq!(DefaultSort::Leave.to_sort_mode(), SortMode::Leave);
+        assert_eq!(DefaultSort::Length.to_sort_mode(), SortMode::WordLength);
+        assert_eq!(DefaultSort::Alpha.to_sort_mode(), SortMode::Alpha);
     }
 }

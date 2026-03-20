@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
+/// Yes/No confirmation dialog widget.
 pub struct ConfirmPopup<'a> {
     title: &'a str,
     message: &'a str,

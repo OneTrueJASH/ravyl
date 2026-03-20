@@ -3,13 +3,11 @@
 use ratatui::style::{Color, Modifier, Style};
 
 // ── Base palette ──────────────────────────────────────────────────────
-pub const BG_BASE: Color = Color::Reset;
 pub const TEXT_PRIMARY: Color = Color::White;
 pub const TEXT_DIM: Color = Color::DarkGray;
 pub const TEXT_MUTED: Color = Color::Gray;
 
 // ── Focus / borders ───────────────────────────────────────────────────
-pub const BORDER_FOCUSED: Color = Color::Yellow;
 pub const BORDER_NORMAL: Color = Color::DarkGray;
 
 // ── Tiles ─────────────────────────────────────────────────────────────
@@ -61,9 +59,7 @@ pub const TITLE_FG: Color = Color::LightBlue;
 
 // ── Popups / dialogs ─────────────────────────────────────────────────
 pub const POPUP_BORDER: Color = Color::Cyan;
-pub const POPUP_TITLE: Color = Color::Cyan;
 pub const POPUP_WARN_BORDER: Color = Color::Yellow;
-pub const POPUP_WARN_TITLE: Color = Color::Yellow;
 pub const POPUP_KEY: Color = Color::Yellow;
 pub const POPUP_HEADER: Color = Color::Cyan;
 pub const POPUP_DESC: Color = Color::Gray;
@@ -82,8 +78,6 @@ pub const PANE_SUGGESTIONS: Color = Color::Rgb(109, 40, 217); // violet-700
 
 // ── Tab bar ──────────────────────────────────────────────────────────
 pub const TAB_BOARD_ACTIVE: Color = Color::Rgb(4, 120, 87); // emerald-700
-pub const TAB_LOGS_ACTIVE: Color = Color::Rgb(14, 116, 144); // cyan-700
-pub const TAB_BG: Color = Color::Rgb(15, 23, 42); // slate-900-ish
 
 // ── Button styles (dialogs) ──────────────────────────────────────────
 pub const BTN_YES_FG: Color = Color::Green;
@@ -91,14 +85,6 @@ pub const BTN_NO_FG: Color = Color::Red;
 pub const BTN_SELECTED_FG: Color = Color::Black;
 
 // ── Helper functions ─────────────────────────────────────────────────
-
-pub fn border_style(focused: bool) -> Style {
-    if focused {
-        Style::new().fg(BORDER_FOCUSED)
-    } else {
-        Style::new().fg(BORDER_NORMAL)
-    }
-}
 
 pub fn highlight_style() -> Style {
     Style::new()

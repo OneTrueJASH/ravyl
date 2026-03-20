@@ -1,6 +1,6 @@
 //! Board widget: 15x15 grid with premium squares, cursor, and preview tiles.
 
-use crate::board::{Direction, Premium};
+use crate::board::{Direction, Premium, BOARD_SIZE};
 use crate::game::SolverState;
 use crate::tile::{letter_value, Tile};
 use crate::ui::hit::{register_hit, HitTarget};
@@ -173,8 +173,8 @@ impl Widget for BoardWidget<'_> {
         // Register focus pane hit for the whole board area.
         register_hit(area, HitTarget::FocusPane(crate::app::Focus::Board));
 
-        let max_from_width = (inner.width + 14) / 15;
-        let max_from_height = (inner.height + 14) / 15;
+        let max_from_width = inner.width.div_ceil(BOARD_SIZE as u16);
+        let max_from_height = inner.height.div_ceil(BOARD_SIZE as u16);
         let cell_h_for_width = (max_from_width * 4 + 3) / 7;
         let cell_h = max_from_height.min(cell_h_for_width).max(MIN_CELL_HEIGHT);
         let cell_w = (cell_h * 7 / 4).max(MIN_CELL_WIDTH);
@@ -182,14 +182,14 @@ impl Widget for BoardWidget<'_> {
         let step_x = cell_w - 1;
         let step_y = cell_h - 1;
 
-        let board_w = cell_w + 14 * step_x;
-        let board_h = cell_h + 14 * step_y;
+        let board_w = cell_w + (BOARD_SIZE as u16 - 1) * step_x;
+        let board_h = cell_h + (BOARD_SIZE as u16 - 1) * step_y;
 
         let start_x = inner.x + (inner.width.saturating_sub(board_w)) / 2;
         let start_y = inner.y + (inner.height.saturating_sub(board_h)) / 2;
 
-        for row in 0..15 {
-            for col in 0..15 {
+        for row in 0..BOARD_SIZE {
+            for col in 0..BOARD_SIZE {
                 let cell_x = start_x + col as u16 * step_x;
                 let cell_y = start_y + row as u16 * step_y;
 
@@ -243,14 +243,14 @@ impl Widget for BoardWidget<'_> {
                         &preview_tile.letter.to_string(), is_cursor, Some(value),
                     );
                 } else if is_cursor {
-                    let board_cell = self.state.board.get(row, col).unwrap();
+                    let board_cell = self.state.board.get(row, col).expect("row/col within board dimensions");
                     let label = premium_label(&board_cell.premium);
                     self.draw_cell(
                         buf, cell_x, cell_y, cell_w, cell_h, border,
                         Some(theme::CURSOR_BG), theme::CURSOR_FG, label, true, None,
                     );
                 } else {
-                    let board_cell = self.state.board.get(row, col).unwrap();
+                    let board_cell = self.state.board.get(row, col).expect("row/col within board dimensions");
                     let fg = premium_fg(&board_cell.premium);
                     let label = premium_label(&board_cell.premium);
                     self.draw_cell(

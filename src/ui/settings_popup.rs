@@ -97,6 +97,7 @@ fn setting_description(tab: SettingsTab, row: usize) -> &'static str {
     }
 }
 
+/// Rendered popup widget for editing application settings.
 pub struct SettingsPopup<'a> {
     state: &'a SettingsDialogState,
 }
@@ -360,14 +361,14 @@ pub fn get_setting_value(settings: &Settings, tab: SettingsTab, row: usize) -> S
             0 => settings.refengine.plies.to_string(),
             1 => settings.refengine.iterations.to_string(),
             2 => settings.refengine.num_plays.to_string(),
-            3 => return String::new(),
+            3 => String::new(),
             4 => settings.refengine.endgame_plies.to_string(),
             _ => String::new(),
         },
         SettingsTab::Mcts => match row {
             0 => settings.mcts.num_candidates.to_string(),
             1 => settings.mcts.iterations_per_candidate.to_string(),
-            2 => return String::new(),
+            2 => String::new(),
             _ => String::new(),
         },
         SettingsTab::Display => String::new(),

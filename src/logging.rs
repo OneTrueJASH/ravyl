@@ -41,7 +41,7 @@ pub fn read_log_lines() -> Vec<String> {
     match File::open(path) {
         Ok(file) => {
             let reader = BufReader::new(file);
-            reader.lines().filter_map(|l| l.ok()).collect()
+            reader.lines().map_while(Result::ok).collect()
         }
         Err(_) => Vec::new(),
     }

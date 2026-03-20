@@ -3,6 +3,7 @@
 //! Board always gets priority (sized from terminal height).
 //! Sidebar fills remaining width. Suggestions hide if sidebar < 30 cols.
 
+use crate::board::BOARD_SIZE;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 /// Minimum cell dimensions.
@@ -34,8 +35,6 @@ pub struct AppLayout {
     pub suggestions_area: Option<Rect>,
     /// Bottom hint line.
     pub status_bar: Rect,
-    /// Raw sidebar rect (for focus-pane hit registration).
-    pub sidebar_rect: Option<Rect>,
 }
 
 impl AppLayout {
@@ -43,9 +42,9 @@ impl AppLayout {
     fn ideal_board_width(terminal_height: u16) -> u16 {
         // Vertical overhead: title(1) + tab(1) + message(1) + status(1) + board border(2)
         let board_inner_h = terminal_height.saturating_sub(6);
-        let max_cell_h = ((board_inner_h + 14) / 15).max(MIN_CELL_HEIGHT);
+        let max_cell_h = board_inner_h.div_ceil(BOARD_SIZE as u16).max(MIN_CELL_HEIGHT);
         let cell_w = (max_cell_h * 7 / 4).max(MIN_CELL_WIDTH);
-        (15 * cell_w - 14) + 2 // grid width + outer border
+        (BOARD_SIZE as u16 * cell_w - (BOARD_SIZE as u16 - 1)) + 2 // grid width + outer border
     }
 
     /// Compute layout from terminal size.
@@ -75,7 +74,6 @@ impl AppLayout {
                 suggestions_tab_area: None,
                 suggestions_area: None,
                 status_bar,
-                sidebar_rect: None,
             };
         }
 
@@ -156,7 +154,6 @@ impl AppLayout {
             suggestions_tab_area,
             suggestions_area,
             status_bar,
-            sidebar_rect: Some(sidebar),
         }
     }
 }

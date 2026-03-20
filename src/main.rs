@@ -1,3 +1,7 @@
+//! Binary entry point for the Crossplay solver TUI.
+//!
+//! Sets up the terminal, loads the dictionary, and runs the main event loop.
+
 mod app;
 mod board;
 mod dictionary;

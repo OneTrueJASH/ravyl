@@ -61,10 +61,6 @@ impl Dictionary {
         self.word_count
     }
 
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.word_count == 0
-    }
 }
 
 /// Load the default dictionary from the data directory

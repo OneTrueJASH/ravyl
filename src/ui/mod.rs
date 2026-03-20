@@ -1,3 +1,7 @@
+//! UI module that re-exports all widget renderers for the TUI.
+//!
+//! Each submodule handles a distinct region of the interface.
+
 pub mod board_view;
 pub mod confirm_popup;
 pub mod events;

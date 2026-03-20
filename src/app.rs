@@ -1,8 +1,12 @@
-use crate::board::Direction;
+//! Central application state, event handling, and business logic.
+//!
+//! Contains the [`App`] struct which owns all game state, dialog state,
+//! and coordinates between the solver, MCTS engine, and UI.
+
+use crate::board::{Board, Direction, BOARD_SIZE};
 use crate::dictionary::Dictionary;
 use crate::endgame::{EndgameMove, EndgameSolver};
 use crate::game::SolverState;
-use crate::board::Board;
 use crate::logging::log;
 use crate::refengine_mcts::{InferenceResult, RefSimResult, RefSimulator, SimulationOutput};
 use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult};
@@ -155,14 +159,13 @@ struct UndoState {
 }
 
 /// MCTS progress state
-#[allow(dead_code)]
 pub struct MctsProgress {
     pub total_candidates: usize,
-    pub completed_candidates: usize,
     pub spinner_frame: usize,
 }
 
 impl MctsProgress {
+    /// Returns the spinner character for the current animation frame.
     pub fn spinner_char(&self) -> char {
         const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
         SPINNER[self.spinner_frame % SPINNER.len()]
@@ -199,10 +202,12 @@ pub struct App {
 }
 
 impl App {
+    /// Create a new App with default settings loaded from disk.
     pub fn new() -> Self {
         Self::with_settings(Settings::load())
     }
 
+    /// Create a new App with the given settings.
     pub fn with_settings(settings: Settings) -> Self {
         let lexicon = settings.game.lexicon.label();
         let refengine_simulator = match RefSimulator::new("external/refengine/data", lexicon) {
@@ -653,10 +658,12 @@ impl App {
 
     // ── Business logic ──────────────────────────────────────────────
 
+    /// Returns true if any background simulation is in progress.
     pub fn is_mcts_running(&self) -> bool {
         self.mcts_receiver.is_some() || self.refengine_receiver.is_some() || self.endgame_receiver.is_some()
     }
 
+    /// Poll background simulation channels and incorporate results. Returns true if new results arrived.
     pub fn poll_mcts(&mut self) -> bool {
         // Check Crossplay endgame solver results first.
         if let Some(ref receiver) = self.endgame_receiver {
@@ -756,13 +763,16 @@ impl App {
                         });
 
                         if !exists {
+                            let data = crate::solver::ExternalMoveData {
+                                word: &result.word,
+                                row: result.row,
+                                col: result.col,
+                                direction: result.direction,
+                                score: result.score,
+                                equity: result.sim_equity,
+                            };
                             if let Some(mv) = Move::from_external(
-                                &result.word,
-                                result.row,
-                                result.col,
-                                result.direction,
-                                result.score,
-                                result.sim_equity,
+                                &data,
                                 &self.state.board,
                                 &self.state.rack,
                             ) {
@@ -858,12 +868,14 @@ impl App {
         false
     }
 
+    /// Advance the spinner animation by one frame.
     pub fn tick_spinner(&mut self) {
         if let Some(ref mut progress) = self.mcts_progress {
             progress.spinner_frame += 1;
         }
     }
 
+    /// Toggle the board typing direction between horizontal and vertical.
     pub fn toggle_direction(&mut self) {
         self.typing_direction = match self.typing_direction {
             Direction::Horizontal => Direction::Vertical,
@@ -871,6 +883,7 @@ impl App {
         };
     }
 
+    /// Toggle the help dialog open or closed.
     pub fn toggle_help(&mut self) {
         self.dialog = match self.dialog {
             DialogState::Help => DialogState::None,
@@ -879,22 +892,27 @@ impl App {
         };
     }
 
+    /// Open the escape menu dialog.
     pub fn show_escape_menu(&mut self) {
         self.dialog = DialogState::EscapeMenu(EscapeMenuOption::Cancel);
     }
 
+    /// Open the board-reset confirmation dialog.
     pub fn show_reset_confirm(&mut self) {
         self.dialog = DialogState::ConfirmReset(false);
     }
 
+    /// Close any open dialog.
     pub fn close_dialog(&mut self) {
         self.dialog = DialogState::None;
     }
 
+    /// Open the settings dialog with current settings.
     pub fn show_settings(&mut self) {
         self.dialog = DialogState::Settings(SettingsDialogState::new(self.settings.clone()));
     }
 
+    /// Apply and persist updated settings, reloading the lexicon if changed.
     pub fn apply_settings(&mut self, new_settings: Settings, lexicon_changed: bool) {
         self.sidebar_visible = new_settings.display.sidebar_visible;
         self.sort_mode = new_settings.display.default_sort.to_sort_mode();
@@ -913,10 +931,12 @@ impl App {
         }
     }
 
+    /// Returns true if any dialog is currently open.
     pub fn has_dialog(&self) -> bool {
         self.dialog != DialogState::None
     }
 
+    /// Switch between the Board and Logs tabs.
     pub fn toggle_board_tab(&mut self) {
         self.board_tab = self.board_tab.toggle();
         if self.board_tab == BoardTab::Logs {
@@ -924,22 +944,27 @@ impl App {
         }
     }
 
+    /// Toggle sidebar (rack + suggestions) visibility.
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
     }
 
+    /// Scroll the log viewer up by the given number of lines.
     pub fn scroll_log_up(&mut self, lines: usize) {
         self.log_scroll = self.log_scroll.saturating_add(lines);
     }
 
+    /// Scroll the log viewer down by the given number of lines.
     pub fn scroll_log_down(&mut self, lines: usize) {
         self.log_scroll = self.log_scroll.saturating_sub(lines);
     }
 
+    /// Reset the log viewer scroll position to the bottom.
     pub fn scroll_log_to_bottom(&mut self) {
         self.log_scroll = 0;
     }
 
+    /// Set the dictionary used for move generation.
     pub fn set_dictionary(&mut self, dict: Dictionary) {
         let count = dict.len();
         self.dictionary = Some(Arc::new(dict));
@@ -949,12 +974,14 @@ impl App {
         ));
     }
 
+    /// Move the board cursor by the given row/column delta.
     pub fn move_cursor(&mut self, dr: i32, dc: i32) {
         let new_row = (self.cursor.0 as i32 + dr).clamp(0, 14) as usize;
         let new_col = (self.cursor.1 as i32 + dc).clamp(0, 14) as usize;
         self.cursor = (new_row, new_col);
     }
 
+    /// Place a letter on the board at the cursor and advance in the typing direction.
     pub fn place_on_board(&mut self, letter: char) {
         let (row, col) = self.cursor;
 
@@ -987,6 +1014,7 @@ impl App {
         }
     }
 
+    /// Remove the tile at the current cursor position.
     pub fn remove_from_board(&mut self) {
         let (row, col) = self.cursor;
         if self.state.remove_tile(row, col).is_some() {
@@ -995,6 +1023,7 @@ impl App {
         }
     }
 
+    /// Delete tile at cursor, or step back and delete if cursor cell is empty.
     pub fn backspace_on_board(&mut self) {
         let (row, col) = self.cursor;
         if self.state.get_tile(row, col).is_some() {
@@ -1005,7 +1034,7 @@ impl App {
             let (dr, dc) = self.typing_direction.delta();
             let new_row = row as i32 - dr;
             let new_col = col as i32 - dc;
-            if new_row >= 0 && new_row < 15 && new_col >= 0 && new_col < 15 {
+            if (0..BOARD_SIZE as i32).contains(&new_row) && (0..BOARD_SIZE as i32).contains(&new_col) {
                 self.cursor = (new_row as usize, new_col as usize);
                 if self
                     .state
@@ -1019,6 +1048,7 @@ impl App {
         }
     }
 
+    /// Add a letter tile to the rack, or show a message if full.
     pub fn add_to_rack(&mut self, letter: char) {
         if self.state.add_to_rack(letter) {
             self.clear_suggestions();
@@ -1028,6 +1058,7 @@ impl App {
         }
     }
 
+    /// Remove the last tile from the rack.
     pub fn pop_from_rack(&mut self) {
         if self.state.pop_from_rack() {
             self.clear_suggestions();
@@ -1035,6 +1066,7 @@ impl App {
         }
     }
 
+    /// Remove all tiles from the rack.
     pub fn clear_rack(&mut self) {
         self.state.clear_rack();
         self.clear_suggestions();
@@ -1048,6 +1080,7 @@ impl App {
         self.inferred_opponent_rack = None;
     }
 
+    /// Run the solver to generate all legal moves for the current board and rack.
     pub fn find_moves(&mut self) {
         if self.state.rack.is_empty() {
             self.message = Some("Set your rack first (Tab to rack, type letters)".to_string());
@@ -1097,8 +1130,8 @@ impl App {
 
         let mut snapshot_tiles = 0;
         let mut current_tiles = 0;
-        for row in 0..15 {
-            for col in 0..15 {
+        for row in 0..BOARD_SIZE {
+            for col in 0..BOARD_SIZE {
                 if prev.get_tile(row, col).is_some() {
                     snapshot_tiles += 1;
                 }
@@ -1113,8 +1146,8 @@ impl App {
         ));
 
         let mut tiles = String::new();
-        for row in 0..15 {
-            for col in 0..15 {
+        for row in 0..BOARD_SIZE {
+            for col in 0..BOARD_SIZE {
                 if prev.get_tile(row, col).is_none() {
                     if let Some(tile) = self.state.board.get_tile(row, col) {
                         if tile.is_blank {
@@ -1139,6 +1172,7 @@ impl App {
         }
     }
 
+    /// Launch RefEngine simulation (or endgame solver) on a background thread.
     pub fn run_mcts_evaluation(&mut self) {
         if self.is_mcts_running() {
             return;
@@ -1169,7 +1203,7 @@ impl App {
 
                 self.mcts_progress = Some(MctsProgress {
                     total_candidates: total_moves,
-                    completed_candidates: 0,
+        
                     spinner_frame: 0,
                 });
                 self.message = Some(format!(
@@ -1208,7 +1242,7 @@ impl App {
 
         self.mcts_progress = Some(MctsProgress {
             total_candidates: self.suggestions.len().min(15),
-            completed_candidates: 0,
+
             spinner_frame: 0,
         });
 
@@ -1259,6 +1293,7 @@ impl App {
         self.message = None;
     }
 
+    /// Find moves, focus the suggestions pane, and start simulation.
     pub fn find_moves_and_focus(&mut self) {
         self.find_moves();
         if !self.suggestions.is_empty() {
@@ -1267,6 +1302,7 @@ impl App {
         }
     }
 
+    /// Apply the currently selected suggestion to the board.
     pub fn apply_suggestion(&mut self) {
         if self.suggestions.is_empty() {
             return;
@@ -1298,6 +1334,7 @@ impl App {
         self.clear_suggestions();
     }
 
+    /// Undo the last applied move, restoring the previous board and rack state.
     pub fn undo(&mut self) {
         if let Some(undo_state) = self.undo_stack.pop() {
             self.state = undo_state.state;
@@ -1308,11 +1345,13 @@ impl App {
         }
     }
 
+    /// Apply the selected suggestion and return focus to the board.
     pub fn apply_suggestion_and_focus(&mut self) {
         self.apply_suggestion();
         self.focus = Focus::Board;
     }
 
+    /// Move the suggestion selection up or down by delta, wrapping around.
     pub fn move_suggestion_selection(&mut self, delta: i32) {
         if self.suggestions.is_empty() {
             return;
@@ -1322,6 +1361,7 @@ impl App {
         self.selected_suggestion = new_idx;
     }
 
+    /// Reset the board, rack, and all state to initial defaults.
     pub fn reset(&mut self) {
         self.state.reset();
         self.cursor = (7, 7);
@@ -1331,10 +1371,12 @@ impl App {
         self.message = Some("Reset complete".to_string());
     }
 
+    /// Cycle input focus to the next pane.
     pub fn next_focus(&mut self) {
         self.focus = self.focus.next();
     }
 
+    /// Advance to the next sort mode and re-sort suggestions.
     pub fn cycle_sort_mode(&mut self) {
         let has_sim = self.mcts_results.is_some() || self.refengine_results.is_some();
         self.sort_mode = self.sort_mode.next(has_sim);
@@ -1343,6 +1385,7 @@ impl App {
         self.message = Some(format!("Sort: {}", self.sort_mode.label()));
     }
 
+    /// Set a specific sort mode and re-sort suggestions.
     pub fn set_sort_mode(&mut self, mode: SortMode) {
         self.sort_mode = mode;
         self.apply_sort();
@@ -1452,15 +1495,6 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn get_mcts_result(&self, mv: &Move) -> Option<&MctsResult> {
-        self.mcts_results.as_ref()?.iter().find(|r| {
-            r.mv.word == mv.word
-                && r.mv.row == mv.row
-                && r.mv.col == mv.col
-                && r.mv.direction == mv.direction
-        })
-    }
 }
 
 impl Default for App {

@@ -35,18 +35,17 @@ fn log_suggestions(moves: &[Move], lookup: &SimEquityLookup, results_len: usize)
     }
 }
 
+/// Simulation results for a single move from the RefEngine engine.
 #[derive(Clone)]
 pub struct SimData {
     pub sim_equity: f32,
     pub win_pct: f32,
-    pub leave: String,
-    pub ply1_score: f32,
     pub ply1_bingo_pct: f32,
-    pub ply2_score: f32,
     pub ply2_bingo_pct: f32,
     pub is_endgame: bool,
 }
 
+/// Maps moves to their simulation equity, combining MCTS and RefEngine results.
 pub struct SimEquityLookup {
     mcts_map: HashMap<(String, usize, usize, Direction), f32>,
     refengine_map: HashMap<(String, usize, usize, Direction), SimData>,
@@ -82,10 +81,7 @@ impl SimEquityLookup {
                             SimData {
                                 sim_equity: r.sim_equity,
                                 win_pct: r.win_pct,
-                                leave: r.leave.clone(),
-                                ply1_score: r.ply1_score,
                                 ply1_bingo_pct: r.ply1_bingo_pct,
-                                ply2_score: r.ply2_score,
                                 ply2_bingo_pct: r.ply2_bingo_pct,
                                 is_endgame: r.is_endgame,
                             },

@@ -2,6 +2,12 @@
 name = "cpsolver2"
 version = "0.1.0"
 edition = "2021"
+description = "TUI solver for NYT Crossplay word game positions"
+license = "MIT"
+repository = "https://github.com/OneTrueJASH/cpsolver2"
+keywords = ["crossplay", "word-game", "solver", "tui", "scrabble"]
+categories = ["command-line-utilities", "games"]
+rust-version = "1.82"
 
 [dependencies]
 ratatui = "0.30"

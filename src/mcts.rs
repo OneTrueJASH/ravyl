@@ -6,7 +6,7 @@
 use crate::dictionary::Dictionary;
 use crate::game::SolverState;
 use crate::solver::{leave_value, Move, Solver};
-use crate::tile::{Rack, Tile};
+use crate::tile::{Rack, Tile, RACK_SIZE};
 use fastrand::Rng;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -34,22 +34,11 @@ impl Default for MctsConfig {
 
 /// Result of MCTS evaluation for a single move
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MctsResult {
     /// The evaluated move
     pub mv: Move,
-    /// Static equity (score + leave value)
-    pub static_equity: f32,
     /// MCTS equity after simulation
     pub mcts_equity: f32,
-    /// Average spread difference across iterations
-    pub avg_spread: f32,
-    /// Average opponent score
-    pub avg_opp_score: f32,
-    /// Average follow-up score
-    pub avg_followup_score: f32,
-    /// Number of iterations completed
-    pub iterations: usize,
 }
 
 /// Pool of available tiles for random drawing
@@ -133,8 +122,6 @@ impl TilePool {
 /// Single simulation iteration result
 struct SimulationResult {
     spread: f32,
-    opp_score: u32,
-    followup_score: u32,
 }
 
 /// MCTS evaluator for move selection
@@ -186,7 +173,6 @@ impl MctsEvaluator {
         mv: &Move,
         dictionary: &Dictionary,
     ) -> MctsResult {
-        let static_equity = mv.equity;
         let mut rng = Rng::new(); // fastrand RNG - much faster than rand
 
         // Pre-compute state after our move (done once per candidate)
@@ -202,18 +188,11 @@ impl MctsEvaluator {
             let spread = leave_value(&mv.leave);
             return MctsResult {
                 mv: mv.clone(),
-                static_equity,
                 mcts_equity: mv.score as f32 + spread,
-                avg_spread: spread,
-                avg_opp_score: 0.0,
-                avg_followup_score: 0.0,
-                iterations: 1,
             };
         }
 
         let mut total_spread = 0.0f32;
-        let mut total_opp_score = 0.0f32;
-        let mut total_followup_score = 0.0f32;
         let mut iterations_completed = 0;
 
         for _ in 0..self.config.iterations_per_candidate {
@@ -221,21 +200,14 @@ impl MctsEvaluator {
                 self.simulate_iteration(&base_state, mv, &base_pool, dictionary, &mut rng)
             {
                 total_spread += result.spread;
-                total_opp_score += result.opp_score as f32;
-                total_followup_score += result.followup_score as f32;
                 iterations_completed += 1;
             }
         }
 
-        let (avg_spread, avg_opp_score, avg_followup_score) = if iterations_completed > 0 {
-            let n = iterations_completed as f32;
-            (
-                total_spread / n,
-                total_opp_score / n,
-                total_followup_score / n,
-            )
+        let avg_spread = if iterations_completed > 0 {
+            total_spread / iterations_completed as f32
         } else {
-            (0.0, 0.0, 0.0)
+            0.0
         };
 
         // MCTS equity = Points + Spread_Difference + Leftover_Difference
@@ -243,12 +215,7 @@ impl MctsEvaluator {
 
         MctsResult {
             mv: mv.clone(),
-            static_equity,
             mcts_equity,
-            avg_spread,
-            avg_opp_score,
-            avg_followup_score,
-            iterations: iterations_completed,
         }
     }
 
@@ -262,8 +229,8 @@ impl MctsEvaluator {
         dictionary: &Dictionary,
         rng: &mut Rng,
     ) -> Option<SimulationResult> {
-        // 1. Draw random opponent rack (7 tiles or what's available)
-        let opp_rack_size = 7.min(base_pool.len());
+        // 1. Draw random opponent rack (RACK_SIZE tiles or what's available)
+        let opp_rack_size = RACK_SIZE.min(base_pool.len());
         let opp_rack = base_pool.draw_random_rack(opp_rack_size, rng);
 
         // 2. Find opponent's best response (greedy by equity)
@@ -282,7 +249,7 @@ impl MctsEvaluator {
         // 4. Remove opponent's tiles from pool, draw our follow-up tiles
         let pool_after_opp = base_pool.without_tiles(&opp_rack.tiles());
         let our_leave = &mv.leave;
-        let tiles_needed = 7 - our_leave.len();
+        let tiles_needed = RACK_SIZE - our_leave.len();
         let draw_count = tiles_needed.min(pool_after_opp.len());
 
         // Build our follow-up rack from leave + new draws
@@ -315,8 +282,6 @@ impl MctsEvaluator {
 
         Some(SimulationResult {
             spread: total_spread - mv.score as f32, // Remove initial score (added back in mcts_equity)
-            opp_score,
-            followup_score,
         })
     }
 }
@@ -345,9 +310,9 @@ mod tests {
 
         let pool = TilePool::from_remaining(&remaining);
         let mut rng = Rng::new();
-        let rack = pool.draw_random_rack(7, &mut rng);
+        let rack = pool.draw_random_rack(RACK_SIZE, &mut rng);
 
-        assert_eq!(rack.len(), 7);
+        assert_eq!(rack.len(), RACK_SIZE);
     }
 
     #[test]
@@ -397,9 +362,9 @@ mod tests {
         assert!(!results.is_empty());
         assert!(results.len() <= 3);
 
-        // Check that results have valid data
+        // Check that results have valid equity values
         for result in &results {
-            assert!(result.iterations > 0);
+            assert!(result.mcts_equity.is_finite());
         }
     }
 }
