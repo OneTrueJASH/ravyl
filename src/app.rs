@@ -1,0 +1,1470 @@
+use crate::board::Direction;
+use crate::dictionary::Dictionary;
+use crate::endgame::{EndgameMove, EndgameSolver};
+use crate::game::SolverState;
+use crate::board::Board;
+use crate::logging::log;
+use crate::refengine_mcts::{InferenceResult, RefSimResult, RefSimulator, SimulationOutput};
+use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult};
+use crate::settings::Settings;
+use crate::solver::Move;
+use crate::ui::events::AppAction;
+use crate::ui::hit::{resolve_click, HitTarget};
+use crate::ui::menu_popup::EscapeMenuOption;
+use crate::ui::settings_popup::SettingsTab;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::thread;
+
+/// Settings dialog state
+#[derive(Debug, Clone)]
+pub struct SettingsDialogState {
+    pub tab: SettingsTab,
+    pub row: usize,
+    pub editing: bool,
+    pub edit_buffer: String,
+    pub pending: Settings,
+    pub original_lexicon: crate::settings::Lexicon,
+}
+
+impl SettingsDialogState {
+    pub fn new(settings: Settings) -> Self {
+        let original_lexicon = settings.game.lexicon;
+        Self {
+            tab: SettingsTab::default(),
+            row: 0,
+            editing: false,
+            edit_buffer: String::new(),
+            pending: settings,
+            original_lexicon,
+        }
+    }
+}
+
+/// Dialog state for popup interactions
+#[derive(Debug, Clone, Default)]
+pub enum DialogState {
+    #[default]
+    None,
+    Help,
+    EscapeMenu(EscapeMenuOption),
+    ConfirmQuit(bool),
+    ConfirmReset(bool),
+    Settings(SettingsDialogState),
+}
+
+impl PartialEq for DialogState {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (DialogState::None, DialogState::None) => true,
+            (DialogState::Help, DialogState::Help) => true,
+            (DialogState::EscapeMenu(a), DialogState::EscapeMenu(b)) => a == b,
+            (DialogState::ConfirmQuit(a), DialogState::ConfirmQuit(b)) => a == b,
+            (DialogState::ConfirmReset(a), DialogState::ConfirmReset(b)) => a == b,
+            (DialogState::Settings(_), DialogState::Settings(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for DialogState {}
+
+/// Board pane tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BoardTab {
+    #[default]
+    Board,
+    Logs,
+}
+
+impl BoardTab {
+    pub fn toggle(&self) -> Self {
+        match self {
+            BoardTab::Board => BoardTab::Logs,
+            BoardTab::Logs => BoardTab::Board,
+        }
+    }
+}
+
+/// Input focus area
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Board,
+    Rack,
+    Suggestions,
+}
+
+impl Focus {
+    pub fn next(&self) -> Focus {
+        match self {
+            Focus::Board => Focus::Rack,
+            Focus::Rack => Focus::Suggestions,
+            Focus::Suggestions => Focus::Board,
+        }
+    }
+}
+
+/// Sort mode for suggestions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortMode {
+    #[default]
+    Equity,
+    MctsEquity,
+    Score,
+    Leave,
+    WordLength,
+    Alpha,
+}
+
+impl SortMode {
+    pub fn next(&self, has_mcts: bool) -> SortMode {
+        match self {
+            SortMode::Equity => {
+                if has_mcts {
+                    SortMode::MctsEquity
+                } else {
+                    SortMode::Score
+                }
+            }
+            SortMode::MctsEquity => SortMode::Score,
+            SortMode::Score => SortMode::Leave,
+            SortMode::Leave => SortMode::WordLength,
+            SortMode::WordLength => SortMode::Alpha,
+            SortMode::Alpha => SortMode::Equity,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            SortMode::Equity => "Equity",
+            SortMode::MctsEquity => "RefEngine",
+            SortMode::Score => "Score",
+            SortMode::Leave => "Leave",
+            SortMode::WordLength => "Length",
+            SortMode::Alpha => "A-Z",
+        }
+    }
+}
+
+/// Saved state for undo
+#[derive(Clone)]
+struct UndoState {
+    state: SolverState,
+    message: String,
+}
+
+/// MCTS progress state
+#[allow(dead_code)]
+pub struct MctsProgress {
+    pub total_candidates: usize,
+    pub completed_candidates: usize,
+    pub spinner_frame: usize,
+}
+
+impl MctsProgress {
+    pub fn spinner_char(&self) -> char {
+        const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+        SPINNER[self.spinner_frame % SPINNER.len()]
+    }
+}
+
+/// Application state
+pub struct App {
+    pub state: SolverState,
+    pub dictionary: Option<Arc<Dictionary>>,
+    pub cursor: (usize, usize),
+    pub focus: Focus,
+    pub typing_direction: Direction,
+    pub suggestions: Vec<Move>,
+    pub selected_suggestion: usize,
+    pub sort_mode: SortMode,
+    pub message: Option<String>,
+    undo_stack: Vec<UndoState>,
+    pub mcts_results: Option<Vec<MctsResult>>,
+    pub refengine_results: Option<Vec<RefSimResult>>,
+    mcts_receiver: Option<Receiver<Vec<MctsResult>>>,
+    refengine_receiver: Option<Receiver<Result<SimulationOutput, String>>>,
+    endgame_receiver: Option<Receiver<Vec<EndgameMove>>>,
+    pub mcts_progress: Option<MctsProgress>,
+    refengine_simulator: Option<Arc<RefSimulator>>,
+    pub dialog: DialogState,
+    pub should_quit: bool,
+    pub board_tab: BoardTab,
+    pub log_scroll: usize,
+    pub sidebar_visible: bool,
+    pub inferred_opponent_rack: Option<InferenceResult>,
+    last_applied_board: Option<Board>,
+    pub settings: Settings,
+}
+
+impl App {
+    pub fn new() -> Self {
+        Self::with_settings(Settings::load())
+    }
+
+    pub fn with_settings(settings: Settings) -> Self {
+        let lexicon = settings.game.lexicon.label();
+        let refengine_simulator = match RefSimulator::new("external/refengine/data", lexicon) {
+            Ok(sim) => Some(Arc::new(sim)),
+            Err(e) => {
+                eprintln!("RefEngine init failed: {}", e);
+                None
+            }
+        };
+
+        let sidebar_visible = settings.display.sidebar_visible;
+        let sort_mode = settings.display.default_sort.to_sort_mode();
+
+        App {
+            state: SolverState::new(),
+            dictionary: None,
+            cursor: (7, 7),
+            focus: Focus::Board,
+            typing_direction: Direction::Horizontal,
+            suggestions: Vec::new(),
+            selected_suggestion: 0,
+            sort_mode,
+            message: Some("Loading dictionary...".to_string()),
+            undo_stack: Vec::new(),
+            mcts_results: None,
+            refengine_results: None,
+            mcts_receiver: None,
+            refengine_receiver: None,
+            endgame_receiver: None,
+            mcts_progress: None,
+            refengine_simulator,
+            inferred_opponent_rack: None,
+            last_applied_board: None,
+            dialog: DialogState::None,
+            should_quit: false,
+            board_tab: BoardTab::default(),
+            log_scroll: 0,
+            sidebar_visible,
+            settings,
+        }
+    }
+
+    // ── Event handlers ──────────────────────────────────────────────
+
+    /// Handle a keyboard event and return the action for the main loop.
+    pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
+        // Ctrl+C always quits.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return AppAction::Quit;
+        }
+
+        // F1 toggles help (unless another dialog is open).
+        if key.code == KeyCode::F(1) && !self.has_dialog() {
+            self.toggle_help();
+            return AppAction::Redraw;
+        }
+
+        // F2 opens settings.
+        if key.code == KeyCode::F(2) && !self.has_dialog() {
+            self.show_settings();
+            return AppAction::Redraw;
+        }
+
+        // Backslash toggles sidebar.
+        if key.code == KeyCode::Char('\\') && !self.has_dialog() {
+            self.toggle_sidebar();
+            return AppAction::Redraw;
+        }
+
+        // Dialog input.
+        if self.has_dialog() {
+            self.handle_dialog_key(key);
+            if self.should_quit {
+                return AppAction::Quit;
+            }
+            return AppAction::Redraw;
+        }
+
+        // Focus-specific input.
+        match self.focus {
+            Focus::Board => self.handle_board_key(key),
+            Focus::Rack => self.handle_rack_key(key),
+            Focus::Suggestions => self.handle_suggestions_key(key),
+        }
+
+        AppAction::Redraw
+    }
+
+    /// Handle a mouse event and return the action for the main loop.
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> AppAction {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(target) = resolve_click(mouse.column, mouse.row) {
+                    self.handle_click(target)
+                } else {
+                    AppAction::Nothing
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                match self.focus {
+                    Focus::Suggestions => self.move_suggestion_selection(-3),
+                    Focus::Board if self.board_tab == BoardTab::Logs => {
+                        self.scroll_log_up(3);
+                    }
+                    _ => {}
+                }
+                AppAction::Redraw
+            }
+            MouseEventKind::ScrollDown => {
+                match self.focus {
+                    Focus::Suggestions => self.move_suggestion_selection(3),
+                    Focus::Board if self.board_tab == BoardTab::Logs => {
+                        self.scroll_log_down(3);
+                    }
+                    _ => {}
+                }
+                AppAction::Redraw
+            }
+            _ => AppAction::Nothing,
+        }
+    }
+
+    /// Handle a resolved click target.
+    fn handle_click(&mut self, target: HitTarget) -> AppAction {
+        match target {
+            HitTarget::BoardCell(row, col) => {
+                self.focus = Focus::Board;
+                self.board_tab = BoardTab::Board;
+                self.cursor = (row, col);
+            }
+            HitTarget::RackSlot(_) => {
+                self.focus = Focus::Rack;
+            }
+            HitTarget::SuggestionRow(idx) => {
+                if self.focus == Focus::Suggestions && self.selected_suggestion == idx {
+                    // Double-click on same row: apply the move.
+                    self.apply_suggestion_and_focus();
+                } else {
+                    self.focus = Focus::Suggestions;
+                    self.selected_suggestion = idx.min(self.suggestions.len().saturating_sub(1));
+                }
+            }
+            HitTarget::TabHeader(tab) => {
+                self.board_tab = tab;
+                self.focus = Focus::Board;
+                if tab == BoardTab::Logs {
+                    self.log_scroll = 0;
+                }
+            }
+            HitTarget::SortTab(mode) => {
+                self.focus = Focus::Suggestions;
+                self.set_sort_mode(mode);
+            }
+            HitTarget::FocusPane(focus) => {
+                self.focus = focus;
+            }
+            HitTarget::StatusBar => {}
+        }
+        AppAction::Redraw
+    }
+
+    // ── Focus-specific key handlers ─────────────────────────────────
+
+    fn handle_board_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        if key.code == KeyCode::Char('`') {
+            self.toggle_board_tab();
+            return;
+        }
+
+        match self.board_tab {
+            BoardTab::Logs => match key.code {
+                KeyCode::Up => self.scroll_log_up(1),
+                KeyCode::Down => self.scroll_log_down(1),
+                KeyCode::PageUp => self.scroll_log_up(20),
+                KeyCode::PageDown => self.scroll_log_down(20),
+                KeyCode::Home => self.scroll_log_up(10000),
+                KeyCode::End => self.scroll_log_to_bottom(),
+                KeyCode::Tab => self.next_focus(),
+                KeyCode::Esc => self.show_escape_menu(),
+                KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
+                KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
+                KeyCode::Char('z') if ctrl => self.undo(),
+                _ => {}
+            },
+            BoardTab::Board => match key.code {
+                KeyCode::Up => self.move_cursor(-1, 0),
+                KeyCode::Down => self.move_cursor(1, 0),
+                KeyCode::Left => self.move_cursor(0, -1),
+                KeyCode::Right => self.move_cursor(0, 1),
+                KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
+                KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
+                KeyCode::Char('z') if ctrl => self.undo(),
+                KeyCode::Char(c) if c.is_ascii_alphabetic() => {
+                    self.place_on_board(c.to_ascii_uppercase());
+                }
+                KeyCode::Char('?') => self.place_on_board('?'),
+                KeyCode::Backspace => self.backspace_on_board(),
+                KeyCode::Delete => self.remove_from_board(),
+                KeyCode::Tab => self.next_focus(),
+                KeyCode::Esc => self.show_escape_menu(),
+                KeyCode::Char(' ') => self.toggle_direction(),
+                KeyCode::Enter => {
+                    if !self.suggestions.is_empty() {
+                        self.apply_suggestion();
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+
+    fn handle_rack_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
+            KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
+            KeyCode::Char('z') if ctrl => self.undo(),
+            KeyCode::Enter => self.find_moves_and_focus(),
+            KeyCode::Char(c) if c.is_ascii_alphabetic() => {
+                self.add_to_rack(c.to_ascii_uppercase());
+            }
+            KeyCode::Char('?') => {
+                self.add_to_rack('?');
+            }
+            KeyCode::Backspace => self.pop_from_rack(),
+            KeyCode::Delete => self.clear_rack(),
+            KeyCode::Tab => self.next_focus(),
+            KeyCode::Esc => {
+                self.focus = Focus::Board;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_suggestions_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Up => self.move_suggestion_selection(-1),
+            KeyCode::Down => self.move_suggestion_selection(1),
+            KeyCode::Enter => self.apply_suggestion_and_focus(),
+            KeyCode::Tab => self.next_focus(),
+            KeyCode::Esc => {
+                self.focus = Focus::Board;
+            }
+            KeyCode::Char('s') if !ctrl => self.cycle_sort_mode(),
+            KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
+            KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
+            KeyCode::Char('z') if ctrl => self.undo(),
+            KeyCode::Char('m') | KeyCode::Char('M') if !ctrl => self.run_mcts_evaluation(),
+            _ => {}
+        }
+    }
+
+    fn handle_dialog_key(&mut self, key: KeyEvent) {
+        match self.dialog {
+            DialogState::None => {}
+
+            DialogState::Help => {
+                if matches!(key.code, KeyCode::Esc | KeyCode::F(1)) {
+                    self.close_dialog();
+                }
+            }
+
+            DialogState::EscapeMenu(selected) => match key.code {
+                KeyCode::Up => {
+                    self.dialog = DialogState::EscapeMenu(selected.prev());
+                }
+                KeyCode::Down => {
+                    self.dialog = DialogState::EscapeMenu(selected.next());
+                }
+                KeyCode::Esc => {
+                    self.close_dialog();
+                }
+                KeyCode::Enter => match selected {
+                    EscapeMenuOption::Quit => {
+                        self.dialog = DialogState::ConfirmQuit(false);
+                    }
+                    EscapeMenuOption::Reset => {
+                        self.dialog = DialogState::ConfirmReset(false);
+                    }
+                    EscapeMenuOption::Cancel => {
+                        self.close_dialog();
+                    }
+                },
+                _ => {}
+            },
+
+            DialogState::ConfirmQuit(yes_selected) => match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                    self.dialog = DialogState::ConfirmQuit(!yes_selected);
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.should_quit = true;
+                    self.close_dialog();
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.close_dialog();
+                }
+                KeyCode::Enter => {
+                    if yes_selected {
+                        self.should_quit = true;
+                    }
+                    self.close_dialog();
+                }
+                _ => {}
+            },
+
+            DialogState::ConfirmReset(yes_selected) => match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                    self.dialog = DialogState::ConfirmReset(!yes_selected);
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.close_dialog();
+                    self.reset();
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.close_dialog();
+                }
+                KeyCode::Enter => {
+                    if yes_selected {
+                        self.close_dialog();
+                        self.reset();
+                    } else {
+                        self.close_dialog();
+                    }
+                }
+                _ => {}
+            },
+
+            DialogState::Settings(ref mut state) => {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+                if state.editing {
+                    match key.code {
+                        KeyCode::Esc => {
+                            state.editing = false;
+                            state.edit_buffer.clear();
+                        }
+                        KeyCode::Enter => {
+                            let success = crate::ui::settings_popup::apply_edit(
+                                &mut state.pending,
+                                state.tab,
+                                state.row,
+                                &state.edit_buffer,
+                            );
+                            state.editing = false;
+                            if !success {
+                                state.edit_buffer.clear();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            state.edit_buffer.pop();
+                        }
+                        KeyCode::Char(c) if c.is_ascii_digit() => {
+                            state.edit_buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.close_dialog();
+                        }
+                        KeyCode::Tab => {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                state.tab = state.tab.prev();
+                            } else {
+                                state.tab = state.tab.next();
+                            }
+                            state.row = 0;
+                        }
+                        KeyCode::Up => {
+                            if state.row > 0 {
+                                state.row -= 1;
+                            }
+                        }
+                        KeyCode::Down => {
+                            let max_row = state.tab.row_count().saturating_sub(1);
+                            if state.row < max_row {
+                                state.row += 1;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if !crate::ui::settings_popup::is_toggle_setting(state.tab, state.row)
+                                && !crate::ui::settings_popup::is_cycle_setting(
+                                    state.tab, state.row,
+                                )
+                            {
+                                state.editing = true;
+                                state.edit_buffer =
+                                    crate::ui::settings_popup::get_setting_value(
+                                        &state.pending,
+                                        state.tab,
+                                        state.row,
+                                    );
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            if crate::ui::settings_popup::is_toggle_setting(state.tab, state.row) {
+                                crate::ui::settings_popup::toggle_setting(
+                                    &mut state.pending,
+                                    state.tab,
+                                    state.row,
+                                );
+                            } else if crate::ui::settings_popup::is_cycle_setting(
+                                state.tab, state.row,
+                            ) {
+                                crate::ui::settings_popup::cycle_setting_next(
+                                    &mut state.pending,
+                                    state.tab,
+                                    state.row,
+                                );
+                            }
+                        }
+                        KeyCode::Left => {
+                            if crate::ui::settings_popup::is_cycle_setting(state.tab, state.row) {
+                                crate::ui::settings_popup::cycle_setting_prev(
+                                    &mut state.pending,
+                                    state.tab,
+                                    state.row,
+                                );
+                            }
+                        }
+                        KeyCode::Right => {
+                            if crate::ui::settings_popup::is_cycle_setting(state.tab, state.row) {
+                                crate::ui::settings_popup::cycle_setting_next(
+                                    &mut state.pending,
+                                    state.tab,
+                                    state.row,
+                                );
+                            }
+                        }
+                        KeyCode::Char('s') if ctrl => {
+                            let lexicon_changed =
+                                state.pending.game.lexicon != state.original_lexicon;
+                            let new_settings = state.pending.clone();
+                            self.apply_settings(new_settings, lexicon_changed);
+                            self.close_dialog();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Business logic ──────────────────────────────────────────────
+
+    pub fn is_mcts_running(&self) -> bool {
+        self.mcts_receiver.is_some() || self.refengine_receiver.is_some() || self.endgame_receiver.is_some()
+    }
+
+    pub fn poll_mcts(&mut self) -> bool {
+        // Check Crossplay endgame solver results first.
+        if let Some(ref receiver) = self.endgame_receiver {
+            match receiver.try_recv() {
+                Ok(endgame_results) => {
+                    let count = endgame_results.len();
+
+                    // Convert EndgameMove results to RefSimResult for display compatibility
+                    let sim_results: Vec<RefSimResult> = endgame_results
+                        .iter()
+                        .map(|eg| {
+                            let val = eg.endgame_value as f32;
+                            RefSimResult {
+                                word: eg.mv.word.clone(),
+                                row: eg.mv.row,
+                                col: eg.mv.col,
+                                direction: eg.mv.direction,
+                                score: eg.mv.score,
+                                leave: eg.mv.leave.iter().map(|t| {
+                                    if t.is_blank { '?' } else { t.letter }
+                                }).collect(),
+                                win_pct: if val > 0.0 { 100.0 } else if val < 0.0 { 0.0 } else { 50.0 },
+                                sim_equity: val,
+                                static_equity: eg.mv.score as f32,
+                                iterations: 0,
+                                ply1_score: 0.0,
+                                ply1_bingo_pct: 0.0,
+                                ply2_score: 0.0,
+                                ply2_bingo_pct: 0.0,
+                                is_endgame: true,
+                            }
+                        })
+                        .collect();
+
+                    // Replace suggestions with fully-evaluated endgame moves
+                    // (preserves all moves, not just top N)
+                    let mut new_suggestions = Vec::with_capacity(endgame_results.len());
+                    for eg in &endgame_results {
+                        let mut mv = eg.mv.clone();
+                        mv.equity = eg.endgame_value as f32;
+                        new_suggestions.push(mv);
+                    }
+                    self.suggestions = new_suggestions;
+
+                    self.refengine_results = Some(sim_results);
+                    self.mcts_results = None;
+                    self.inferred_opponent_rack = None;
+                    self.last_applied_board = Some(self.state.board.clone());
+                    self.sort_mode = SortMode::MctsEquity;
+                    self.apply_sort();
+                    self.selected_suggestion = 0;
+                    self.endgame_receiver = None;
+                    self.mcts_progress = None;
+
+                    // Log PV for best move
+                    if let Some(best) = endgame_results.first() {
+                        let pv_str: Vec<String> = best.pv.iter().map(|p| {
+                            format!("P{}:{} {}pts", p.player + 1, p.word, p.score)
+                        }).collect();
+                        log(&format!("Endgame PV: {}", pv_str.join(" → ")));
+                    }
+
+                    self.message = Some(format!(
+                        "Endgame: {} moves evaluated (Crossplay rules, no tile penalty)",
+                        count
+                    ));
+                    return true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    if let Some(ref mut progress) = self.mcts_progress {
+                        progress.spinner_frame += 1;
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.endgame_receiver = None;
+                    self.mcts_progress = None;
+                    self.message = Some("Endgame solver failed".to_string());
+                    return true;
+                }
+            }
+        }
+
+        // Check RefEngine results (for non-endgame simulation).
+        if let Some(ref receiver) = self.refengine_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(output)) => {
+                    let results = output.sim_results;
+                    self.inferred_opponent_rack = output.inference;
+
+                    let mut added_count = 0;
+                    for result in &results {
+                        let exists = self.suggestions.iter().any(|s| {
+                            s.word.eq_ignore_ascii_case(&result.word)
+                                && s.row == result.row
+                                && s.col == result.col
+                                && s.direction == result.direction
+                        });
+
+                        if !exists {
+                            if let Some(mv) = Move::from_external(
+                                &result.word,
+                                result.row,
+                                result.col,
+                                result.direction,
+                                result.score,
+                                result.sim_equity,
+                                &self.state.board,
+                                &self.state.rack,
+                            ) {
+                                self.suggestions.push(mv);
+                                added_count += 1;
+                            }
+                        }
+                    }
+
+                    self.refengine_results = Some(results);
+                    self.mcts_results = None;
+                    self.last_applied_board = Some(self.state.board.clone());
+                    self.sort_mode = SortMode::MctsEquity;
+                    self.apply_sort();
+                    self.selected_suggestion = 0;
+                    self.refengine_receiver = None;
+                    self.mcts_progress = None;
+
+                    let count = self.refengine_results.as_ref().map(|r| r.len()).unwrap_or(0);
+                    let infer_note = if self.inferred_opponent_rack.is_some() {
+                        " + opp rack"
+                    } else {
+                        ""
+                    };
+                    let msg = if added_count > 0 {
+                        format!("RefEngine: {} moves (+{} new){}", count, added_count, infer_note)
+                    } else {
+                        format!("RefEngine: simulated {} moves{}", count, infer_note)
+                    };
+                    self.message = Some(msg);
+                    return true;
+                }
+                Ok(Err(e)) => {
+                    self.refengine_receiver = None;
+                    self.mcts_progress = None;
+                    self.message = Some(format!("RefEngine error: {}", e));
+                    return true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    if let Some(ref mut progress) = self.mcts_progress {
+                        progress.spinner_frame += 1;
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.refengine_receiver = None;
+                    self.mcts_progress = None;
+                    self.message = Some("RefEngine evaluation failed".to_string());
+                    return true;
+                }
+            }
+        }
+
+        // Then check MCTS results (fallback).
+        if let Some(ref receiver) = self.mcts_receiver {
+            match receiver.try_recv() {
+                Ok(results) => {
+                    let mut new_suggestions = Vec::with_capacity(results.len());
+                    for result in &results {
+                        new_suggestions.push(result.mv.clone());
+                    }
+
+                    let evaluated_count = results.len();
+                    if evaluated_count < self.suggestions.len() {
+                        new_suggestions
+                            .extend(self.suggestions[evaluated_count..].iter().cloned());
+                    }
+
+                    self.suggestions = new_suggestions;
+                    self.mcts_results = Some(results);
+                    self.refengine_results = None;
+                    self.selected_suggestion = 0;
+                    self.sort_mode = SortMode::MctsEquity;
+                    self.mcts_receiver = None;
+                    self.mcts_progress = None;
+
+                    let count = self.mcts_results.as_ref().map(|r| r.len()).unwrap_or(0);
+                    self.message = Some(format!("RefEngine: evaluated {} moves", count));
+                    return true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    if let Some(ref mut progress) = self.mcts_progress {
+                        progress.spinner_frame += 1;
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.mcts_receiver = None;
+                    self.mcts_progress = None;
+                    self.message = Some("RefEngine evaluation failed".to_string());
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn tick_spinner(&mut self) {
+        if let Some(ref mut progress) = self.mcts_progress {
+            progress.spinner_frame += 1;
+        }
+    }
+
+    pub fn toggle_direction(&mut self) {
+        self.typing_direction = match self.typing_direction {
+            Direction::Horizontal => Direction::Vertical,
+            Direction::Vertical => Direction::Horizontal,
+        };
+    }
+
+    pub fn toggle_help(&mut self) {
+        self.dialog = match self.dialog {
+            DialogState::Help => DialogState::None,
+            DialogState::None => DialogState::Help,
+            _ => return,
+        };
+    }
+
+    pub fn show_escape_menu(&mut self) {
+        self.dialog = DialogState::EscapeMenu(EscapeMenuOption::Cancel);
+    }
+
+    pub fn show_reset_confirm(&mut self) {
+        self.dialog = DialogState::ConfirmReset(false);
+    }
+
+    pub fn close_dialog(&mut self) {
+        self.dialog = DialogState::None;
+    }
+
+    pub fn show_settings(&mut self) {
+        self.dialog = DialogState::Settings(SettingsDialogState::new(self.settings.clone()));
+    }
+
+    pub fn apply_settings(&mut self, new_settings: Settings, lexicon_changed: bool) {
+        self.sidebar_visible = new_settings.display.sidebar_visible;
+        self.sort_mode = new_settings.display.default_sort.to_sort_mode();
+        self.settings = new_settings;
+
+        if let Err(e) = self.settings.save() {
+            self.message = Some(format!("Failed to save settings: {}", e));
+            return;
+        }
+
+        if lexicon_changed {
+            self.message =
+                Some("Settings saved. Restart required for lexicon change.".to_string());
+        } else {
+            self.message = Some("Settings saved".to_string());
+        }
+    }
+
+    pub fn has_dialog(&self) -> bool {
+        self.dialog != DialogState::None
+    }
+
+    pub fn toggle_board_tab(&mut self) {
+        self.board_tab = self.board_tab.toggle();
+        if self.board_tab == BoardTab::Logs {
+            self.log_scroll = 0;
+        }
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.sidebar_visible = !self.sidebar_visible;
+    }
+
+    pub fn scroll_log_up(&mut self, lines: usize) {
+        self.log_scroll = self.log_scroll.saturating_add(lines);
+    }
+
+    pub fn scroll_log_down(&mut self, lines: usize) {
+        self.log_scroll = self.log_scroll.saturating_sub(lines);
+    }
+
+    pub fn scroll_log_to_bottom(&mut self) {
+        self.log_scroll = 0;
+    }
+
+    pub fn set_dictionary(&mut self, dict: Dictionary) {
+        let count = dict.len();
+        self.dictionary = Some(Arc::new(dict));
+        self.message = Some(format!(
+            "Loaded {} words. Place tiles on board, set rack, press S to solve.",
+            count
+        ));
+    }
+
+    pub fn move_cursor(&mut self, dr: i32, dc: i32) {
+        let new_row = (self.cursor.0 as i32 + dr).clamp(0, 14) as usize;
+        let new_col = (self.cursor.1 as i32 + dc).clamp(0, 14) as usize;
+        self.cursor = (new_row, new_col);
+    }
+
+    pub fn place_on_board(&mut self, letter: char) {
+        let (row, col) = self.cursor;
+
+        if letter == '?' {
+            if let Some(tile) = self.state.get_tile_mut(row, col) {
+                tile.is_blank = !tile.is_blank;
+                self.clear_suggestions();
+                self.message = None;
+                return;
+            }
+            self.state.place_tile(row, col, 'A', true);
+        } else {
+            self.state.place_tile(row, col, letter, false);
+        }
+
+        self.clear_suggestions();
+        self.message = None;
+
+        match self.typing_direction {
+            Direction::Horizontal => {
+                if self.cursor.1 < 14 {
+                    self.cursor.1 += 1;
+                }
+            }
+            Direction::Vertical => {
+                if self.cursor.0 < 14 {
+                    self.cursor.0 += 1;
+                }
+            }
+        }
+    }
+
+    pub fn remove_from_board(&mut self) {
+        let (row, col) = self.cursor;
+        if self.state.remove_tile(row, col).is_some() {
+            self.clear_suggestions();
+            self.message = None;
+        }
+    }
+
+    pub fn backspace_on_board(&mut self) {
+        let (row, col) = self.cursor;
+        if self.state.get_tile(row, col).is_some() {
+            self.state.remove_tile(row, col);
+            self.clear_suggestions();
+            self.message = None;
+        } else {
+            let (dr, dc) = self.typing_direction.delta();
+            let new_row = row as i32 - dr;
+            let new_col = col as i32 - dc;
+            if new_row >= 0 && new_row < 15 && new_col >= 0 && new_col < 15 {
+                self.cursor = (new_row as usize, new_col as usize);
+                if self
+                    .state
+                    .remove_tile(new_row as usize, new_col as usize)
+                    .is_some()
+                {
+                    self.clear_suggestions();
+                    self.message = None;
+                }
+            }
+        }
+    }
+
+    pub fn add_to_rack(&mut self, letter: char) {
+        if self.state.add_to_rack(letter) {
+            self.clear_suggestions();
+            self.message = None;
+        } else {
+            self.message = Some("Rack is full (max 7 tiles)".to_string());
+        }
+    }
+
+    pub fn pop_from_rack(&mut self) {
+        if self.state.pop_from_rack() {
+            self.clear_suggestions();
+            self.message = None;
+        }
+    }
+
+    pub fn clear_rack(&mut self) {
+        self.state.clear_rack();
+        self.clear_suggestions();
+        self.message = Some("Rack cleared".to_string());
+    }
+
+    fn clear_suggestions(&mut self) {
+        self.suggestions.clear();
+        self.mcts_results = None;
+        self.refengine_results = None;
+        self.inferred_opponent_rack = None;
+    }
+
+    pub fn find_moves(&mut self) {
+        if self.state.rack.is_empty() {
+            self.message = Some("Set your rack first (Tab to rack, type letters)".to_string());
+            return;
+        }
+
+        if let Some(dict) = &self.dictionary {
+            let mut all_suggestions = self.state.get_suggestions(dict);
+            let total_count = all_suggestions.len();
+
+            let is_last_move = self.state.unseen_tile_count() == 0;
+
+            if is_last_move {
+                all_suggestions.sort_by(|a, b| b.score.cmp(&a.score));
+            } else {
+                const MAX_SUGGESTIONS: usize = 100;
+                all_suggestions.truncate(MAX_SUGGESTIONS);
+            }
+
+            self.suggestions = all_suggestions;
+            self.selected_suggestion = 0;
+            self.mcts_results = None;
+            self.refengine_results = None;
+
+            if self.suggestions.is_empty() {
+                self.message = Some("No valid moves found".to_string());
+            } else if is_last_move {
+                self.message = Some(format!("Last move: {} plays", total_count));
+            } else if total_count > 100 {
+                self.message = Some(format!("Showing top 100 of {} moves", total_count));
+            } else {
+                self.message = Some(format!("Found {} moves", self.suggestions.len()));
+            }
+        } else {
+            self.message = Some("Dictionary not loaded".to_string());
+        }
+    }
+
+    fn detect_opponent_tiles(&self) -> Option<String> {
+        let prev = match self.last_applied_board.as_ref() {
+            Some(b) => b,
+            None => {
+                log("detect_opponent_tiles: no board snapshot exists yet (first solve?)");
+                return None;
+            }
+        };
+
+        let mut snapshot_tiles = 0;
+        let mut current_tiles = 0;
+        for row in 0..15 {
+            for col in 0..15 {
+                if prev.get_tile(row, col).is_some() {
+                    snapshot_tiles += 1;
+                }
+                if self.state.board.get_tile(row, col).is_some() {
+                    current_tiles += 1;
+                }
+            }
+        }
+        log(&format!(
+            "detect_opponent_tiles: snapshot has {} tiles, current board has {} tiles",
+            snapshot_tiles, current_tiles
+        ));
+
+        let mut tiles = String::new();
+        for row in 0..15 {
+            for col in 0..15 {
+                if prev.get_tile(row, col).is_none() {
+                    if let Some(tile) = self.state.board.get_tile(row, col) {
+                        if tile.is_blank {
+                            tiles.push(tile.letter.to_ascii_lowercase());
+                        } else {
+                            tiles.push(tile.letter);
+                        }
+                    }
+                }
+            }
+        }
+
+        if tiles.is_empty() {
+            log("detect_opponent_tiles: no new tiles found (boards are identical)");
+            None
+        } else {
+            log(&format!(
+                "detect_opponent_tiles: found opponent tiles: '{}'",
+                tiles
+            ));
+            Some(tiles)
+        }
+    }
+
+    pub fn run_mcts_evaluation(&mut self) {
+        if self.is_mcts_running() {
+            return;
+        }
+
+        if self.suggestions.is_empty() {
+            self.message = Some("Generate suggestions first (press S)".to_string());
+            return;
+        }
+
+        let unseen = RefSimulator::unseen_count(&self.state);
+        if unseen == 0 {
+            self.sort_mode = SortMode::Score;
+            self.apply_sort();
+            self.selected_suggestion = 0;
+            self.message = Some(format!(
+                "Last move: {} plays (sorted by score)",
+                self.suggestions.len()
+            ));
+            return;
+        }
+
+        // Endgame: use Crossplay-native solver (no leftover tile penalties)
+        if RefSimulator::is_endgame(&self.state) && unseen > 0 {
+            if let Some(dict) = self.dictionary.clone() {
+                let state = self.state.clone();
+                let total_moves = self.suggestions.len();
+
+                self.mcts_progress = Some(MctsProgress {
+                    total_candidates: total_moves,
+                    completed_candidates: 0,
+                    spinner_frame: 0,
+                });
+                self.message = Some(format!(
+                    "Endgame solver: evaluating {} moves ({} opp tiles)...",
+                    total_moves, unseen
+                ));
+
+                let (tx, rx) = mpsc::channel();
+                self.endgame_receiver = Some(rx);
+
+                thread::spawn(move || {
+                    let solver = EndgameSolver::new(&dict);
+
+                    // Build opponent rack from unseen tiles
+                    let unseen_tiles = state.unseen_tiles();
+                    let mut opp_rack = Vec::new();
+                    for (letter, count) in &unseen_tiles {
+                        for _ in 0..*count {
+                            if *letter == '?' {
+                                opp_rack.push(crate::tile::Tile::blank(' '));
+                            } else {
+                                opp_rack.push(crate::tile::Tile::new(*letter));
+                            }
+                        }
+                    }
+
+                    let our_rack: Vec<_> = state.rack.tiles();
+                    // Opponent still has a turn (they play before our final move)
+                    let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
+                    let _ = tx.send(results);
+                });
+
+                return;
+            }
+        }
+
+        self.mcts_progress = Some(MctsProgress {
+            total_candidates: self.suggestions.len().min(15),
+            completed_candidates: 0,
+            spinner_frame: 0,
+        });
+
+        if let Some(ref refengine) = self.refengine_simulator {
+            let state = self.state.clone();
+            let refengine = Arc::clone(refengine);
+
+            let phase = crate::refengine_mcts::RefSimConfig::phase_label(unseen);
+            self.message = Some(format!("Simulating ({})...", phase));
+
+            let opponent_tiles = self.detect_opponent_tiles();
+            let pre_opponent_board = self.last_applied_board.clone();
+
+            let (tx, rx) = mpsc::channel();
+            self.refengine_receiver = Some(rx);
+
+            thread::spawn(move || {
+                let result = refengine.simulate_and_infer(
+                    &state,
+                    opponent_tiles.as_deref(),
+                    pre_opponent_board.as_ref(),
+                );
+                let _ = tx.send(result);
+            });
+
+            return;
+        }
+
+        let Some(dict) = self.dictionary.clone() else {
+            self.message = Some("Dictionary not loaded".to_string());
+            self.mcts_progress = None;
+            return;
+        };
+
+        let config = MctsConfig::default();
+        let state = self.state.clone();
+        let candidates = self.suggestions.clone();
+
+        let (tx, rx) = mpsc::channel();
+        self.mcts_receiver = Some(rx);
+
+        thread::spawn(move || {
+            let evaluator = MctsEvaluator::new(config);
+            let results = evaluator.evaluate(&state, &candidates, &dict);
+            let _ = tx.send(results);
+        });
+
+        self.message = None;
+    }
+
+    pub fn find_moves_and_focus(&mut self) {
+        self.find_moves();
+        if !self.suggestions.is_empty() {
+            self.focus = Focus::Suggestions;
+            self.run_mcts_evaluation();
+        }
+    }
+
+    pub fn apply_suggestion(&mut self) {
+        if self.suggestions.is_empty() {
+            return;
+        }
+
+        self.undo_stack.push(UndoState {
+            state: self.state.clone(),
+            message: format!(
+                "Before: {}",
+                self.suggestions[self.selected_suggestion].word
+            ),
+        });
+
+        let mv = self.suggestions[self.selected_suggestion].clone();
+        self.state.apply_move(&mv);
+        self.last_applied_board = Some(self.state.board.clone());
+        let remaining = self.state.rack.len();
+        if remaining > 0 {
+            self.message = Some(format!(
+                "Applied: {} ({} pts) - {} tiles remaining",
+                mv.word, mv.score, remaining
+            ));
+        } else {
+            self.message = Some(format!(
+                "Applied: {} ({} pts) - ^Z to undo",
+                mv.word, mv.score
+            ));
+        }
+        self.clear_suggestions();
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(undo_state) = self.undo_stack.pop() {
+            self.state = undo_state.state;
+            self.clear_suggestions();
+            self.message = Some(format!("Undone: {}", undo_state.message));
+        } else {
+            self.message = Some("Nothing to undo".to_string());
+        }
+    }
+
+    pub fn apply_suggestion_and_focus(&mut self) {
+        self.apply_suggestion();
+        self.focus = Focus::Board;
+    }
+
+    pub fn move_suggestion_selection(&mut self, delta: i32) {
+        if self.suggestions.is_empty() {
+            return;
+        }
+        let len = self.suggestions.len() as i32;
+        let new_idx = (self.selected_suggestion as i32 + delta).rem_euclid(len) as usize;
+        self.selected_suggestion = new_idx;
+    }
+
+    pub fn reset(&mut self) {
+        self.state.reset();
+        self.cursor = (7, 7);
+        self.typing_direction = Direction::Horizontal;
+        self.clear_suggestions();
+        self.last_applied_board = None;
+        self.message = Some("Reset complete".to_string());
+    }
+
+    pub fn next_focus(&mut self) {
+        self.focus = self.focus.next();
+    }
+
+    pub fn cycle_sort_mode(&mut self) {
+        let has_sim = self.mcts_results.is_some() || self.refengine_results.is_some();
+        self.sort_mode = self.sort_mode.next(has_sim);
+        self.apply_sort();
+        self.selected_suggestion = 0;
+        self.message = Some(format!("Sort: {}", self.sort_mode.label()));
+    }
+
+    pub fn set_sort_mode(&mut self, mode: SortMode) {
+        self.sort_mode = mode;
+        self.apply_sort();
+        self.selected_suggestion = 0;
+    }
+
+    fn apply_sort(&mut self) {
+        match self.sort_mode {
+            SortMode::Equity => {
+                self.suggestions.sort_by(|a, b| {
+                    b.equity
+                        .partial_cmp(&a.equity)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            SortMode::MctsEquity => {
+                if let Some(ref results) = self.refengine_results {
+                    let sim_map: std::collections::HashMap<_, _> = results
+                        .iter()
+                        .map(|r| {
+                            let word_upper = r.word.to_uppercase();
+                            ((word_upper, r.row, r.col, r.direction), r.sim_equity)
+                        })
+                        .collect();
+
+                    self.suggestions.sort_by(|a, b| {
+                        let a_word = a.word.to_uppercase();
+                        let b_word = b.word.to_uppercase();
+                        let a_sim =
+                            sim_map.get(&(a_word.clone(), a.row, a.col, a.direction));
+                        let b_sim =
+                            sim_map.get(&(b_word.clone(), b.row, b.col, b.direction));
+
+                        match (a_sim, b_sim) {
+                            (Some(a_eq), Some(b_eq)) => b_eq
+                                .partial_cmp(a_eq)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => b
+                                .equity
+                                .partial_cmp(&a.equity)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        }
+                    });
+                } else if let Some(ref results) = self.mcts_results {
+                    let mcts_map: std::collections::HashMap<_, _> = results
+                        .iter()
+                        .map(|r| {
+                            (
+                                (&r.mv.word, r.mv.row, r.mv.col, r.mv.direction),
+                                r.mcts_equity,
+                            )
+                        })
+                        .collect();
+
+                    self.suggestions.sort_by(|a, b| {
+                        let a_mcts =
+                            mcts_map.get(&(&a.word, a.row, a.col, a.direction));
+                        let b_mcts =
+                            mcts_map.get(&(&b.word, b.row, b.col, b.direction));
+
+                        match (a_mcts, b_mcts) {
+                            (Some(a_eq), Some(b_eq)) => b_eq
+                                .partial_cmp(a_eq)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => b
+                                .equity
+                                .partial_cmp(&a.equity)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        }
+                    });
+                } else {
+                    self.suggestions.sort_by(|a, b| {
+                        b.equity
+                            .partial_cmp(&a.equity)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+            SortMode::Score => {
+                self.suggestions.sort_by(|a, b| b.score.cmp(&a.score));
+            }
+            SortMode::Leave => {
+                self.suggestions.sort_by(|a, b| {
+                    let a_leave = a.equity - a.score as f32;
+                    let b_leave = b.equity - b.score as f32;
+                    b_leave
+                        .partial_cmp(&a_leave)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            SortMode::WordLength => {
+                self.suggestions.sort_by(|a, b| {
+                    b.word.len().cmp(&a.word.len()).then_with(|| {
+                        b.equity
+                            .partial_cmp(&a.equity)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                });
+            }
+            SortMode::Alpha => {
+                self.suggestions.sort_by(|a, b| a.word.cmp(&b.word));
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_mcts_result(&self, mv: &Move) -> Option<&MctsResult> {
+        self.mcts_results.as_ref()?.iter().find(|r| {
+            r.mv.word == mv.word
+                && r.mv.row == mv.row
+                && r.mv.col == mv.col
+                && r.mv.direction == mv.direction
+        })
+    }
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
