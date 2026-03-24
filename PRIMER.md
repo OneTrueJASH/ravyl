@@ -17,10 +17,11 @@ Complete TUI redesign of `crossplay-solver`.
 | `refengine_ffi` | FFI bindings to RefEngine C library (`librefengine.dylib`) |
 | `refengine_mcts` | `RefSimulator`, sim results, CGP conversion, adaptive simulation |
 | `mcts` | `MctsEvaluator`, `MctsResult`, `TilePool` with Fisher-Yates shuffle |
+| `endgame` | Crossplay-native 2-ply endgame solver (no leftover tile penalties) |
 | `app` | `App` (central state), `Focus`, `SortMode`, `DialogState`, `BoardTab`, event handlers |
 | `ui::theme` | Centralized color/style constants — all UI colors defined here |
 | `ui::hit` | Thread-local hit map for mouse click resolution |
-| `ui::events` | `AppEvent` / `AppAction` enums |
+| `ui::events` | `AppAction` enum (quit, redraw, nothing) |
 | `ui::layout` | Fluid `AppLayout` computed from terminal size (no breakpoints) |
 | `ui::board_view` | Board widget with premium squares, cursor, preview tiles |
 | `ui::stats_view` | Rack tiles + game stats + opponent inference widget |

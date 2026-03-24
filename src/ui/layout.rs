@@ -42,7 +42,9 @@ impl AppLayout {
     fn ideal_board_width(terminal_height: u16) -> u16 {
         // Vertical overhead: title(1) + tab(1) + message(1) + status(1) + board border(2)
         let board_inner_h = terminal_height.saturating_sub(6);
-        let max_cell_h = board_inner_h.div_ceil(BOARD_SIZE as u16).max(MIN_CELL_HEIGHT);
+        let max_cell_h = board_inner_h
+            .div_ceil(BOARD_SIZE as u16)
+            .max(MIN_CELL_HEIGHT);
         let cell_w = (max_cell_h * 7 / 4).max(MIN_CELL_WIDTH);
         (BOARD_SIZE as u16 * cell_w - (BOARD_SIZE as u16 - 1)) + 2 // grid width + outer border
     }
@@ -123,11 +125,11 @@ impl AppLayout {
             let sidebar_v = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(1),  // aligns with tab bar
+                    Constraint::Length(1), // aligns with tab bar
                     Constraint::Length(19),
                     Constraint::Length(1),
                     Constraint::Min(8),
-                    Constraint::Length(1),  // aligns with message bar
+                    Constraint::Length(1), // aligns with message bar
                 ])
                 .split(sidebar);
             (Some(sidebar_v[1]), Some(sidebar_v[2]), Some(sidebar_v[3]))
@@ -135,9 +137,9 @@ impl AppLayout {
             let sidebar_v = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(1),  // aligns with tab bar
+                    Constraint::Length(1), // aligns with tab bar
                     Constraint::Min(1),
-                    Constraint::Length(1),  // aligns with message bar
+                    Constraint::Length(1), // aligns with message bar
                 ])
                 .split(sidebar);
             (Some(sidebar_v[1]), None, None)

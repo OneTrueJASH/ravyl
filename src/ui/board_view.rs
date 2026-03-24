@@ -89,7 +89,12 @@ impl<'a> BoardWidget<'a> {
             .merge_borders(MergeStrategy::Exact);
         block.render(cell_area, buf);
 
-        let inner = Rect::new(x + 1, y + 1, cell_w.saturating_sub(2), cell_h.saturating_sub(2));
+        let inner = Rect::new(
+            x + 1,
+            y + 1,
+            cell_w.saturating_sub(2),
+            cell_h.saturating_sub(2),
+        );
 
         if let Some(bg) = bg_color {
             let fill_style = Style::new().bg(bg);
@@ -209,7 +214,11 @@ impl Widget for BoardWidget<'_> {
                 let border = theme::BORDER_NORMAL;
 
                 if let Some(tile) = self.state.get_tile(row, col) {
-                    let bg = if is_cursor { theme::CURSOR_BG } else { theme::TILE_BG };
+                    let bg = if is_cursor {
+                        theme::CURSOR_BG
+                    } else {
+                        theme::TILE_BG
+                    };
                     let fg = if tile.is_blank {
                         theme::TILE_BLANK_FG
                     } else {
@@ -221,11 +230,24 @@ impl Widget for BoardWidget<'_> {
                         letter_value(tile.letter)
                     };
                     self.draw_cell(
-                        buf, cell_x, cell_y, cell_w, cell_h, border, Some(bg), fg,
-                        &tile.letter.to_string(), is_cursor, Some(value),
+                        buf,
+                        cell_x,
+                        cell_y,
+                        cell_w,
+                        cell_h,
+                        border,
+                        Some(bg),
+                        fg,
+                        &tile.letter.to_string(),
+                        is_cursor,
+                        Some(value),
                     );
                 } else if let Some(preview_tile) = self.preview.get(&(row, col)) {
-                    let bg = if is_cursor { theme::CURSOR_BG } else { theme::TILE_PREVIEW_BG };
+                    let bg = if is_cursor {
+                        theme::CURSOR_BG
+                    } else {
+                        theme::TILE_PREVIEW_BG
+                    };
                     let fg = if is_cursor {
                         theme::CURSOR_FG
                     } else if preview_tile.is_blank {
@@ -239,23 +261,48 @@ impl Widget for BoardWidget<'_> {
                         letter_value(preview_tile.letter)
                     };
                     self.draw_cell(
-                        buf, cell_x, cell_y, cell_w, cell_h, border, Some(bg), fg,
-                        &preview_tile.letter.to_string(), is_cursor, Some(value),
+                        buf,
+                        cell_x,
+                        cell_y,
+                        cell_w,
+                        cell_h,
+                        border,
+                        Some(bg),
+                        fg,
+                        &preview_tile.letter.to_string(),
+                        is_cursor,
+                        Some(value),
                     );
                 } else if is_cursor {
-                    let board_cell = self.state.board.get(row, col).expect("row/col within board dimensions");
+                    let board_cell = self
+                        .state
+                        .board
+                        .get(row, col)
+                        .expect("row/col within board dimensions");
                     let label = premium_label(&board_cell.premium);
                     self.draw_cell(
-                        buf, cell_x, cell_y, cell_w, cell_h, border,
-                        Some(theme::CURSOR_BG), theme::CURSOR_FG, label, true, None,
+                        buf,
+                        cell_x,
+                        cell_y,
+                        cell_w,
+                        cell_h,
+                        border,
+                        Some(theme::CURSOR_BG),
+                        theme::CURSOR_FG,
+                        label,
+                        true,
+                        None,
                     );
                 } else {
-                    let board_cell = self.state.board.get(row, col).expect("row/col within board dimensions");
+                    let board_cell = self
+                        .state
+                        .board
+                        .get(row, col)
+                        .expect("row/col within board dimensions");
                     let fg = premium_fg(&board_cell.premium);
                     let label = premium_label(&board_cell.premium);
                     self.draw_cell(
-                        buf, cell_x, cell_y, cell_w, cell_h, border, None, fg, label,
-                        false, None,
+                        buf, cell_x, cell_y, cell_w, cell_h, border, None, fg, label, false, None,
                     );
                 }
             }

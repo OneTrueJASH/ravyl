@@ -178,7 +178,6 @@ impl Lexicon {
     }
 }
 
-
 /// Performance settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PerformanceSettings {

@@ -234,11 +234,7 @@ impl<'a> SettingsPopup<'a> {
                     2,
                     true,
                 ));
-                lines.push(self.render_bool_row(
-                    "Adaptive Mode:",
-                    settings.refengine.adaptive,
-                    3,
-                ));
+                lines.push(self.render_bool_row("Adaptive Mode:", settings.refengine.adaptive, 3));
                 lines.push(self.render_setting_row(
                     "Endgame Plies:",
                     &settings.refengine.endgame_plies.to_string(),

@@ -58,23 +58,25 @@ On macOS, the `build.rs` script sets the rpath so the binary can find `librefeng
 | **A-Z** | Place letter on board or add to rack (depending on focus) |
 | **?** | Toggle blank designation on tile at cursor |
 | **Backspace** | Remove tile at cursor / from rack |
+| **Delete** | Clear entire rack (when rack is focused) |
 | **Space** | Toggle typing direction (horizontal/vertical) |
-| **S** | Generate all legal moves (solve) |
-| **M** | Run RefEngine simulation / endgame solver |
-| **Enter** | Apply selected suggestion to the board |
-| **O** | Cycle sort mode (Equity → RefEngine → Score → Leave → Length → A-Z) |
+| **Ctrl+S** | Generate all legal moves (solve) and focus suggestions |
+| **Enter** | Solve (from rack) or apply selected suggestion (from suggestions) |
+| **M** | Run RefEngine simulation / endgame solver (from suggestions) |
+| **S** | Cycle sort mode (from suggestions: Equity → RefEngine → Score → Leave → Length → A-Z) |
 | **Ctrl+Z** | Undo last applied move |
-| **F1 / H** | Toggle help dialog |
+| **Ctrl+R** | Reset board |
+| **F1** | Toggle help dialog |
 | **F2** | Open settings |
-| **Esc** | Open menu (Quit / Reset / Cancel) |
-| **L** | Toggle board/logs tab |
-| **B** | Toggle sidebar visibility |
+| **Esc** | Open menu (Quit / Reset / Cancel) or return focus to board |
+| **`** (backtick) | Toggle board/logs tab |
+| **\\** (backslash) | Toggle sidebar visibility |
 
 ### Workflow
 
 1. **Set up the position**: Focus the board (Tab), type letters to place tiles. Press `?` on a tile to mark it as a blank.
 2. **Set your rack**: Tab to the rack, type your tile letters (`?` for blanks).
-3. **Solve**: Press `S` to generate all legal moves, ranked by static equity.
+3. **Solve**: Press `Ctrl+S` (or Enter from rack) to generate all legal moves, ranked by static equity.
 4. **Simulate**: Press `M` to run RefEngine Monte Carlo simulation (midgame) or the Crossplay endgame solver (when the bag is empty).
 5. **Apply**: Select a move with arrow keys and press Enter to apply it to the board.
 6. **Repeat**: After your opponent plays, update the board with their tiles and solve again.

@@ -10,10 +10,7 @@ fn main() {
 
     #[cfg(target_os = "macos")]
     {
-        println!(
-            "cargo:rustc-link-arg=-Wl,-rpath,{}",
-            refengine_dir.display()
-        );
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", refengine_dir.display());
         println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../external/refengine");
     }
 

@@ -58,10 +58,7 @@ impl<'a> RackStatsWidget<'a> {
                 .fg(theme::TILE_BLANK_FG)
                 .bold()
         } else {
-            Style::new()
-                .bg(theme::TILE_BG)
-                .fg(theme::TILE_FG)
-                .bold()
+            Style::new().bg(theme::TILE_BG).fg(theme::TILE_FG).bold()
         };
 
         for dy in 0..TILE_HEIGHT {
@@ -186,13 +183,27 @@ impl Widget for RackStatsWidget<'_> {
             };
 
             let mut x = inner.x;
-            Self::render_text(buf, x, row, max_x, &rack_text, Style::new().fg(theme::TEXT_PRIMARY));
+            Self::render_text(
+                buf,
+                x,
+                row,
+                max_x,
+                &rack_text,
+                Style::new().fg(theme::TEXT_PRIMARY),
+            );
             x += rack_text.len() as u16;
 
             if !stats.rack_duplicates.is_empty() {
                 let dupes: String = stats.rack_duplicates.iter().collect();
                 let dupe_text = format!("  dup: {}", dupes);
-                Self::render_text(buf, x, row, max_x, &dupe_text, Style::new().fg(theme::SCORE_FG));
+                Self::render_text(
+                    buf,
+                    x,
+                    row,
+                    max_x,
+                    &dupe_text,
+                    Style::new().fg(theme::SCORE_FG),
+                );
             }
             row += 1;
 
@@ -211,7 +222,14 @@ impl Widget for RackStatsWidget<'_> {
                 let s_text = format!(" S:{}", stats.s_unseen);
 
                 let mut x = inner.x;
-                Self::render_text(buf, x, row, max_x, &bag_text, Style::new().fg(theme::TEXT_PRIMARY));
+                Self::render_text(
+                    buf,
+                    x,
+                    row,
+                    max_x,
+                    &bag_text,
+                    Style::new().fg(theme::TEXT_PRIMARY),
+                );
                 x += bag_text.len() as u16;
                 Self::render_text(buf, x, row, max_x, &phase_label, Style::new().fg(pc));
                 x += phase_label.len() as u16;
@@ -239,24 +257,24 @@ impl Widget for RackStatsWidget<'_> {
                 for letter in ['Q', 'Z', 'J', 'X'] {
                     if let Some(loc) = stats.power_tiles.get(&letter) {
                         let (text, style) = match loc {
-                            crate::stats::TileLocation::InBag(n) if *n > 0 => {
-                                (format!("{}:{}", letter, n), Style::new().fg(theme::TEXT_PRIMARY))
-                            }
+                            crate::stats::TileLocation::InBag(n) if *n > 0 => (
+                                format!("{}:{}", letter, n),
+                                Style::new().fg(theme::TEXT_PRIMARY),
+                            ),
                             crate::stats::TileLocation::OnBoard => {
                                 (format!("{}:B", letter), Style::new().fg(theme::TEXT_DIM))
                             }
-                            crate::stats::TileLocation::InRack => {
-                                (format!("{}:R", letter), Style::new().fg(theme::PHASE_ENDGAME).bold())
-                            }
+                            crate::stats::TileLocation::InRack => (
+                                format!("{}:R", letter),
+                                Style::new().fg(theme::PHASE_ENDGAME).bold(),
+                            ),
                             crate::stats::TileLocation::BoardAndRack => {
                                 (format!("{}:BR", letter), Style::new().fg(theme::SCORE_FG))
                             }
                             crate::stats::TileLocation::Split => {
                                 (format!("{}:?", letter), Style::new().fg(theme::SCORE_FG))
                             }
-                            _ => {
-                                (format!("{}:-", letter), Style::new().fg(theme::TEXT_DIM))
-                            }
+                            _ => (format!("{}:-", letter), Style::new().fg(theme::TEXT_DIM)),
                         };
                         Self::render_text(buf, x, row, max_x, &text, style);
                         x += text.len() as u16 + 1;

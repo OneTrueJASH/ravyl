@@ -60,7 +60,6 @@ impl Dictionary {
     pub fn len(&self) -> usize {
         self.word_count
     }
-
 }
 
 /// Load the default dictionary from the data directory

@@ -599,12 +599,11 @@ impl App {
                                 )
                             {
                                 state.editing = true;
-                                state.edit_buffer =
-                                    crate::ui::settings_popup::get_setting_value(
-                                        &state.pending,
-                                        state.tab,
-                                        state.row,
-                                    );
+                                state.edit_buffer = crate::ui::settings_popup::get_setting_value(
+                                    &state.pending,
+                                    state.tab,
+                                    state.row,
+                                );
                             }
                         }
                         KeyCode::Char(' ') => {
@@ -660,7 +659,9 @@ impl App {
 
     /// Returns true if any background simulation is in progress.
     pub fn is_mcts_running(&self) -> bool {
-        self.mcts_receiver.is_some() || self.refengine_receiver.is_some() || self.endgame_receiver.is_some()
+        self.mcts_receiver.is_some()
+            || self.refengine_receiver.is_some()
+            || self.endgame_receiver.is_some()
     }
 
     /// Poll background simulation channels and incorporate results. Returns true if new results arrived.
@@ -682,10 +683,19 @@ impl App {
                                 col: eg.mv.col,
                                 direction: eg.mv.direction,
                                 score: eg.mv.score,
-                                leave: eg.mv.leave.iter().map(|t| {
-                                    if t.is_blank { '?' } else { t.letter }
-                                }).collect(),
-                                win_pct: if val > 0.0 { 100.0 } else if val < 0.0 { 0.0 } else { 50.0 },
+                                leave: eg
+                                    .mv
+                                    .leave
+                                    .iter()
+                                    .map(|t| if t.is_blank { '?' } else { t.letter })
+                                    .collect(),
+                                win_pct: if val > 0.0 {
+                                    100.0
+                                } else if val < 0.0 {
+                                    0.0
+                                } else {
+                                    50.0
+                                },
                                 sim_equity: val,
                                 static_equity: eg.mv.score as f32,
                                 iterations: 0,
@@ -720,9 +730,11 @@ impl App {
 
                     // Log PV for best move
                     if let Some(best) = endgame_results.first() {
-                        let pv_str: Vec<String> = best.pv.iter().map(|p| {
-                            format!("P{}:{} {}pts", p.player + 1, p.word, p.score)
-                        }).collect();
+                        let pv_str: Vec<String> = best
+                            .pv
+                            .iter()
+                            .map(|p| format!("P{}:{} {}pts", p.player + 1, p.word, p.score))
+                            .collect();
                         log(&format!("Endgame PV: {}", pv_str.join(" → ")));
                     }
 
@@ -771,13 +783,17 @@ impl App {
                                 score: result.score,
                                 equity: result.sim_equity,
                             };
-                            if let Some(mv) = Move::from_external(
-                                &data,
-                                &self.state.board,
-                                &self.state.rack,
-                            ) {
-                                self.suggestions.push(mv);
-                                added_count += 1;
+                            match Move::from_external(&data, &self.state.board, &self.state.rack) {
+                                Some(mv) => {
+                                    self.suggestions.push(mv);
+                                    added_count += 1;
+                                }
+                                None => {
+                                    log(&format!(
+                                        "Warning: could not reconstruct RefEngine move '{}' at ({},{}) {:?} from current rack",
+                                        result.word, result.row, result.col, result.direction
+                                    ));
+                                }
                             }
                         }
                     }
@@ -798,7 +814,10 @@ impl App {
                         ""
                     };
                     let msg = if added_count > 0 {
-                        format!("RefEngine: {} moves (+{} new){}", count, added_count, infer_note)
+                        format!(
+                            "RefEngine: {} moves (+{} new){}",
+                            count, added_count, infer_note
+                        )
                     } else {
                         format!("RefEngine: simulated {} moves{}", count, infer_note)
                     };
@@ -836,8 +855,7 @@ impl App {
 
                     let evaluated_count = results.len();
                     if evaluated_count < self.suggestions.len() {
-                        new_suggestions
-                            .extend(self.suggestions[evaluated_count..].iter().cloned());
+                        new_suggestions.extend(self.suggestions[evaluated_count..].iter().cloned());
                     }
 
                     self.suggestions = new_suggestions;
@@ -924,8 +942,7 @@ impl App {
         }
 
         if lexicon_changed {
-            self.message =
-                Some("Settings saved. Restart required for lexicon change.".to_string());
+            self.message = Some("Settings saved. Restart required for lexicon change.".to_string());
         } else {
             self.message = Some("Settings saved".to_string());
         }
@@ -1034,7 +1051,9 @@ impl App {
             let (dr, dc) = self.typing_direction.delta();
             let new_row = row as i32 - dr;
             let new_col = col as i32 - dc;
-            if (0..BOARD_SIZE as i32).contains(&new_row) && (0..BOARD_SIZE as i32).contains(&new_col) {
+            if (0..BOARD_SIZE as i32).contains(&new_row)
+                && (0..BOARD_SIZE as i32).contains(&new_col)
+            {
                 self.cursor = (new_row as usize, new_col as usize);
                 if self
                     .state
@@ -1203,7 +1222,7 @@ impl App {
 
                 self.mcts_progress = Some(MctsProgress {
                     total_candidates: total_moves,
-        
+
                     spinner_frame: 0,
                 });
                 self.message = Some(format!(
@@ -1414,15 +1433,13 @@ impl App {
                     self.suggestions.sort_by(|a, b| {
                         let a_word = a.word.to_uppercase();
                         let b_word = b.word.to_uppercase();
-                        let a_sim =
-                            sim_map.get(&(a_word.clone(), a.row, a.col, a.direction));
-                        let b_sim =
-                            sim_map.get(&(b_word.clone(), b.row, b.col, b.direction));
+                        let a_sim = sim_map.get(&(a_word.clone(), a.row, a.col, a.direction));
+                        let b_sim = sim_map.get(&(b_word.clone(), b.row, b.col, b.direction));
 
                         match (a_sim, b_sim) {
-                            (Some(a_eq), Some(b_eq)) => b_eq
-                                .partial_cmp(a_eq)
-                                .unwrap_or(std::cmp::Ordering::Equal),
+                            (Some(a_eq), Some(b_eq)) => {
+                                b_eq.partial_cmp(a_eq).unwrap_or(std::cmp::Ordering::Equal)
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => b
@@ -1443,15 +1460,13 @@ impl App {
                         .collect();
 
                     self.suggestions.sort_by(|a, b| {
-                        let a_mcts =
-                            mcts_map.get(&(&a.word, a.row, a.col, a.direction));
-                        let b_mcts =
-                            mcts_map.get(&(&b.word, b.row, b.col, b.direction));
+                        let a_mcts = mcts_map.get(&(&a.word, a.row, a.col, a.direction));
+                        let b_mcts = mcts_map.get(&(&b.word, b.row, b.col, b.direction));
 
                         match (a_mcts, b_mcts) {
-                            (Some(a_eq), Some(b_eq)) => b_eq
-                                .partial_cmp(a_eq)
-                                .unwrap_or(std::cmp::Ordering::Equal),
+                            (Some(a_eq), Some(b_eq)) => {
+                                b_eq.partial_cmp(a_eq).unwrap_or(std::cmp::Ordering::Equal)
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => b
@@ -1494,7 +1509,6 @@ impl App {
             }
         }
     }
-
 }
 
 impl Default for App {

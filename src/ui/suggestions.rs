@@ -237,7 +237,10 @@ pub fn render_suggestions(
             };
             let word_cell = Cell::from(word_text).style(Style::new().bold());
             let pts_cell = right(&format!("{}", mv.score), Style::new().fg(theme::SCORE_FG));
-            let equity_cell = right(&format!("{:.0}", mv.equity), Style::new().fg(theme::EQUITY_FG));
+            let equity_cell = right(
+                &format!("{:.0}", mv.equity),
+                Style::new().fg(theme::EQUITY_FG),
+            );
 
             let leave_tiles: String = mv
                 .leave
@@ -407,10 +410,7 @@ pub fn render_sort_tabs(
     let mut x = area.x;
     for mode in &modes {
         let label_w = mode.label().len() as u16 + 2; // padding around label
-        register_hit(
-            Rect::new(x, area.y, label_w, 1),
-            HitTarget::SortTab(*mode),
-        );
+        register_hit(Rect::new(x, area.y, label_w, 1), HitTarget::SortTab(*mode));
         x += label_w + 1; // +1 for divider space
     }
 
