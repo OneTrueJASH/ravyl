@@ -1030,6 +1030,10 @@ impl App {
 
         let unseen = RefSimulator::unseen_count(&self.state);
         if unseen == 0 {
+            // No opponent tiles remain — this is our absolute last move.
+            // Covers the case where we emptied the bag, the opponent already
+            // played their final turn, and now it's our turn with nothing left
+            // to respond to. Pure score maximization (no 2-ply needed).
             self.sort_mode = SortMode::Score;
             self.apply_sort();
             self.selected_suggestion = 0;
@@ -1040,7 +1044,22 @@ impl App {
             return;
         }
 
-        // Endgame: use Crossplay-native solver (no leftover tile penalties)
+        // Endgame: use Crossplay-native solver (no leftover tile penalties).
+        //
+        // When unseen > 0 and is_endgame(), the opponent still holds tiles and
+        // will play after us. opponent_has_turn=true is always correct here:
+        //
+        //   Crossplay turn order after bag empties:
+        //     1. Player who did NOT empty the bag plays their last turn
+        //     2. Player who emptied the bag plays their final turn
+        //
+        //   From this tool's perspective, we are always choosing OUR next move.
+        //   If the opponent has tiles (unseen > 0), they will respond to our
+        //   move, so we need 2-ply search (our move minus opponent's best reply).
+        //
+        //   The "we go last, no response" case is handled above (unseen == 0):
+        //   the opponent already played, their tiles are gone, and we just
+        //   maximize our own score.
         if RefSimulator::is_endgame(&self.state) && unseen > 0 {
             if let Some(dict) = self.dictionary.clone() {
                 let state = self.state.clone();
@@ -1076,7 +1095,8 @@ impl App {
                     }
 
                     let our_rack: Vec<_> = state.rack.tiles();
-                    // Opponent still has a turn (they play before our final move)
+                    // 2-ply: we play, opponent responds with their best move.
+                    // See comment above for why opponent_has_turn is always true here.
                     let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
                     let _ = tx.send(results);
                 });

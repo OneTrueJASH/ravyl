@@ -61,6 +61,12 @@ impl Dictionary {
     pub fn len(&self) -> usize {
         self.word_count
     }
+
+    /// Returns true if the dictionary contains no words
+    #[allow(dead_code)] // Required by public API (clippy::len_without_is_empty)
+    pub fn is_empty(&self) -> bool {
+        self.word_count == 0
+    }
 }
 
 /// Load the default dictionary from the data directory

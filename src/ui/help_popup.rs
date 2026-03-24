@@ -20,7 +20,7 @@ impl HelpPopup {
     }
 
     pub fn area(terminal_area: Rect) -> Rect {
-        centered_rect(terminal_area, 50, 34)
+        centered_rect(terminal_area, 50, 44)
     }
 
     fn build_content() -> Vec<Line<'static>> {
@@ -31,30 +31,26 @@ impl HelpPopup {
         let desc_style = Style::default().fg(theme::POPUP_DESC);
 
         let lines = vec![
-            Line::from(Span::styled("KEYBOARD SHORTCUTS", header_style)),
+            Line::from(Span::styled("GLOBAL", header_style)),
+            Line::from(vec![
+                Span::styled("F1        ", key_style),
+                Span::styled("Toggle this help popup", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("\\         ", key_style),
+                Span::styled("Toggle sidebar", desc_style),
+            ]),
             Line::from(vec![
                 Span::styled("Tab       ", key_style),
                 Span::styled("Cycle focus (Board→Rack→Sugg)", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("A-Z       ", key_style),
-                Span::styled("Type letters", desc_style),
+                Span::styled("Esc       ", key_style),
+                Span::styled("Open menu / back to Board", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("?         ", key_style),
-                Span::styled("Place/toggle blank tile", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("Space     ", key_style),
-                Span::styled("Toggle typing direction (→/↓)", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("Backspace ", key_style),
-                Span::styled("Delete tile / smart backspace", desc_style),
-            ]),
-            Line::from(vec![
-                Span::styled("Enter     ", key_style),
-                Span::styled("Apply selected move", desc_style),
+                Span::styled("`         ", key_style),
+                Span::styled("Toggle Board/Logs tab", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("^S        ", key_style),
@@ -69,25 +65,73 @@ impl HelpPopup {
                 Span::styled("Reset board", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("`         ", key_style),
-                Span::styled("Toggle Board/Logs tab", desc_style),
-            ]),
-            Line::from(vec![
                 Span::styled("^C        ", key_style),
                 Span::styled("Quit", desc_style),
             ]),
             Line::from(""),
-            Line::from(Span::styled("SUGGESTIONS PANEL", header_style)),
+            Line::from(Span::styled("BOARD", header_style)),
+            Line::from(vec![
+                Span::styled("↑↓←→      ", key_style),
+                Span::styled("Move cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("A-Z       ", key_style),
+                Span::styled("Place letter on board", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("?         ", key_style),
+                Span::styled("Place blank tile", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Space     ", key_style),
+                Span::styled("Toggle typing direction (→/↓)", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Backspace ", key_style),
+                Span::styled("Smart backspace", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Delete    ", key_style),
+                Span::styled("Remove tile at cursor", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Enter     ", key_style),
+                Span::styled("Apply selected move", desc_style),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("RACK", header_style)),
+            Line::from(vec![
+                Span::styled("A-Z / ?   ", key_style),
+                Span::styled("Add letter or blank to rack", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Backspace ", key_style),
+                Span::styled("Remove last rack tile", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Delete    ", key_style),
+                Span::styled("Clear entire rack", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Enter     ", key_style),
+                Span::styled("Find moves (solve)", desc_style),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("SUGGESTIONS", header_style)),
             Line::from(vec![
                 Span::styled("↑/↓       ", key_style),
                 Span::styled("Navigate moves", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Enter     ", key_style),
+                Span::styled("Apply selected move", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("s         ", key_style),
                 Span::styled("Cycle sort mode", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("M         ", key_style),
+                Span::styled("m         ", key_style),
                 Span::styled("Run RefEngine simulation", desc_style),
             ]),
             Line::from(""),
