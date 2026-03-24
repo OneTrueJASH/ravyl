@@ -3,14 +3,15 @@
 //! Line 1 (top/title_bar): App title + RefEngine status.
 //! Line 2 (bottom/status_bar): Context-sensitive keyboard hints.
 
-use crate::app::{Focus, MctsProgress};
-use crate::ui::theme;
 use ratatui::{
     layout::Rect,
     style::{Style, Stylize},
     text::{Line, Span},
     widgets::Paragraph,
 };
+
+use crate::app::{Focus, MctsProgress};
+use crate::ui::theme;
 
 /// Render the title bar (top line).
 pub fn render_title(frame: &mut ratatui::Frame, area: Rect) {

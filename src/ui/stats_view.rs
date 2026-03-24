@@ -1,11 +1,5 @@
 //! Combined rack tiles + game stats + opponent inference widget.
 
-use crate::game::SolverState;
-use crate::refengine_mcts::InferenceResult;
-use crate::stats::GameStats;
-use crate::tile::{letter_value, Rack};
-use crate::ui::hit::{register_hit, HitTarget};
-use crate::ui::theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -14,6 +8,13 @@ use ratatui::{
     widgets::{Block, Padding, Widget},
 };
 
+use crate::game::SolverState;
+use crate::refengine_mcts::InferenceResult;
+use crate::stats::GameStats;
+use crate::tile::{letter_value, Rack};
+use crate::ui::hit::{register_hit, HitTarget};
+use crate::ui::theme;
+
 const TILE_WIDTH: u16 = 5;
 const TILE_HEIGHT: u16 = 3;
 
@@ -21,7 +22,7 @@ const TILE_HEIGHT: u16 = 3;
 pub struct RackStatsWidget<'a> {
     state: &'a SolverState,
     rack: &'a Rack,
-    focused: bool,
+    is_focused: bool,
     inferred_rack: Option<&'a InferenceResult>,
 }
 
@@ -29,13 +30,13 @@ impl<'a> RackStatsWidget<'a> {
     pub fn new(
         state: &'a SolverState,
         rack: &'a Rack,
-        focused: bool,
+        is_focused: bool,
         inferred_rack: Option<&'a InferenceResult>,
     ) -> Self {
         Self {
             state,
             rack,
-            focused,
+            is_focused,
             inferred_rack,
         }
     }
@@ -107,13 +108,13 @@ impl<'a> RackStatsWidget<'a> {
 
 impl Widget for RackStatsWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let border_color = if self.focused {
+        let border_color = if self.is_focused {
             theme::PANE_RACK
         } else {
             theme::BORDER_NORMAL
         };
 
-        let title = if self.focused {
+        let title = if self.is_focused {
             " Rack (type to add, Backspace to remove) "
         } else {
             " Rack "
@@ -385,9 +386,9 @@ pub fn render_rack_stats(
     area: Rect,
     state: &SolverState,
     rack: &Rack,
-    focused: bool,
+    is_focused: bool,
     inferred_rack: Option<&InferenceResult>,
 ) {
-    let widget = RackStatsWidget::new(state, rack, focused, inferred_rack);
+    let widget = RackStatsWidget::new(state, rack, is_focused, inferred_rack);
     frame.render_widget(widget, area);
 }

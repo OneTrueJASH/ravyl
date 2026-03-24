@@ -1,5 +1,16 @@
 //! Suggestions table with simulation equity lookup.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use ratatui::{
+    layout::{Alignment, Constraint, Rect},
+    style::{palette::tailwind, Color, Style, Stylize},
+    symbols,
+    text::Line,
+    widgets::{Block, Cell, Padding, Paragraph, Row, Table, TableState, Tabs},
+};
+
 use crate::app::SortMode;
 use crate::board::Direction;
 use crate::logging::log;
@@ -8,15 +19,6 @@ use crate::mcts::MctsResult;
 use crate::solver::Move;
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
-use ratatui::{
-    layout::{Alignment, Constraint, Rect},
-    style::{palette::tailwind, Color, Style, Stylize},
-    symbols,
-    text::Line,
-    widgets::{Block, Cell, Padding, Paragraph, Row, Table, TableState, Tabs},
-};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 fn log_suggestions(moves: &[Move], lookup: &SimEquityLookup, results_len: usize) {
     static LAST_LOGGED: AtomicU64 = AtomicU64::new(0);

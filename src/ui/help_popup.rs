@@ -1,7 +1,5 @@
 //! Help popup showing keyboard shortcuts and about info.
 
-use crate::ui::popup_frame::{centered_rect, render_popup_frame};
-use crate::ui::theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -9,6 +7,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Widget, Wrap},
 };
+
+use crate::ui::popup_frame::{centered_rect, render_popup_frame};
+use crate::ui::theme;
 
 /// Popup widget displaying keyboard shortcuts and about information.
 pub struct HelpPopup;

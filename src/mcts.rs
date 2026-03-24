@@ -3,13 +3,15 @@
 //! Implements a 2-ply lookahead algorithm to evaluate candidate moves by simulating
 //! random opponent responses and follow-up plays.
 
+use std::collections::HashMap;
+
+use fastrand::Rng;
+use rayon::prelude::*;
+
 use crate::dictionary::Dictionary;
 use crate::game::SolverState;
 use crate::solver::{leave_value, Move, Solver};
 use crate::tile::{Rack, Tile, RACK_SIZE};
-use fastrand::Rng;
-use rayon::prelude::*;
-use std::collections::HashMap;
 
 /// Configuration for MCTS evaluation
 #[derive(Debug, Clone)]

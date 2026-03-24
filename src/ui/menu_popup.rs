@@ -1,7 +1,5 @@
 //! Escape menu popup with mouse-clickable options.
 
-use crate::ui::popup_frame::{centered_rect, render_popup_frame};
-use crate::ui::theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -9,6 +7,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, Widget},
 };
+
+use crate::ui::popup_frame::{centered_rect, render_popup_frame};
+use crate::ui::theme;
 
 /// Menu options for the escape menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

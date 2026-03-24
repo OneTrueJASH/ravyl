@@ -3,6 +3,12 @@
 //! Contains the [`App`] struct which owns all game state, dialog state,
 //! and coordinates between the solver, MCTS engine, and UI.
 
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::thread;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
 use crate::board::{Board, Direction, BOARD_SIZE};
 use crate::dictionary::Dictionary;
 use crate::endgame::{EndgameMove, EndgameSolver};
@@ -15,10 +21,6 @@ use crate::solver::Move;
 use crate::ui::events::AppAction;
 use crate::ui::hit::{resolve_click, HitTarget};
 use crate::ui::menu_popup::EscapeMenuOption;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
-use std::thread;
 
 /// Dialog state for popup interactions
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

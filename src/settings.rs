@@ -2,9 +2,10 @@
 //!
 //! Settings are stored in `~/.config/cpsolver2/settings.toml`.
 
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 use crate::app::SortMode;
 

@@ -4,9 +4,11 @@
 //! Each frame: `clear_hits()`, then widgets call `register_hit()`,
 //! then the event loop calls `resolve_click()`.
 
-use crate::app::{BoardTab, Focus, SortMode};
-use ratatui::layout::Rect;
 use std::cell::RefCell;
+
+use ratatui::layout::Rect;
+
+use crate::app::{BoardTab, Focus, SortMode};
 
 /// Clickable target identified by the hit map.
 #[derive(Debug, Clone, PartialEq, Eq)]

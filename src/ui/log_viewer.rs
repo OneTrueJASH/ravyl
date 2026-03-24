@@ -1,9 +1,5 @@
 //! Log viewer and tab bar rendering.
 
-use crate::app::BoardTab;
-use crate::logging::{log_path_str, read_log_lines};
-use crate::ui::hit::{register_hit, HitTarget};
-use crate::ui::theme;
 use ratatui::{
     layout::Rect,
     style::{palette::tailwind, Color, Style, Stylize},
@@ -11,6 +7,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Padding, Paragraph, Tabs, Wrap},
 };
+
+use crate::app::BoardTab;
+use crate::logging::{log_path_str, read_log_lines};
+use crate::ui::hit::{register_hit, HitTarget};
+use crate::ui::theme;
 
 pub fn tab_palette(tab: BoardTab) -> tailwind::Palette {
     match tab {

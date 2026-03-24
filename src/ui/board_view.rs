@@ -1,10 +1,7 @@
 //! Board widget: 15x15 grid with premium squares, cursor, and preview tiles.
 
-use crate::board::{Direction, Premium, BOARD_SIZE};
-use crate::game::SolverState;
-use crate::tile::{letter_value, Tile};
-use crate::ui::hit::{register_hit, HitTarget};
-use crate::ui::theme;
+use std::collections::HashMap;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -12,7 +9,12 @@ use ratatui::{
     symbols::{self, merge::MergeStrategy},
     widgets::{Block, BorderType, Padding, Widget},
 };
-use std::collections::HashMap;
+
+use crate::board::{Direction, Premium, BOARD_SIZE};
+use crate::game::SolverState;
+use crate::tile::{letter_value, Tile};
+use crate::ui::hit::{register_hit, HitTarget};
+use crate::ui::theme;
 
 const MIN_CELL_WIDTH: u16 = 7;
 const MIN_CELL_HEIGHT: u16 = 4;
@@ -42,7 +44,7 @@ fn premium_fg(premium: &Premium) -> Color {
 pub struct BoardWidget<'a> {
     state: &'a SolverState,
     cursor: (usize, usize),
-    focused: bool,
+    is_focused: bool,
     typing_direction: Direction,
     preview: HashMap<(usize, usize), &'a Tile>,
 }
@@ -51,7 +53,7 @@ impl<'a> BoardWidget<'a> {
     pub fn new(
         state: &'a SolverState,
         cursor: (usize, usize),
-        focused: bool,
+        is_focused: bool,
         typing_direction: Direction,
         preview_tiles: Option<&'a [(usize, usize, Tile)]>,
     ) -> Self {
@@ -61,7 +63,7 @@ impl<'a> BoardWidget<'a> {
         Self {
             state,
             cursor,
-            focused,
+            is_focused,
             typing_direction,
             preview,
         }
@@ -162,7 +164,7 @@ impl<'a> BoardWidget<'a> {
 
 impl Widget for BoardWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let border_color = if self.focused {
+        let border_color = if self.is_focused {
             theme::TAB_BOARD_ACTIVE
         } else {
             theme::BORDER_NORMAL
@@ -210,7 +212,7 @@ impl Widget for BoardWidget<'_> {
                     HitTarget::BoardCell(row, col),
                 );
 
-                let is_cursor = self.focused && self.cursor == (row, col);
+                let is_cursor = self.is_focused && self.cursor == (row, col);
                 let border = theme::BORDER_NORMAL;
 
                 if let Some(tile) = self.state.get_tile(row, col) {
@@ -315,10 +317,10 @@ pub fn render_board(
     area: Rect,
     state: &SolverState,
     cursor: (usize, usize),
-    focused: bool,
+    is_focused: bool,
     typing_direction: Direction,
     preview_tiles: Option<&[(usize, usize, Tile)]>,
 ) {
-    let widget = BoardWidget::new(state, cursor, focused, typing_direction, preview_tiles);
+    let widget = BoardWidget::new(state, cursor, is_focused, typing_direction, preview_tiles);
     frame.render_widget(widget, area);
 }

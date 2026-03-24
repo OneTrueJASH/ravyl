@@ -1,6 +1,7 @@
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use fst::Set;
-use std::path::Path;
 
 /// Dictionary loaded from a pre-compiled FST for fast lookups
 pub struct Dictionary {

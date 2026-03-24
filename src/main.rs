@@ -17,6 +17,9 @@ mod stats;
 mod tile;
 mod ui;
 
+use std::io;
+use std::time::Duration;
+
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
@@ -24,8 +27,6 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
-use std::io;
-use std::time::Duration;
 
 use app::{App, BoardTab, DialogState, Focus};
 use ui::events::AppAction;

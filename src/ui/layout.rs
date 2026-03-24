@@ -3,8 +3,9 @@
 //! Board always gets priority (sized from terminal height).
 //! Sidebar fills remaining width. Suggestions hide if sidebar < 30 cols.
 
-use crate::board::BOARD_SIZE;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+use crate::board::BOARD_SIZE;
 
 /// Minimum cell dimensions.
 const MIN_CELL_WIDTH: u16 = 7;
