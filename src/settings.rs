@@ -8,53 +8,8 @@ use std::path::PathBuf;
 
 use crate::app::SortMode;
 
-/// RefEngine simulation parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefSettings {
-    /// Number of plies to look ahead (1-6)
-    pub plies: u8,
-    /// Number of iterations per move (100-10000)
-    pub iterations: u32,
-    /// Number of plays to simulate (5-150)
-    pub num_plays: u32,
-    /// Enable adaptive mode
-    pub adaptive: bool,
-    /// Plies for endgame solver (4-12)
-    pub endgame_plies: u8,
-}
-
-impl Default for RefSettings {
-    fn default() -> Self {
-        Self {
-            plies: 2,
-            iterations: 1000,
-            num_plays: 150,
-            adaptive: true,
-            endgame_plies: 8,
-        }
-    }
-}
-
-/// MCTS evaluation settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MctsSettings {
-    /// Number of candidate moves to evaluate (3-20)
-    pub num_candidates: u32,
-    /// Iterations per candidate (10-200)
-    pub iterations_per_candidate: u32,
-    /// Enable parallel evaluation
-    pub parallel: bool,
-}
-
-impl Default for MctsSettings {
-    fn default() -> Self {
-        Self {
-            num_candidates: 10,
-            iterations_per_candidate: 50,
-            parallel: true,
-        }
-    }
-}
+/// The lexicon used by Crossplay (fixed, not user-configurable).
+pub const LEXICON: &str = "NWL23";
 
 /// Display preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,17 +33,6 @@ pub enum DefaultSort {
 }
 
 impl DefaultSort {
-    pub fn label(&self) -> &'static str {
-        match self {
-            DefaultSort::Equity => "Equity",
-            DefaultSort::Mcts => "RefEngine",
-            DefaultSort::Score => "Score",
-            DefaultSort::Leave => "Leave",
-            DefaultSort::Length => "Length",
-            DefaultSort::Alpha => "A-Z",
-        }
-    }
-
     pub fn to_sort_mode(self) -> SortMode {
         match self {
             DefaultSort::Equity => SortMode::Equity,
@@ -100,25 +44,14 @@ impl DefaultSort {
         }
     }
 
-    pub fn next(&self) -> Self {
-        match self {
-            DefaultSort::Equity => DefaultSort::Mcts,
-            DefaultSort::Mcts => DefaultSort::Score,
-            DefaultSort::Score => DefaultSort::Leave,
-            DefaultSort::Leave => DefaultSort::Length,
-            DefaultSort::Length => DefaultSort::Alpha,
-            DefaultSort::Alpha => DefaultSort::Equity,
-        }
-    }
-
-    pub fn prev(&self) -> Self {
-        match self {
-            DefaultSort::Equity => DefaultSort::Alpha,
-            DefaultSort::Mcts => DefaultSort::Equity,
-            DefaultSort::Score => DefaultSort::Mcts,
-            DefaultSort::Leave => DefaultSort::Score,
-            DefaultSort::Length => DefaultSort::Leave,
-            DefaultSort::Alpha => DefaultSort::Length,
+    pub fn from_sort_mode(mode: SortMode) -> Self {
+        match mode {
+            SortMode::Equity => DefaultSort::Equity,
+            SortMode::MctsEquity => DefaultSort::Mcts,
+            SortMode::Score => DefaultSort::Score,
+            SortMode::Leave => DefaultSort::Leave,
+            SortMode::WordLength => DefaultSort::Length,
+            SortMode::Alpha => DefaultSort::Alpha,
         }
     }
 }
@@ -132,67 +65,10 @@ impl Default for DisplaySettings {
     }
 }
 
-/// Game settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GameSettings {
-    /// Lexicon to use
-    pub lexicon: Lexicon,
-}
-
-/// Available lexicons
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum Lexicon {
-    #[default]
-    NWL23,
-    CSW21,
-    TWL06,
-    Sowpods,
-}
-
-impl Lexicon {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Lexicon::NWL23 => "NWL23",
-            Lexicon::CSW21 => "CSW21",
-            Lexicon::TWL06 => "TWL06",
-            Lexicon::Sowpods => "SOWPODS",
-        }
-    }
-
-    pub fn next(&self) -> Self {
-        match self {
-            Lexicon::NWL23 => Lexicon::CSW21,
-            Lexicon::CSW21 => Lexicon::TWL06,
-            Lexicon::TWL06 => Lexicon::Sowpods,
-            Lexicon::Sowpods => Lexicon::NWL23,
-        }
-    }
-
-    pub fn prev(&self) -> Self {
-        match self {
-            Lexicon::NWL23 => Lexicon::Sowpods,
-            Lexicon::CSW21 => Lexicon::NWL23,
-            Lexicon::TWL06 => Lexicon::CSW21,
-            Lexicon::Sowpods => Lexicon::TWL06,
-        }
-    }
-}
-
-/// Performance settings
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PerformanceSettings {
-    /// Number of threads (0 = auto)
-    pub threads: u32,
-}
-
 /// All application settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
-    pub refengine: RefSettings,
-    pub mcts: MctsSettings,
     pub display: DisplaySettings,
-    pub game: GameSettings,
-    pub performance: PerformanceSettings,
 }
 
 impl Settings {
@@ -227,18 +103,8 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let s = Settings::default();
-        assert_eq!(s.refengine.plies, 2);
-        assert_eq!(s.refengine.iterations, 1000);
-        assert_eq!(s.refengine.num_plays, 150);
-        assert!(s.refengine.adaptive);
-        assert_eq!(s.refengine.endgame_plies, 8);
-        assert_eq!(s.mcts.num_candidates, 10);
-        assert_eq!(s.mcts.iterations_per_candidate, 50);
-        assert!(s.mcts.parallel);
         assert_eq!(s.display.default_sort, DefaultSort::Equity);
         assert!(s.display.sidebar_visible);
-        assert_eq!(s.game.lexicon, Lexicon::NWL23);
-        assert_eq!(s.performance.threads, 0);
     }
 
     #[test]
@@ -247,33 +113,11 @@ mod tests {
         let toml_str = toml::to_string(&settings).unwrap();
         let parsed: Settings = toml::from_str(&toml_str).unwrap();
 
-        // Compare fields individually since Settings may not derive PartialEq
-        assert_eq!(parsed.refengine.plies, settings.refengine.plies);
-        assert_eq!(parsed.refengine.iterations, settings.refengine.iterations);
-        assert_eq!(parsed.refengine.num_plays, settings.refengine.num_plays);
-        assert_eq!(parsed.refengine.adaptive, settings.refengine.adaptive);
-        assert_eq!(parsed.refengine.endgame_plies, settings.refengine.endgame_plies);
-        assert_eq!(parsed.mcts.num_candidates, settings.mcts.num_candidates);
-        assert_eq!(
-            parsed.mcts.iterations_per_candidate,
-            settings.mcts.iterations_per_candidate
-        );
-        assert_eq!(parsed.mcts.parallel, settings.mcts.parallel);
         assert_eq!(parsed.display.default_sort, settings.display.default_sort);
         assert_eq!(
             parsed.display.sidebar_visible,
             settings.display.sidebar_visible
         );
-        assert_eq!(parsed.game.lexicon, settings.game.lexicon);
-        assert_eq!(parsed.performance.threads, settings.performance.threads);
-    }
-
-    #[test]
-    fn test_lexicon_label() {
-        assert_eq!(Lexicon::NWL23.label(), "NWL23");
-        assert_eq!(Lexicon::CSW21.label(), "CSW21");
-        assert_eq!(Lexicon::TWL06.label(), "TWL06");
-        assert_eq!(Lexicon::Sowpods.label(), "SOWPODS");
     }
 
     #[test]
@@ -284,5 +128,10 @@ mod tests {
         assert_eq!(DefaultSort::Leave.to_sort_mode(), SortMode::Leave);
         assert_eq!(DefaultSort::Length.to_sort_mode(), SortMode::WordLength);
         assert_eq!(DefaultSort::Alpha.to_sort_mode(), SortMode::Alpha);
+    }
+
+    #[test]
+    fn test_lexicon_constant() {
+        assert_eq!(LEXICON, "NWL23");
     }
 }

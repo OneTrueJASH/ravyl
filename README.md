@@ -67,7 +67,6 @@ On macOS, the `build.rs` script sets the rpath so the binary can find `librefeng
 | **Ctrl+Z** | Undo last applied move |
 | **Ctrl+R** | Reset board |
 | **F1** | Toggle help dialog |
-| **F2** | Open settings |
 | **Esc** | Open menu (Quit / Reset / Cancel) or return focus to board |
 | **`** (backtick) | Toggle board/logs tab |
 | **\\** (backslash) | Toggle sidebar visibility |
@@ -93,11 +92,10 @@ Key architectural choices:
 
 ## Configuration
 
-Settings are stored at `~/.config/cpsolver2/settings.toml` and can be edited in-app (F2):
+Preferences are automatically saved to `~/.config/cpsolver2/settings.toml`:
 
-- **Lexicon**: NWL23 (default) or SOWPODS
-- **Thread count**: Number of threads for RefEngine simulation (0 = auto-detect)
-- **Display**: Default sort mode, sidebar visibility
+- **Default sort** — persisted when you cycle sort mode with `S` in the suggestions pane
+- **Sidebar visibility** — persisted when you toggle with `\`
 
 ## License
 

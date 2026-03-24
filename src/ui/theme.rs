@@ -5,7 +5,6 @@ use ratatui::style::{Color, Modifier, Style};
 // ── Base palette ──────────────────────────────────────────────────────
 pub const TEXT_PRIMARY: Color = Color::White;
 pub const TEXT_DIM: Color = Color::DarkGray;
-pub const TEXT_MUTED: Color = Color::Gray;
 
 // ── Focus / borders ───────────────────────────────────────────────────
 pub const BORDER_NORMAL: Color = Color::DarkGray;

@@ -10,44 +10,18 @@ use crate::game::SolverState;
 use crate::logging::log;
 use crate::refengine_mcts::{InferenceResult, RefSimResult, RefSimulator, SimulationOutput};
 use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult};
-use crate::settings::Settings;
+use crate::settings::{self, Settings};
 use crate::solver::Move;
 use crate::ui::events::AppAction;
 use crate::ui::hit::{resolve_click, HitTarget};
 use crate::ui::menu_popup::EscapeMenuOption;
-use crate::ui::settings_popup::SettingsTab;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
 
-/// Settings dialog state
-#[derive(Debug, Clone)]
-pub struct SettingsDialogState {
-    pub tab: SettingsTab,
-    pub row: usize,
-    pub editing: bool,
-    pub edit_buffer: String,
-    pub pending: Settings,
-    pub original_lexicon: crate::settings::Lexicon,
-}
-
-impl SettingsDialogState {
-    pub fn new(settings: Settings) -> Self {
-        let original_lexicon = settings.game.lexicon;
-        Self {
-            tab: SettingsTab::default(),
-            row: 0,
-            editing: false,
-            edit_buffer: String::new(),
-            pending: settings,
-            original_lexicon,
-        }
-    }
-}
-
 /// Dialog state for popup interactions
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DialogState {
     #[default]
     None,
@@ -55,24 +29,7 @@ pub enum DialogState {
     EscapeMenu(EscapeMenuOption),
     ConfirmQuit(bool),
     ConfirmReset(bool),
-    Settings(SettingsDialogState),
 }
-
-impl PartialEq for DialogState {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (DialogState::None, DialogState::None) => true,
-            (DialogState::Help, DialogState::Help) => true,
-            (DialogState::EscapeMenu(a), DialogState::EscapeMenu(b)) => a == b,
-            (DialogState::ConfirmQuit(a), DialogState::ConfirmQuit(b)) => a == b,
-            (DialogState::ConfirmReset(a), DialogState::ConfirmReset(b)) => a == b,
-            (DialogState::Settings(_), DialogState::Settings(_)) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for DialogState {}
 
 /// Board pane tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -209,8 +166,8 @@ impl App {
 
     /// Create a new App with the given settings.
     pub fn with_settings(settings: Settings) -> Self {
-        let lexicon = settings.game.lexicon.label();
-        let refengine_simulator = match RefSimulator::new("external/refengine/data", lexicon) {
+        let refengine_simulator = match RefSimulator::new("external/refengine/data", settings::LEXICON)
+        {
             Ok(sim) => Some(Arc::new(sim)),
             Err(e) => {
                 eprintln!("RefEngine init failed: {}", e);
@@ -262,12 +219,6 @@ impl App {
         // F1 toggles help (unless another dialog is open).
         if key.code == KeyCode::F(1) && !self.has_dialog() {
             self.toggle_help();
-            return AppAction::Redraw;
-        }
-
-        // F2 opens settings.
-        if key.code == KeyCode::F(2) && !self.has_dialog() {
-            self.show_settings();
             return AppAction::Redraw;
         }
 
@@ -538,120 +489,6 @@ impl App {
                 }
                 _ => {}
             },
-
-            DialogState::Settings(ref mut state) => {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-                if state.editing {
-                    match key.code {
-                        KeyCode::Esc => {
-                            state.editing = false;
-                            state.edit_buffer.clear();
-                        }
-                        KeyCode::Enter => {
-                            let success = crate::ui::settings_popup::apply_edit(
-                                &mut state.pending,
-                                state.tab,
-                                state.row,
-                                &state.edit_buffer,
-                            );
-                            state.editing = false;
-                            if !success {
-                                state.edit_buffer.clear();
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            state.edit_buffer.pop();
-                        }
-                        KeyCode::Char(c) if c.is_ascii_digit() => {
-                            state.edit_buffer.push(c);
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.close_dialog();
-                        }
-                        KeyCode::Tab => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                state.tab = state.tab.prev();
-                            } else {
-                                state.tab = state.tab.next();
-                            }
-                            state.row = 0;
-                        }
-                        KeyCode::Up => {
-                            if state.row > 0 {
-                                state.row -= 1;
-                            }
-                        }
-                        KeyCode::Down => {
-                            let max_row = state.tab.row_count().saturating_sub(1);
-                            if state.row < max_row {
-                                state.row += 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            if !crate::ui::settings_popup::is_toggle_setting(state.tab, state.row)
-                                && !crate::ui::settings_popup::is_cycle_setting(
-                                    state.tab, state.row,
-                                )
-                            {
-                                state.editing = true;
-                                state.edit_buffer = crate::ui::settings_popup::get_setting_value(
-                                    &state.pending,
-                                    state.tab,
-                                    state.row,
-                                );
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            if crate::ui::settings_popup::is_toggle_setting(state.tab, state.row) {
-                                crate::ui::settings_popup::toggle_setting(
-                                    &mut state.pending,
-                                    state.tab,
-                                    state.row,
-                                );
-                            } else if crate::ui::settings_popup::is_cycle_setting(
-                                state.tab, state.row,
-                            ) {
-                                crate::ui::settings_popup::cycle_setting_next(
-                                    &mut state.pending,
-                                    state.tab,
-                                    state.row,
-                                );
-                            }
-                        }
-                        KeyCode::Left => {
-                            if crate::ui::settings_popup::is_cycle_setting(state.tab, state.row) {
-                                crate::ui::settings_popup::cycle_setting_prev(
-                                    &mut state.pending,
-                                    state.tab,
-                                    state.row,
-                                );
-                            }
-                        }
-                        KeyCode::Right => {
-                            if crate::ui::settings_popup::is_cycle_setting(state.tab, state.row) {
-                                crate::ui::settings_popup::cycle_setting_next(
-                                    &mut state.pending,
-                                    state.tab,
-                                    state.row,
-                                );
-                            }
-                        }
-                        KeyCode::Char('s') if ctrl => {
-                            let lexicon_changed =
-                                state.pending.game.lexicon != state.original_lexicon;
-                            let new_settings = state.pending.clone();
-                            self.apply_settings(new_settings, lexicon_changed);
-                            self.close_dialog();
-                        }
-                        _ => {}
-                    }
-                }
-            }
         }
     }
 
@@ -697,7 +534,6 @@ impl App {
                                     50.0
                                 },
                                 sim_equity: val,
-                                static_equity: eg.mv.score as f32,
                                 iterations: 0,
                                 ply1_score: 0.0,
                                 ply1_bingo_pct: 0.0,
@@ -925,26 +761,13 @@ impl App {
         self.dialog = DialogState::None;
     }
 
-    /// Open the settings dialog with current settings.
-    pub fn show_settings(&mut self) {
-        self.dialog = DialogState::Settings(SettingsDialogState::new(self.settings.clone()));
-    }
-
-    /// Apply and persist updated settings, reloading the lexicon if changed.
-    pub fn apply_settings(&mut self, new_settings: Settings, lexicon_changed: bool) {
-        self.sidebar_visible = new_settings.display.sidebar_visible;
-        self.sort_mode = new_settings.display.default_sort.to_sort_mode();
-        self.settings = new_settings;
-
+    /// Persist current settings to disk. Logs errors silently.
+    fn save_settings(&mut self) {
+        use crate::settings::DefaultSort;
+        self.settings.display.sidebar_visible = self.sidebar_visible;
+        self.settings.display.default_sort = DefaultSort::from_sort_mode(self.sort_mode);
         if let Err(e) = self.settings.save() {
-            self.message = Some(format!("Failed to save settings: {}", e));
-            return;
-        }
-
-        if lexicon_changed {
-            self.message = Some("Settings saved. Restart required for lexicon change.".to_string());
-        } else {
-            self.message = Some("Settings saved".to_string());
+            log(&format!("Failed to save settings: {e}"));
         }
     }
 
@@ -961,9 +784,10 @@ impl App {
         }
     }
 
-    /// Toggle sidebar (rack + suggestions) visibility.
+    /// Toggle sidebar (rack + suggestions) visibility and persist.
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
+        self.save_settings();
     }
 
     /// Scroll the log viewer up by the given number of lines.
@@ -1395,13 +1219,14 @@ impl App {
         self.focus = self.focus.next();
     }
 
-    /// Advance to the next sort mode and re-sort suggestions.
+    /// Advance to the next sort mode, re-sort suggestions, and persist.
     pub fn cycle_sort_mode(&mut self) {
         let has_sim = self.mcts_results.is_some() || self.refengine_results.is_some();
         self.sort_mode = self.sort_mode.next(has_sim);
         self.apply_sort();
         self.selected_suggestion = 0;
         self.message = Some(format!("Sort: {}", self.sort_mode.label()));
+        self.save_settings();
     }
 
     /// Set a specific sort mode and re-sort suggestions.

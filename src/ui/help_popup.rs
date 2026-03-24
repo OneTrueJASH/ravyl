@@ -72,10 +72,6 @@ impl HelpPopup {
                 Span::styled("Toggle Board/Logs tab", desc_style),
             ]),
             Line::from(vec![
-                Span::styled("F2        ", key_style),
-                Span::styled("Settings", desc_style),
-            ]),
-            Line::from(vec![
                 Span::styled("^C        ", key_style),
                 Span::styled("Quit", desc_style),
             ]),

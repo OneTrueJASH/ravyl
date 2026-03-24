@@ -244,10 +244,5 @@ fn draw_ui(frame: &mut Frame, app: &App) {
                 popup_area,
             );
         }
-
-        DialogState::Settings(ref state) => {
-            let popup_area = ui::settings_popup::SettingsPopup::area(size);
-            frame.render_widget(ui::settings_popup::SettingsPopup::new(state), popup_area);
-        }
     }
 }

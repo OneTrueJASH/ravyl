@@ -32,7 +32,6 @@ Complete TUI redesign of `crossplay-solver`.
 | `ui::help_popup` | Help dialog with keyboard shortcuts |
 | `ui::confirm_popup` | Yes/No confirmation dialog |
 | `ui::menu_popup` | Escape menu (Quit/Reset/Cancel) |
-| `ui::settings_popup` | Settings editor with tabs |
 
 ## Key Design Differences from crossplay-solver
 
