@@ -171,6 +171,8 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             &app.state.rack,
             app.focus == Focus::Rack,
             app.inferred_opponent_rack.as_ref(),
+            app.our_score,
+            app.opp_score,
         );
     }
 
@@ -244,6 +246,55 @@ fn draw_ui(frame: &mut Frame, app: &App) {
                 ),
                 popup_area,
             );
+        }
+
+        DialogState::ScoreInput {
+            ref target,
+            ref buffer,
+        } => {
+            use ratatui::style::{Modifier, Style};
+            use ratatui::text::{Line, Span};
+            use ratatui::widgets::Paragraph;
+
+            let title = match target {
+                app::ScoreTarget::Player => "Set Your Score",
+                app::ScoreTarget::Opponent => "Set Opponent Score",
+            };
+            let popup_area = ui::popup_frame::centered_rect(size, 36, 6);
+            let inner = ui::popup_frame::render_popup_frame(
+                popup_area,
+                frame.buffer_mut(),
+                title,
+                ui::theme::POPUP_BORDER,
+            );
+
+            let display = if buffer.is_empty() {
+                "0".to_string()
+            } else {
+                buffer.clone()
+            };
+
+            let content = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        "  Score: ",
+                        Style::default().fg(ui::theme::TEXT_PRIMARY),
+                    ),
+                    Span::styled(
+                        &display,
+                        Style::default()
+                            .fg(ui::theme::SCORE_FG)
+                            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                    ),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  Type digits, Enter to set, Esc to cancel",
+                    Style::default().fg(ui::theme::TEXT_DIM),
+                )),
+            ];
+            Paragraph::new(content).render(inner, frame.buffer_mut());
         }
     }
 }

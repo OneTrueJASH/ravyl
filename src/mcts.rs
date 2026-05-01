@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use crate::dictionary::Dictionary;
 use crate::game::SolverState;
-use crate::solver::{leave_value, Move, Solver};
+use crate::solver::{leave_value_with_phase, Move, Solver};
 use crate::tile::{Rack, Tile, RACK_SIZE};
 
 /// Configuration for MCTS evaluation
@@ -27,8 +27,8 @@ pub struct MctsConfig {
 impl Default for MctsConfig {
     fn default() -> Self {
         MctsConfig {
-            num_candidates: 10,
-            iterations_per_candidate: 50,
+            num_candidates: 20,
+            iterations_per_candidate: 200,
             parallel: true,
         }
     }
@@ -183,11 +183,12 @@ impl MctsEvaluator {
 
         // Pre-compute the tile pool from unseen tiles (bag + opponent's rack)
         let unseen = base_state.unseen_tiles();
+        let unseen_count = unseen.values().sum::<u32>() as usize;
         let base_pool = TilePool::from_remaining(&unseen);
 
         // Early exit for endgame
         if base_pool.is_empty() {
-            let spread = leave_value(&mv.leave);
+            let spread = leave_value_with_phase(&mv.leave, Some(unseen_count));
             return MctsResult {
                 mv: mv.clone(),
                 mcts_equity: mv.score as f32 + spread,
@@ -199,7 +200,7 @@ impl MctsEvaluator {
 
         for _ in 0..self.config.iterations_per_candidate {
             if let Some(result) =
-                self.simulate_iteration(&base_state, mv, &base_pool, dictionary, &mut rng)
+                self.simulate_iteration(&base_state, mv, &base_pool, unseen_count, dictionary, &mut rng)
             {
                 total_spread += result.spread;
                 iterations_completed += 1;
@@ -228,6 +229,7 @@ impl MctsEvaluator {
         base_state: &SolverState,
         mv: &Move,
         base_pool: &TilePool,
+        unseen_count: usize,
         dictionary: &Dictionary,
         rng: &mut Rng,
     ) -> Option<SimulationResult> {
@@ -243,7 +245,7 @@ impl MctsEvaluator {
         let mut sim_state = base_state.clone();
         let (opp_score, opp_leave_equity) = if let Some(best_opp) = opp_moves.first() {
             sim_state.apply_move(best_opp);
-            (best_opp.score, leave_value(&best_opp.leave))
+            (best_opp.score, leave_value_with_phase(&best_opp.leave, Some(unseen_count)))
         } else {
             (0, 0.0)
         };
@@ -272,9 +274,9 @@ impl MctsEvaluator {
 
         let (followup_score, our_leave_equity) = if let Some(best_followup) = followup_moves.first()
         {
-            (best_followup.score, leave_value(&best_followup.leave))
+            (best_followup.score, leave_value_with_phase(&best_followup.leave, Some(unseen_count)))
         } else {
-            (0, leave_value(&followup_rack.tiles()))
+            (0, leave_value_with_phase(&followup_rack.tiles(), Some(unseen_count)))
         };
 
         // 6. Calculate spread and leave differences

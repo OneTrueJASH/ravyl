@@ -20,7 +20,7 @@ impl HelpPopup {
     }
 
     pub fn area(terminal_area: Rect) -> Rect {
-        centered_rect(terminal_area, 50, 44)
+        centered_rect(terminal_area, 50, 46)
     }
 
     fn build_content() -> Vec<Line<'static>> {
@@ -97,6 +97,14 @@ impl HelpPopup {
             Line::from(vec![
                 Span::styled("Enter     ", key_style),
                 Span::styled("Apply selected move", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("=         ", key_style),
+                Span::styled("Set opponent score", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("+         ", key_style),
+                Span::styled("Set your score", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("RACK", header_style)),

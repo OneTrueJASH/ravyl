@@ -24,6 +24,8 @@ pub struct RackStatsWidget<'a> {
     rack: &'a Rack,
     is_focused: bool,
     inferred_rack: Option<&'a InferenceResult>,
+    our_score: u32,
+    opp_score: u32,
 }
 
 impl<'a> RackStatsWidget<'a> {
@@ -32,12 +34,16 @@ impl<'a> RackStatsWidget<'a> {
         rack: &'a Rack,
         is_focused: bool,
         inferred_rack: Option<&'a InferenceResult>,
+        our_score: u32,
+        opp_score: u32,
     ) -> Self {
         Self {
             state,
             rack,
             is_focused,
             inferred_rack,
+            our_score,
+            opp_score,
         }
     }
 
@@ -163,6 +169,45 @@ impl Widget for RackStatsWidget<'_> {
                 }
             }
             row += TILE_HEIGHT;
+        }
+
+        // === Score line ===
+        if row < inner.y + inner.height && (self.our_score > 0 || self.opp_score > 0) {
+            let diff = self.our_score as i32 - self.opp_score as i32;
+            let score_text = format!("{}\u{2013}{}", self.our_score, self.opp_score);
+            let diff_text = if diff > 0 {
+                format!("  (+{})", diff)
+            } else if diff < 0 {
+                format!("  ({})", diff)
+            } else {
+                "  (tied)".to_string()
+            };
+
+            let mut x = inner.x;
+            Self::render_text(
+                buf,
+                x,
+                row,
+                max_x,
+                &score_text,
+                Style::new().fg(theme::TEXT_PRIMARY).bold(),
+            );
+            x += score_text.len() as u16;
+
+            let diff_color = if diff > 0 {
+                Color::Green
+            } else if diff < 0 {
+                Color::Red
+            } else {
+                theme::TEXT_DIM
+            };
+            Self::render_text(buf, x, row, max_x, &diff_text, Style::new().fg(diff_color));
+            row += 1;
+
+            if row < inner.y + inner.height {
+                Self::render_separator(buf, inner.x, row, inner.width);
+                row += 1;
+            }
         }
 
         // === Rack analysis ===
@@ -388,7 +433,9 @@ pub fn render_rack_stats(
     rack: &Rack,
     is_focused: bool,
     inferred_rack: Option<&InferenceResult>,
+    our_score: u32,
+    opp_score: u32,
 ) {
-    let widget = RackStatsWidget::new(state, rack, is_focused, inferred_rack);
+    let widget = RackStatsWidget::new(state, rack, is_focused, inferred_rack, our_score, opp_score);
     frame.render_widget(widget, area);
 }

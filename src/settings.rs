@@ -27,6 +27,7 @@ pub enum DefaultSort {
     #[default]
     Equity,
     Mcts,
+    WinPct,
     Score,
     Leave,
     Length,
@@ -38,6 +39,7 @@ impl DefaultSort {
         match self {
             DefaultSort::Equity => SortMode::Equity,
             DefaultSort::Mcts => SortMode::MctsEquity,
+            DefaultSort::WinPct => SortMode::WinPct,
             DefaultSort::Score => SortMode::Score,
             DefaultSort::Leave => SortMode::Leave,
             DefaultSort::Length => SortMode::WordLength,
@@ -49,6 +51,7 @@ impl DefaultSort {
         match mode {
             SortMode::Equity => DefaultSort::Equity,
             SortMode::MctsEquity => DefaultSort::Mcts,
+            SortMode::WinPct => DefaultSort::WinPct,
             SortMode::Score => DefaultSort::Score,
             SortMode::Leave => DefaultSort::Leave,
             SortMode::WordLength => DefaultSort::Length,

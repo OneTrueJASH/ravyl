@@ -369,6 +369,7 @@ pub fn render_sort_tabs(
         vec![
             SortMode::Equity,
             SortMode::MctsEquity,
+            SortMode::WinPct,
             SortMode::Score,
             SortMode::Leave,
             SortMode::WordLength,
