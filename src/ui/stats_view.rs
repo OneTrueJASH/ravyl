@@ -192,7 +192,7 @@ impl Widget for RackStatsWidget<'_> {
                 &score_text,
                 Style::new().fg(theme::TEXT_PRIMARY).bold(),
             );
-            x += score_text.len() as u16;
+            x += score_text.chars().count() as u16;
 
             let diff_color = if diff > 0 {
                 Color::Green

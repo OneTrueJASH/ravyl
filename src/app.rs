@@ -132,6 +132,7 @@ struct UndoState {
     state: SolverState,
     our_score: u32,
     opp_score: u32,
+    last_applied_board: Option<Board>,
     message: String,
 }
 
@@ -842,6 +843,7 @@ impl App {
             state: self.state.clone(),
             our_score: self.our_score,
             opp_score: self.opp_score,
+            last_applied_board: self.last_applied_board.clone(),
             message: format!(
                 "Score: {}-{}",
                 self.our_score, self.opp_score
@@ -1054,6 +1056,7 @@ impl App {
                 state: self.state.clone(),
                 our_score: self.our_score,
                 opp_score: self.opp_score,
+                last_applied_board: self.last_applied_board.clone(),
                 message: format!("Before opp: {}", word),
             });
             self.opp_score += score;
@@ -1442,6 +1445,7 @@ impl App {
             state: self.state.clone(),
             our_score: self.our_score,
             opp_score: self.opp_score,
+            last_applied_board: self.last_applied_board.clone(),
             message: format!(
                 "Before: {}",
                 self.suggestions[self.selected_suggestion].word
@@ -1465,12 +1469,14 @@ impl App {
         self.clear_suggestions();
     }
 
-    /// Undo the last applied move, restoring the previous board, rack, and scores.
+    /// Undo the last applied move, restoring the previous board, rack, scores,
+    /// and board snapshot (so opponent auto-scoring works against the correct state).
     pub fn undo(&mut self) {
         if let Some(undo_state) = self.undo_stack.pop() {
             self.state = undo_state.state;
             self.our_score = undo_state.our_score;
             self.opp_score = undo_state.opp_score;
+            self.last_applied_board = undo_state.last_applied_board;
             self.clear_suggestions();
             self.message = Some(format!("Undone: {}", undo_state.message));
         } else {
