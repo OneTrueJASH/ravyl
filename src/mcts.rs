@@ -186,7 +186,7 @@ fn rack_from(tiles: &[Tile]) -> Rack {
 }
 
 /// Which player is to move in a playout.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Player {
     Us,
     Opp,
@@ -1413,5 +1413,176 @@ mod tests {
                 .map(|v| (v * 1000.0).round() / 1000.0)
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn tiles_of(s: &str) -> Vec<Tile> {
+        s.chars()
+            .map(|c| {
+                if c == '?' {
+                    Tile::blank(' ')
+                } else {
+                    Tile::new(c)
+                }
+            })
+            .collect()
+    }
+    fn multiset(v: &[Tile]) -> Vec<(bool, char)> {
+        let mut k: Vec<(bool, char)> = v
+            .iter()
+            .map(|x| (x.is_blank, if x.is_blank { '?' } else { x.letter }))
+            .collect();
+        k.sort();
+        k
+    }
+
+    /// An exchange in a playout: the exchanged tiles leave the rack, as many
+    /// are drawn, the bag keeps its size, nothing is lost, and the bag is
+    /// never "emptied" by it.
+    #[test]
+    fn playout_exchange_conserves_tiles_and_bag_size() {
+        let dict = load_default_dictionary().unwrap();
+        let bag = tiles_of("EEEEEEEEEE");
+        let mut p = Playout::new(
+            &dict,
+            Board::new(),
+            [tiles_of("QVWXZ?A"), tiles_of("AAAAAAA")],
+            bag,
+            7,
+        );
+        let before: Vec<Tile> = p.racks[0]
+            .iter()
+            .chain(&p.racks[1])
+            .chain(&p.bag)
+            .copied()
+            .collect();
+        let mv = Move::exchange(&p.racks[0], tiles_of("QV?"), 0.0);
+        p.commit(Player::Us, &mv);
+        assert_eq!(p.racks[0].len(), 7);
+        assert_eq!(p.bag.len(), 10);
+        assert!(p.final_turn_owner.is_none());
+        assert_eq!(p.spread, 0);
+        // Drew three E's (the bag was all E's), returned Q V ?.
+        assert_eq!(multiset(&p.racks[0]), multiset(&tiles_of("WXZAEEE")));
+        let after: Vec<Tile> = p.racks[0]
+            .iter()
+            .chain(&p.racks[1])
+            .chain(&p.bag)
+            .copied()
+            .collect();
+        assert_eq!(multiset(&before), multiset(&after));
+        assert!(p.bag.iter().any(|t| t.is_blank) && p.bag.iter().any(|t| t.letter == 'Q'));
+    }
+
+    /// The three ways the bag can empty, each followed by exactly one more
+    /// move for the other side and then the emptier's final move.
+    #[test]
+    fn playout_endings_follow_the_equal_turn_sequence() {
+        let dict = load_default_dictionary().unwrap();
+        let board = Board::new();
+        let mut b = board.clone();
+        b.place_tile(7, 6, Tile::new('C'));
+        b.place_tile(7, 7, Tile::new('A'));
+        b.place_tile(7, 8, Tile::new('T'));
+
+        // (a) Our candidate emptied the bag: owner = Us from the start.
+        let mut p = Playout::new(
+            &dict,
+            b.clone(),
+            [tiles_of("RE"), tiles_of("SOD")],
+            vec![],
+            1,
+        );
+        p.final_turn_owner = Some(Player::Us);
+        p.trace = Some(vec![]);
+        let out = p.run_with(Player::Opp, 10, &mut |_, _| {});
+        assert!(out.finished);
+        let tr = p.trace.take().unwrap();
+        assert_eq!(tr.len(), 2, "{:?}", tr);
+        assert!(!tr[0].mover_is_us && tr[1].mover_is_us);
+
+        // (b) The opponent's first move empties a one-tile bag: they own the
+        // final turn; we get one last turn, then they play, then it ends.
+        let mut p = Playout::new(
+            &dict,
+            b.clone(),
+            [tiles_of("RE"), tiles_of("SOD")],
+            tiles_of("E"),
+            2,
+        );
+        p.trace = Some(vec![]);
+        let out = p.run_with(Player::Opp, 20, &mut |_, _| {});
+        assert!(out.finished);
+        assert_eq!(p.final_turn_owner, Some(Player::Opp));
+        let tr = p.trace.take().unwrap();
+        assert_eq!(tr.len(), 3, "{:?}", tr);
+        assert!(!tr[0].mover_is_us && tr[1].mover_is_us && !tr[2].mover_is_us);
+        assert_eq!(tr[0].bag, 0);
+
+        // (c) The opponent passes (no tiles), our move empties the bag: we
+        // own it; the opponent (still no tiles) passes their last turn and
+        // we play the final move.
+        let mut p = Playout::new(
+            &dict,
+            b.clone(),
+            [tiles_of("RES"), vec![]],
+            tiles_of("D"),
+            3,
+        );
+        p.trace = Some(vec![]);
+        let out = p.run_with(Player::Opp, 20, &mut |_, _| {});
+        assert!(out.finished);
+        assert_eq!(p.final_turn_owner, Some(Player::Us));
+        let tr = p.trace.take().unwrap();
+        // Our emptying move, then our final move; the opponent's turns are
+        // passes (recorded in the greedy phase, silent on their last turn)
+        // that never change the spread.
+        assert_eq!(tr.iter().filter(|t| t.mover_is_us).count(), 2, "{:?}", tr);
+        for w in tr.windows(2) {
+            if !w[1].mover_is_us {
+                assert_eq!(w[0].spread, w[1].spread);
+            }
+        }
+    }
+
+    /// Exchange candidates draw from the pre-move pool and the exchanged
+    /// tiles end up back in the bag, so every playout conserves tiles; the
+    /// evaluator handles them alongside plays.
+    #[test]
+    fn exchange_candidates_evaluate() {
+        let dict = load_default_dictionary().unwrap();
+        let state =
+            SolverState::from_cgp("15/15/15/15/15/15/15/3BEECH7/7I7/7K7/7E7/7r7/15/15/15 QVWXZ?A")
+                .unwrap();
+        let candidates = state.get_suggestions(&dict);
+        let results = MctsEvaluator::new(MctsConfig {
+            num_candidates: 12,
+            iterations_per_candidate: 8,
+            max_plies: 2,
+            parallel: false,
+            score_diff: 0,
+            time_budget: None,
+        })
+        .evaluate(&state, &candidates, &dict);
+        assert!(results
+            .iter()
+            .any(|r| matches!(r.mv.kind, MoveKind::Exchange(_))));
+        for r in &results {
+            assert!(r.mcts_equity.is_finite());
+            assert!((0.0..=1.0).contains(&r.win_rate));
+            assert!((0.0..=1.0).contains(&r.opp_bingo_rate));
+        }
+        // Direct check of the dealing for an exchange candidate.
+        let ex = candidates
+            .iter()
+            .find(|m| matches!(m.kind, MoveKind::Exchange(_)))
+            .unwrap();
+        let sim = CandidateSim::new(&state, ex, 0);
+        let MoveKind::Exchange(exchanged) = &ex.kind else {
+            unreachable!()
+        };
+        assert_eq!(sim.draw_count, exchanged.len());
+        // Pool = unseen before the move = 100 - 9 board - 7 rack = 84.
+        assert_eq!(sim.pool.len(), 84);
+        assert_eq!(sim.bag_size, 77);
     }
 }
