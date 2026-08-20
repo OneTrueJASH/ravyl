@@ -985,7 +985,7 @@ impl App {
         let count = dict.len();
         self.dictionary = Some(Arc::new(dict));
         self.message = Some(format!(
-            "Loaded {} words. Place tiles on board, set rack, press S to solve.",
+            "Loaded {} words. Place tiles on board, set rack, Ctrl+S to solve.",
             count
         ));
     }
@@ -1380,7 +1380,7 @@ impl App {
         }
 
         if self.suggestions.is_empty() {
-            self.message = Some("Generate suggestions first (press S)".to_string());
+            self.message = Some("Generate suggestions first (Ctrl+S)".to_string());
             return;
         }
 

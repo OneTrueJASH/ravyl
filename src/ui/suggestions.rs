@@ -189,7 +189,7 @@ pub fn render_suggestions(
     register_hit(area, HitTarget::FocusPane(crate::app::Focus::Suggestions));
 
     if moves.is_empty() {
-        let paragraph = Paragraph::new("Press S to find moves")
+        let paragraph = Paragraph::new("Ctrl+S to find moves")
             .style(Style::new().fg(theme::TEXT_DIM))
             .block(block);
         frame.render_widget(paragraph, area);
