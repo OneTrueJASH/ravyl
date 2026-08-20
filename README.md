@@ -66,8 +66,8 @@ On macOS, the `build.rs` script sets the rpath so the binary can find `librefeng
 | **Space** | Toggle typing direction (horizontal/vertical) |
 | **Ctrl+S** | Generate all legal moves (solve) and focus suggestions |
 | **Enter** | Solve (from rack) or apply selected suggestion (from suggestions) |
-| **M** | Run RefEngine simulation / endgame solver (from suggestions) |
-| **S** | Cycle sort mode (from suggestions: Equity → RefEngine → Score → Leave → Length → A-Z) |
+| **M** | Evaluate: Crossplay-rules playouts, or the endgame solver when the bag is empty (from suggestions) |
+| **S** | Cycle sort mode (from suggestions: Equity → Sim → Win% → Score → Leave → Length → A-Z) |
 | **Ctrl+Z** | Undo last applied move |
 | **Ctrl+R** | Reset board |
 | **Ctrl+E** | Toggle who has the final turn (you / opponent) once the bag is empty |

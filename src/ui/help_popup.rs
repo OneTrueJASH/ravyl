@@ -147,7 +147,7 @@ impl HelpPopup {
             ]),
             Line::from(vec![
                 Span::styled("m         ", key_style),
-                Span::styled("Run RefEngine simulation", desc_style),
+                Span::styled("Evaluate (playouts / endgame)", desc_style),
             ]),
             Line::from(""),
             Line::from(Span::styled("MOUSE", header_style)),
