@@ -327,8 +327,9 @@ mod ui_tests {
             .collect()
     }
 
+    /// Callers hold `REF_ENGINE_TEST_LOCK` while the App lives (it may start
+    /// RefEngine inference in the background).
     fn sample_app() -> App {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         let mut app = App::with_settings(settings::Settings::default());
         let dict = dictionary::load_default_dictionary().unwrap();
         app.set_dictionary(dict);
@@ -354,6 +355,7 @@ mod ui_tests {
     /// picks a geometry that fits instead of clipping its bottom rows.
     #[test]
     fn board_fits_common_terminal_sizes() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         let app = sample_app();
         for (w, h) in [
             (220, 60),
@@ -406,6 +408,7 @@ mod ui_tests {
     #[test]
     #[ignore]
     fn ui_snapshots() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         let mut app = sample_app();
         // Evaluate so the results columns are populated in the renders.
         app.run_mcts_evaluation();

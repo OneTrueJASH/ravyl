@@ -1738,9 +1738,10 @@ mod tests {
     use super::*;
     use crate::game::SolverState;
 
-    /// Build an App without touching the user's settings file.
+    /// Build an App without touching the user's settings file. Callers
+    /// must hold `REF_ENGINE_TEST_LOCK` for as long as the App may use RefEngine
+    /// (construction and any inference it starts).
     fn test_app() -> App {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         App::with_settings(Settings::default())
     }
 
@@ -1779,6 +1780,7 @@ mod tests {
 
     #[test]
     fn final_turn_inferred_from_applied_move() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         let mut app = test_app();
         app.dictionary = Some(Arc::new(
             crate::dictionary::load_default_dictionary().unwrap(),
@@ -1816,6 +1818,7 @@ mod tests {
     /// the next evaluation would pick up a stale result.
     #[test]
     fn inference_is_polled_after_ranking() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         let mut app = test_app();
         app.dictionary = Some(Arc::new(
             crate::dictionary::load_default_dictionary().unwrap(),
@@ -1845,6 +1848,7 @@ mod tests {
 
     #[test]
     fn our_move_ends_game_depends_on_final_turn() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
         let mut app = test_app();
         app.state = state_with(90, 3);
         assert_eq!(app.state.unseen_tile_count(), 7);
