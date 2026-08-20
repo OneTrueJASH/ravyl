@@ -28,6 +28,7 @@ pub struct RackStatsWidget<'a> {
     our_score: u32,
     opp_score: u32,
     final_turn: FinalTurn,
+    final_turn_known: bool,
 }
 
 impl<'a> RackStatsWidget<'a> {
@@ -36,7 +37,7 @@ impl<'a> RackStatsWidget<'a> {
         is_focused: bool,
         inferred_rack: Option<&'a InferenceResult>,
         scores: (u32, u32),
-        final_turn: FinalTurn,
+        final_turn: (FinalTurn, bool),
     ) -> Self {
         Self {
             state,
@@ -45,7 +46,8 @@ impl<'a> RackStatsWidget<'a> {
             inferred_rack,
             our_score: scores.0,
             opp_score: scores.1,
-            final_turn,
+            final_turn: final_turn.0,
+            final_turn_known: final_turn.1,
         }
     }
 
@@ -298,9 +300,11 @@ impl Widget for RackStatsWidget<'_> {
                 Self::render_text(buf, x, row, max_x, &s_text, s_style);
                 x += s_text.len() as u16;
 
-                // Bag empty: show who plays the final move (Ctrl+E toggles).
+                // Bag empty: show who plays the final move (Ctrl+E toggles);
+                // a trailing ? means the app is assuming, not inferring.
                 if stats.game_phase == GamePhase::Endgame {
-                    let last_text = format!("  last:{}", self.final_turn.label());
+                    let mark = if self.final_turn_known { "" } else { "?" };
+                    let last_text = format!("  last:{}{}", self.final_turn.label(), mark);
                     Self::render_text(buf, x, row, max_x, &last_text, Style::new().fg(pc).bold());
                 }
                 row += 1;
@@ -442,7 +446,7 @@ pub fn render_rack_stats(
     is_focused: bool,
     inferred_rack: Option<&InferenceResult>,
     scores: (u32, u32),
-    final_turn: FinalTurn,
+    final_turn: (FinalTurn, bool),
 ) {
     let widget = RackStatsWidget::new(state, is_focused, inferred_rack, scores, final_turn);
     frame.render_widget(widget, area);

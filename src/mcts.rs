@@ -335,6 +335,9 @@ struct CandidateSim<'a> {
     total: f32,
     wins: f32,
     iterations: usize,
+    /// Every playout value, in order; candidates share draw sequences, so
+    /// element-wise differences between candidates are paired samples.
+    values: Vec<f32>,
 }
 
 impl<'a> CandidateSim<'a> {
@@ -366,6 +369,7 @@ impl<'a> CandidateSim<'a> {
             total: 0.0,
             wins: 0.0,
             iterations: 0,
+            values: Vec::new(),
         }
     }
 
@@ -378,6 +382,7 @@ impl<'a> CandidateSim<'a> {
     }
 
     fn record(&mut self, value: f32) {
+        self.values.push(value);
         self.total += value;
         let final_diff = self.score_diff as f32 + value;
         if final_diff > 0.0 {
@@ -439,8 +444,28 @@ impl<'a> CandidateSim<'a> {
 }
 
 /// Candidates trailing the leader by more than this many points after a
-/// pruning round are not simulated further.
+/// pruning round — and by a statistically clear amount — are not simulated
+/// further.
 const PRUNE_MARGIN: f32 = 4.0;
+
+/// How many standard errors of the paired difference the deficit must
+/// exceed before a candidate is pruned.
+const PRUNE_SIGMAS: f32 = 2.5;
+
+/// Mean and standard error of the element-wise difference `a - b`.
+fn paired_difference(a: &[f32], b: &[f32]) -> (f32, f32) {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return (0.0, f32::INFINITY);
+    }
+    let diffs = a.iter().zip(b).map(|(x, y)| x - y);
+    let mean = diffs.clone().sum::<f32>() / n as f32;
+    if n < 2 {
+        return (mean, f32::INFINITY);
+    }
+    let var = diffs.map(|d| (d - mean).powi(2)).sum::<f32>() / (n - 1) as f32;
+    (mean, (var / n as f32).sqrt())
+}
 
 /// Monte Carlo evaluator for move selection
 pub struct MctsEvaluator {
@@ -455,9 +480,12 @@ impl MctsEvaluator {
     /// Evaluate the top candidates and return results sorted by equity.
     ///
     /// Playouts run in rounds; after each round, candidates that trail the
-    /// leader by more than [`PRUNE_MARGIN`] points stop (keeping their
-    /// estimate so far), so the budget concentrates on the moves that can
-    /// still finish first.
+    /// leader by more than [`PRUNE_MARGIN`] points, by at least
+    /// [`PRUNE_SIGMAS`] standard errors of the paired difference, stop and
+    /// keep their estimate so far. The budget concentrates on the moves that
+    /// can still finish first. Results list the fully simulated candidates
+    /// first (by expected spread), then the pruned ones, so a stale
+    /// short-run estimate never outranks a complete one.
     pub fn evaluate(
         &self,
         state: &SolverState,
@@ -499,21 +527,34 @@ impl MctsEvaluator {
                         .partial_cmp(&sims[a].mean())
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
-                let leader = sims[active[0]].mean();
-                let contenders = active
+                let leader = active[0];
+                let contenders: Vec<usize> = active
                     .iter()
-                    .filter(|&&i| sims[i].mean() >= leader - PRUNE_MARGIN)
-                    .count();
-                let keep = contenders.max(4).min(active.len());
-                active.truncate(keep);
+                    .copied()
+                    .filter(|&i| {
+                        let (deficit, se) =
+                            paired_difference(&sims[leader].values, &sims[i].values);
+                        deficit <= PRUNE_MARGIN || deficit <= PRUNE_SIGMAS * se
+                    })
+                    .collect();
+                if contenders.len() >= 4 {
+                    active = contenders;
+                } else {
+                    active.truncate(4.min(active.len()));
+                }
             }
         }
 
+        let full = sims.iter().map(|s| s.iterations).max().unwrap_or(0);
         let mut results: Vec<MctsResult> = sims.iter().map(|s| s.result()).collect();
         results.sort_by(|a, b| {
-            b.mcts_equity
-                .partial_cmp(&a.mcts_equity)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            let a_full = a.iterations == full;
+            let b_full = b.iterations == full;
+            b_full.cmp(&a_full).then(
+                b.mcts_equity
+                    .partial_cmp(&a.mcts_equity)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
         });
         results
     }
@@ -657,6 +698,54 @@ mod tests {
             assert!(r.iterations >= 2);
         }
         assert_eq!(results[0].iterations, 10);
+    }
+
+    #[test]
+    fn paired_difference_statistics() {
+        let (m, se) = paired_difference(&[], &[]);
+        assert_eq!(m, 0.0);
+        assert!(se.is_infinite());
+        let (m, se) = paired_difference(&[5.0], &[2.0]);
+        assert_eq!(m, 3.0);
+        assert!(se.is_infinite());
+        // Constant difference: zero standard error.
+        let (m, se) = paired_difference(&[1.0, 2.0, 3.0, 4.0], &[0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(m, 1.0);
+        assert_eq!(se, 0.0);
+        // Differences 2, -2, 2, -2: mean 0, sample sd = sqrt(16/3), se = sd/2.
+        let (m, se) = paired_difference(&[2.0, 0.0, 2.0, 0.0], &[0.0, 2.0, 0.0, 2.0]);
+        assert_eq!(m, 0.0);
+        assert!((se - (16.0f32 / 3.0).sqrt() / 2.0).abs() < 1e-6);
+    }
+
+    /// Fully simulated candidates rank ahead of pruned ones regardless of
+    /// their short-run means.
+    #[test]
+    fn fully_simulated_candidates_rank_first() {
+        let dict = load_default_dictionary().unwrap();
+        const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
+        let state = SolverState::from_cgp(&format!("{} ES", MID)).unwrap();
+        let suggestions = state.get_suggestions(&dict);
+        let results = MctsEvaluator::new(MctsConfig {
+            num_candidates: 12,
+            iterations_per_candidate: 24,
+            max_plies: 10,
+            parallel: true,
+            score_diff: 0,
+        })
+        .evaluate(&state, &suggestions, &dict);
+        let full = results.iter().map(|r| r.iterations).max().unwrap();
+        assert_eq!(full, 24);
+        let first_partial = results.iter().position(|r| r.iterations < full);
+        if let Some(p) = first_partial {
+            assert!(
+                results[p..].iter().all(|r| r.iterations < full),
+                "a fully simulated candidate is listed after a pruned one"
+            );
+            assert!(results[..p]
+                .windows(2)
+                .all(|w| w[0].mcts_equity >= w[1].mcts_equity));
+        }
     }
 
     /// Timing harness for the pre-endgame playout. Run with

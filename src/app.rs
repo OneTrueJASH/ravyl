@@ -168,6 +168,7 @@ struct UndoState {
     opp_score: u32,
     last_applied_board: Option<Board>,
     final_turn: FinalTurn,
+    final_turn_known: bool,
     message: String,
 }
 
@@ -221,6 +222,9 @@ pub struct App {
     pub opp_score: u32,
     /// Who has the final move once the bag is empty (see [`FinalTurn`]).
     pub final_turn: FinalTurn,
+    /// False until the final turn was inferred from an applied move or set
+    /// with Ctrl+E; a position entered by hand starts with the default.
+    pub final_turn_known: bool,
 }
 
 impl App {
@@ -274,6 +278,7 @@ impl App {
             our_score: 0,
             opp_score: 0,
             final_turn: FinalTurn::default(),
+            final_turn_known: false,
         }
     }
 
@@ -611,11 +616,15 @@ impl App {
                 Ok(endgame_results) => {
                     let count = endgame_results.len();
 
-                    // Convert EndgameMove results to RefSimResult for display compatibility
+                    // Convert EndgameMove results to RefSimResult for display
+                    // compatibility. The game ends after these two plies, so
+                    // the final margin is known exactly: win% is 100/50/0.
+                    let score_diff = self.our_score as i32 - self.opp_score as i32;
                     let sim_results: Vec<RefSimResult> = endgame_results
                         .iter()
                         .map(|eg| {
                             let val = eg.endgame_value as f32;
+                            let final_margin = score_diff + eg.endgame_value;
                             RefSimResult {
                                 word: eg.mv.word.clone(),
                                 row: eg.mv.row,
@@ -628,12 +637,10 @@ impl App {
                                     .iter()
                                     .map(|t| if t.is_blank { '?' } else { t.letter })
                                     .collect(),
-                                win_pct: if val > 0.0 {
-                                    100.0
-                                } else if val < 0.0 {
-                                    0.0
-                                } else {
-                                    50.0
+                                win_pct: match final_margin.cmp(&0) {
+                                    std::cmp::Ordering::Greater => 100.0,
+                                    std::cmp::Ordering::Less => 0.0,
+                                    std::cmp::Ordering::Equal => 50.0,
                                 },
                                 sim_equity: val,
                                 iterations: 0,
@@ -902,6 +909,7 @@ impl App {
             opp_score: self.opp_score,
             last_applied_board: self.last_applied_board.clone(),
             final_turn: self.final_turn,
+            final_turn_known: self.final_turn_known,
             message: format!("Score: {}-{}", self.our_score, self.opp_score),
         });
 
@@ -1092,9 +1100,23 @@ impl App {
         // inference from the next RefEngine simulation.
     }
 
+    /// The suggestion list ordered by static equity, best first, regardless
+    /// of the sort mode on screen: playouts evaluate the top of this list.
+    fn candidates_by_static_equity(&self) -> Vec<Move> {
+        let mut candidates = self.suggestions.clone();
+        candidates.sort_by(|a, b| {
+            b.equity
+                .partial_cmp(&a.equity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.score.cmp(&a.score))
+        });
+        candidates
+    }
+
     /// Flip who has the final move of the game (see [`FinalTurn`]).
     pub fn toggle_final_turn(&mut self) {
         self.final_turn = self.final_turn.toggle();
+        self.final_turn_known = true;
         self.clear_suggestions();
         self.message = Some(match self.final_turn {
             FinalTurn::Opponent => {
@@ -1135,6 +1157,7 @@ impl App {
                 opp_score: self.opp_score,
                 last_applied_board: self.last_applied_board.clone(),
                 final_turn: self.final_turn,
+                final_turn_known: self.final_turn_known,
                 message: format!("Before opp: {}", word),
             });
             self.opp_score += score;
@@ -1382,16 +1405,21 @@ impl App {
         if self.state.is_endgame() {
             if let Some(dict) = self.dictionary.clone() {
                 let state = self.state.clone();
-                let total_moves = self.suggestions.len();
 
+                // The solver regenerates every play itself (the list on
+                // screen is capped), so no count is known up front.
                 self.mcts_progress = Some(MctsProgress {
-                    total_candidates: total_moves,
-
+                    total_candidates: 0,
                     spinner_frame: 0,
                 });
+                let caveat = if self.final_turn_known {
+                    ""
+                } else {
+                    " — assuming they emptied the bag; Ctrl+E if you did"
+                };
                 self.message = Some(format!(
-                    "Endgame solver: evaluating {} moves against {} opponent tiles...",
-                    total_moves, unseen
+                    "Endgame: searching the opponent's replies ({} tiles){}...",
+                    unseen, caveat
                 ));
 
                 let (tx, rx) = mpsc::channel();
@@ -1441,7 +1469,7 @@ impl App {
                     bag
                 ));
                 let state = self.state.clone();
-                let candidates = self.suggestions.clone();
+                let candidates = self.candidates_by_static_equity();
                 let (tx, rx) = mpsc::channel();
                 self.mcts_receiver = Some(rx);
                 thread::spawn(move || {
@@ -1510,7 +1538,7 @@ impl App {
         let config =
             MctsConfig::default().with_score_diff(self.our_score as i32 - self.opp_score as i32);
         let state = self.state.clone();
-        let candidates = self.suggestions.clone();
+        let candidates = self.candidates_by_static_equity();
 
         let (tx, rx) = mpsc::channel();
         self.mcts_receiver = Some(rx);
@@ -1545,6 +1573,7 @@ impl App {
             opp_score: self.opp_score,
             last_applied_board: self.last_applied_board.clone(),
             final_turn: self.final_turn,
+            final_turn_known: self.final_turn_known,
             message: format!(
                 "Before: {}",
                 self.suggestions[self.selected_suggestion].word
@@ -1568,6 +1597,7 @@ impl App {
             } else {
                 FinalTurn::Opponent
             };
+            self.final_turn_known = true;
         }
 
         self.state.apply_move(&mv);
@@ -1595,6 +1625,7 @@ impl App {
             self.opp_score = undo_state.opp_score;
             self.last_applied_board = undo_state.last_applied_board;
             self.final_turn = undo_state.final_turn;
+            self.final_turn_known = undo_state.final_turn_known;
             self.clear_suggestions();
             self.message = Some(format!("Undone: {}", undo_state.message));
         } else {
@@ -1631,6 +1662,7 @@ impl App {
         self.our_score = 0;
         self.opp_score = 0;
         self.final_turn = FinalTurn::default();
+        self.final_turn_known = false;
         self.message = Some("Reset complete".to_string());
     }
 

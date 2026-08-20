@@ -172,7 +172,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             app.focus == Focus::Rack,
             app.inferred_opponent_rack.as_ref(),
             (app.our_score, app.opp_score),
-            app.final_turn,
+            (app.final_turn, app.final_turn_known),
         );
     }
 

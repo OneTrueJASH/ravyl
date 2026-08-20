@@ -28,10 +28,14 @@ pub fn render_message(
 ) {
     if let Some(progress) = mcts_progress {
         let spinner = progress.spinner_char();
-        let text = format!(
-            "{} Analyzing {} moves...",
-            spinner, progress.total_candidates
-        );
+        let text = if progress.total_candidates > 0 {
+            format!(
+                "{} Analyzing {} moves...",
+                spinner, progress.total_candidates
+            )
+        } else {
+            format!("{} Analyzing...", spinner)
+        };
         let paragraph = Paragraph::new(text)
             .style(Style::new().fg(theme::MSG_PROGRESS))
             .centered();
