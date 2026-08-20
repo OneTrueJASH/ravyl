@@ -34,7 +34,23 @@ use ui::events::AppAction;
 use ui::hit::clear_hits;
 use ui::layout::AppLayout;
 
+/// Put the terminal back the way we found it. Safe to call more than once.
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+}
+
 fn main() -> Result<()> {
+    // A panic anywhere on the main thread would otherwise leave the user's
+    // terminal in raw mode on the alternate screen with mouse capture on,
+    // and the panic message would be unreadable. Restore first, then let
+    // the default hook print.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default_hook(info);
+    }));
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -52,12 +68,7 @@ fn main() -> Result<()> {
 
     let res = run_app(&mut terminal, &mut app);
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    restore_terminal();
     terminal.show_cursor()?;
 
     if let Err(err) = res {
