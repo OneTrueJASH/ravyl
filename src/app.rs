@@ -809,7 +809,10 @@ impl App {
                     self.mcts_progress = None;
 
                     let count = self.mcts_results.as_ref().map(|r| r.len()).unwrap_or(0);
-                    self.message = Some(format!("RefEngine: evaluated {} moves", count));
+                    self.message = Some(format!(
+                        "Playout: {} moves ranked by expected final spread",
+                        count
+                    ));
                     return true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -820,7 +823,7 @@ impl App {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.mcts_receiver = None;
                     self.mcts_progress = None;
-                    self.message = Some("RefEngine evaluation failed".to_string());
+                    self.message = Some("Playout evaluation failed".to_string());
                     return true;
                 }
             }
@@ -1413,6 +1416,37 @@ impl App {
             }
         }
 
+        // Pre-endgame (1-7 tiles in the bag): the game ends within a few
+        // plies and the equal-turn rule decides who gets the last word.
+        // RefEngine would play this out under Scrabble's go-out rules, so use
+        // the native Crossplay playout instead.
+        let bag = unseen.saturating_sub(crate::tile::RACK_SIZE);
+        if bag <= crate::tile::RACK_SIZE {
+            if let Some(dict) = self.dictionary.clone() {
+                let config = MctsConfig::pre_endgame()
+                    .with_score_diff(self.our_score as i32 - self.opp_score as i32);
+                self.mcts_progress = Some(MctsProgress {
+                    total_candidates: self.suggestions.len().min(config.num_candidates),
+                    spinner_frame: 0,
+                });
+                self.message = Some(format!(
+                    "Pre-endgame: playing out {} candidates ({} in bag)...",
+                    self.suggestions.len().min(config.num_candidates),
+                    bag
+                ));
+                let state = self.state.clone();
+                let candidates = self.suggestions.clone();
+                let (tx, rx) = mpsc::channel();
+                self.mcts_receiver = Some(rx);
+                thread::spawn(move || {
+                    let evaluator = MctsEvaluator::new(config);
+                    let results = evaluator.evaluate(&state, &candidates, &dict);
+                    let _ = tx.send(results);
+                });
+                return;
+            }
+        }
+
         self.mcts_progress = Some(MctsProgress {
             total_candidates: self.suggestions.len().min(15),
 
@@ -1467,7 +1501,8 @@ impl App {
             return;
         };
 
-        let config = MctsConfig::default();
+        let config =
+            MctsConfig::default().with_score_diff(self.our_score as i32 - self.opp_score as i32);
         let state = self.state.clone();
         let candidates = self.suggestions.clone();
 
@@ -1715,8 +1750,30 @@ impl App {
                                 .unwrap_or(std::cmp::Ordering::Equal),
                         }
                     });
+                } else if let Some(ref results) = self.mcts_results {
+                    let win_map: std::collections::HashMap<_, _> = results
+                        .iter()
+                        .map(|r| ((&r.mv.word, r.mv.row, r.mv.col, r.mv.direction), r.win_rate))
+                        .collect();
+
+                    self.suggestions.sort_by(|a, b| {
+                        let a_win = win_map.get(&(&a.word, a.row, a.col, a.direction));
+                        let b_win = win_map.get(&(&b.word, b.row, b.col, b.direction));
+
+                        match (a_win, b_win) {
+                            (Some(a_w), Some(b_w)) => {
+                                b_w.partial_cmp(a_w).unwrap_or(std::cmp::Ordering::Equal)
+                            }
+                            (Some(_), None) => std::cmp::Ordering::Less,
+                            (None, Some(_)) => std::cmp::Ordering::Greater,
+                            (None, None) => b
+                                .equity
+                                .partial_cmp(&a.equity)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        }
+                    });
                 } else {
-                    // No RefEngine results — fall back to equity sort
+                    // No simulation results — fall back to equity sort
                     self.suggestions.sort_by(|a, b| {
                         b.equity
                             .partial_cmp(&a.equity)

@@ -49,7 +49,8 @@ pub struct SimData {
 
 /// Maps moves to their simulation equity, combining MCTS and RefEngine results.
 pub struct SimEquityLookup {
-    mcts_map: HashMap<(String, usize, usize, Direction), f32>,
+    /// Native playout results: (expected spread, win rate 0–1)
+    mcts_map: HashMap<(String, usize, usize, Direction), (f32, f32)>,
     refengine_map: HashMap<(String, usize, usize, Direction), SimData>,
 }
 
@@ -65,7 +66,7 @@ impl SimEquityLookup {
                     .map(|r| {
                         (
                             (r.mv.word.clone(), r.mv.row, r.mv.col, r.mv.direction),
-                            r.mcts_equity,
+                            (r.mcts_equity, r.win_rate),
                         )
                     })
                     .collect()
@@ -110,7 +111,19 @@ impl SimEquityLookup {
         self.refengine_map
             .get(&key)
             .map(|d| d.sim_equity)
-            .or_else(|| self.mcts_map.get(&key).copied())
+            .or_else(|| self.mcts_map.get(&key).map(|(eq, _)| *eq))
+    }
+
+    /// Native playout result for a move: (expected spread, win rate 0–1).
+    pub fn get_playout(
+        &self,
+        word: &str,
+        row: usize,
+        col: usize,
+        direction: Direction,
+    ) -> Option<(f32, f32)> {
+        let key = (word.to_string(), row, col, direction);
+        self.mcts_map.get(&key).copied()
     }
 
     pub fn get_full(
@@ -203,6 +216,7 @@ pub fn render_suggestions(
             right("Score", hdr_style),
             right("Equity", hdr_style),
             right("Sim", hdr_style),
+            right("Win%", hdr_style),
             Cell::from("Leave").style(hdr_style),
         ])
     } else {
@@ -300,17 +314,34 @@ pub fn render_suggestions(
                     ])
                 }
             } else if has_sim {
-                let sim_cell = if let Some(equity) =
-                    sim_lookup.get_equity(&mv.word, mv.row, mv.col, mv.direction)
+                let (sim_cell, win_cell) = if let Some((equity, win_rate)) =
+                    sim_lookup.get_playout(&mv.word, mv.row, mv.col, mv.direction)
                 {
-                    right(
-                        &format!("{:.0}", equity),
-                        Style::new().fg(theme::SIM_EQUITY_FG),
+                    let win_pct = win_rate * 100.0;
+                    (
+                        right(
+                            &format!("{:+.0}", equity),
+                            Style::new().fg(theme::SIM_EQUITY_FG),
+                        ),
+                        right(
+                            &format!("{:.0}%", win_pct),
+                            Style::new().fg(theme::win_color(win_pct)),
+                        ),
                     )
                 } else {
-                    right("-", Style::new().fg(theme::TEXT_DIM))
+                    (
+                        right("-", Style::new().fg(theme::TEXT_DIM)),
+                        right("-", Style::new().fg(theme::TEXT_DIM)),
+                    )
                 };
-                Row::new(vec![word_cell, pts_cell, equity_cell, sim_cell, tiles_cell])
+                Row::new(vec![
+                    word_cell,
+                    pts_cell,
+                    equity_cell,
+                    sim_cell,
+                    win_cell,
+                    tiles_cell,
+                ])
             } else {
                 Row::new(vec![word_cell, pts_cell, equity_cell, tiles_cell])
             }
@@ -332,6 +363,7 @@ pub fn render_suggestions(
             Constraint::Length(5),
             Constraint::Length(6),
             Constraint::Length(5),
+            Constraint::Length(4),
             Constraint::Fill(1),
         ]
     } else {
