@@ -9,9 +9,9 @@ Complete TUI redesign of `crossplay-solver`.
 | `tile` | `Tile` struct, `Rack` (7-slot), `letter_value()` with Crossplay scoring; constants: `RACK_SIZE` |
 | `board` | 15x15 `Board`, `Cell`, `Premium` enum, `Direction` enum, Crossplay premium layout; constants: `BOARD_SIZE` |
 | `dictionary` | FST-backed `Dictionary`: node-level walking (`root()`, `child()`) for the move generator, `leave_value()` (fitted table or heuristic, phase-scaled), `load_default_dictionary()` which also attaches the leave table when `external/refengine/data/lexica/NWL23.klv2` is present |
-| `leaves` | `LeaveValues` — parser and lookup for RefEngine `.klv2` leave tables (DAWG + one value per 1–6 tile leave) |
-| `game` | `SolverState` (Board + Rack), tile distribution (100 tiles), `unseen_tiles()`, endgame detection, `from_cgp()`; constants: `TOTAL_TILES`, `BLANK_COUNT` |
-| `solver` | `Move` (with `coords()` → `8D`/`D8`), `ExternalMoveData`, anchor-based move generation over FST nodes with bitmask cross-checks and incremental scoring, `leave_value_with_phase()` (per-letter fallback), `SolverConfig`, `Solver`; constants: `BINGO_BONUS` (40). Verified play-for-play against RefEngine in `test_movegen_matches_refengine` |
+| `leaves` | `LeaveValues` — parser and lookup for RefEngine `.klv2` leave tables (DAWG + one value per 1–6 tile leave); `bingo_probability()` / `bingo_bonus_correction()` — self-play-fitted logistic model that converts the table's 50-point-bingo values to Crossplay's 40 |
+| `game` | `SolverState` (Board + Rack), tile distribution (100 tiles), `unseen_tiles()`, `bag_size()`, endgame detection, `from_cgp()`, `get_suggestions()` (plays plus exchanges when the bag allows), `exchange_moves()`, `full_tile_set()`; constants: `TOTAL_TILES`, `BLANK_COUNT` |
+| `solver` | `Move` with `MoveKind` (`Play` / `Exchange` / `Pass`), `coords()` (`8D`/`D8`, `-` for non-plays), anchor-based move generation over FST nodes with bitmask cross-checks and incremental scoring, `leave_value_with_phase()` (per-letter fallback), `SolverConfig`, `Solver`; constants: `BINGO_BONUS` (40), `EXCHANGE_MIN_BAG` (7), `PASS_WORD`. Verified play-for-play against RefEngine in `test_movegen_matches_refengine` |
 | `stats` | `GameStats`, `GamePhase`, `TileLocation`, power tile tracking, rack analysis |
 | `settings` | `Settings` with `DisplaySettings` (`default_sort`, `sidebar_visible`), TOML persistence at `~/.config/cpsolver2/settings.toml`; constant: `LEXICON = "NWL23"` |
 | `logging` | Instance-specific logging to `/tmp/crossplay-<pid>.log` |
