@@ -416,3 +416,31 @@ mod ui_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod render_bench {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    /// Frame time for a full render at a large terminal size. Run with
+    /// `cargo test --release bench_render -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_render() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let mut app = App::with_settings(settings::Settings::default());
+        app.set_dictionary(dictionary::load_default_dictionary().unwrap());
+        app.state = game::SolverState::from_cgp(
+            "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6 AEST",
+        )
+        .unwrap();
+        app.find_moves();
+        let backend = TestBackend::new(220, 60);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let t = std::time::Instant::now();
+        for _ in 0..200 {
+            terminal.draw(|f| draw_ui(f, &app)).unwrap();
+        }
+        println!("render: {:?}/frame", t.elapsed() / 200);
+    }
+}
