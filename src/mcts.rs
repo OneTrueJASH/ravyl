@@ -24,6 +24,8 @@
 //! already empty: who owns the final turn is then outside its knowledge,
 //! and [`crate::endgame::EndgameSolver`] handles those exactly.
 
+use std::time::{Duration, Instant};
+
 use fastrand::Rng;
 use rayon::prelude::*;
 
@@ -49,6 +51,10 @@ pub struct MctsConfig {
     /// Current score difference (ours minus the opponent's) before the
     /// candidate move; playout win rates are measured against it.
     pub score_diff: i32,
+    /// Wall-clock budget for the whole evaluation. Playouts stop when it
+    /// runs out and every candidate reports the estimate it has; move
+    /// generation with several unseen blanks can make playouts slow.
+    pub time_budget: Option<Duration>,
 }
 
 impl Default for MctsConfig {
@@ -59,6 +65,7 @@ impl Default for MctsConfig {
             max_plies: 2,
             parallel: true,
             score_diff: 0,
+            time_budget: Some(Duration::from_secs(8)),
         }
     }
 }
@@ -73,6 +80,7 @@ impl MctsConfig {
             max_plies: 10,
             parallel: true,
             score_diff: 0,
+            time_budget: Some(Duration::from_secs(8)),
         }
     }
 
@@ -393,7 +401,13 @@ impl<'a> CandidateSim<'a> {
         self.iterations += 1;
     }
 
-    fn run(&mut self, dict: &Dictionary, playouts: usize, max_plies: usize) {
+    fn run(
+        &mut self,
+        dict: &Dictionary,
+        playouts: usize,
+        max_plies: usize,
+        deadline: Option<Instant>,
+    ) {
         if self.pool.is_empty() {
             // Opponent has nothing: our move ends the game.
             for _ in 0..playouts {
@@ -403,6 +417,9 @@ impl<'a> CandidateSim<'a> {
         }
 
         for _ in 0..playouts {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                return;
+            }
             let shuffled = self.pool.shuffled(&mut self.rng);
             let (drawn, rest) = shuffled.split_at(self.draw_count);
             let (opp_rack, bag) = rest.split_at(rest.len().min(RACK_SIZE));
@@ -503,6 +520,7 @@ impl MctsEvaluator {
         let rounds = [total / 4, total / 4, total - 2 * (total / 4)];
         let mut active: Vec<usize> = (0..sims.len()).collect();
         let max_plies = self.config.max_plies;
+        let deadline = self.config.time_budget.map(|b| Instant::now() + b);
 
         for (round, &playouts) in rounds.iter().enumerate() {
             if playouts == 0 {
@@ -513,11 +531,14 @@ impl MctsEvaluator {
                 sims.par_iter_mut()
                     .enumerate()
                     .filter(|(i, _)| active_set.contains(i))
-                    .for_each(|(_, sim)| sim.run(dictionary, playouts, max_plies));
+                    .for_each(|(_, sim)| sim.run(dictionary, playouts, max_plies, deadline));
             } else {
                 for &i in &active {
-                    sims[i].run(dictionary, playouts, max_plies);
+                    sims[i].run(dictionary, playouts, max_plies, deadline);
                 }
+            }
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                break;
             }
 
             if round + 1 < rounds.len() {
@@ -598,6 +619,7 @@ mod tests {
             max_plies: 2,
             parallel: false,
             score_diff: 0,
+            time_budget: None,
         };
 
         let evaluator = MctsEvaluator::new(config);
@@ -690,6 +712,7 @@ mod tests {
             max_plies: 10,
             parallel: false,
             score_diff: 0,
+            time_budget: None,
         });
         let results = evaluator.evaluate(&state, &suggestions, &dict);
         assert_eq!(results.len(), 4.min(suggestions.len()));
@@ -732,6 +755,7 @@ mod tests {
             max_plies: 10,
             parallel: true,
             score_diff: 0,
+            time_budget: None,
         })
         .evaluate(&state, &suggestions, &dict);
         let full = results.iter().map(|r| r.iterations).max().unwrap();
@@ -748,6 +772,31 @@ mod tests {
         }
     }
 
+    /// A tiny time budget stops playouts early and still returns a result
+    /// for every candidate.
+    #[test]
+    fn time_budget_is_honoured() {
+        let dict = load_default_dictionary().unwrap();
+        const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
+        let state = SolverState::from_cgp(&format!("{} AEST", MID)).unwrap();
+        let suggestions = state.get_suggestions(&dict);
+        let started = Instant::now();
+        let results = MctsEvaluator::new(MctsConfig {
+            num_candidates: 25,
+            iterations_per_candidate: 400,
+            max_plies: 10,
+            parallel: true,
+            score_diff: 0,
+            time_budget: Some(Duration::from_millis(150)),
+        })
+        .evaluate(&state, &suggestions, &dict);
+        // One playout may overrun the deadline per thread; allow slack.
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert_eq!(results.len(), 25.min(suggestions.len()));
+        assert!(results.iter().all(|r| r.mcts_equity.is_finite()));
+        assert!(results.iter().any(|r| r.iterations < 400));
+    }
+
     /// Timing harness for the pre-endgame playout. Run with
     /// `cargo test --release bench_pre_endgame -- --ignored --nocapture`.
     #[test]
@@ -756,8 +805,18 @@ mod tests {
         use std::time::Instant;
         let dict = load_default_dictionary().unwrap();
         const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
-        for rack in ["AEIST", "AEST", "ES", "E"] {
-            let state = SolverState::from_cgp(&format!("{} {}", MID, rack)).unwrap();
+        // Same dense board with the three board blanks turned into real
+        // tiles, so the three blanks are unseen and land in the opponent's
+        // rack: the slowest realistic case for the 2-ply replies.
+        const END_BLANKS_UNSEEN: &str = "3N3Q3M3/3OP2UNTEACH1/3BE2O3N3/3LA2T2MYOPE/2FER2H1LO4/2O6AB4/2R1F4U3DE/2TRIVET1D3AY/4LA1A1IODIZE/4KI1JINX2ES/5R1E1G4O/OUTIES1S3G2R/11L2E/8WAHINES/2EGALITE2A3";
+        for (board, rack) in [
+            (MID, "AEIST"),
+            (MID, "AEST"),
+            (MID, "ES"),
+            (MID, "E"),
+            (END_BLANKS_UNSEEN, "R"),
+        ] {
+            let state = SolverState::from_cgp(&format!("{} {}", board, rack)).unwrap();
             let bag = state.unseen_tile_count() - RACK_SIZE;
             let suggestions = state.get_suggestions(&dict);
             let config = MctsConfig::pre_endgame();
