@@ -14,7 +14,7 @@ use crate::dictionary::Dictionary;
 use crate::endgame::{EndgameMove, EndgameSolver};
 use crate::game::SolverState;
 use crate::logging::log;
-use crate::refengine_mcts::{InferenceResult, RefSimResult, RefSimulator, SimulationOutput};
+use crate::refengine_mcts::{InferenceResult, RefSimulator};
 use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult};
 use crate::settings::{self, Settings};
 use crate::solver::{Move, Solver};
@@ -28,6 +28,25 @@ use crate::ui::menu_popup::EscapeMenuOption;
 pub enum ScoreTarget {
     Player,
     Opponent,
+}
+
+/// Evaluation result for one suggestion, as the suggestions table shows it.
+#[derive(Debug, Clone)]
+pub struct SimResult {
+    pub word: String,
+    pub row: usize,
+    pub col: usize,
+    pub direction: Direction,
+    /// Win probability estimate in percent (exact 0/50/100 for endgame lines)
+    pub win_pct: f32,
+    /// Expected final spread change (playouts) or exact 2-ply value (endgame)
+    pub sim_equity: f32,
+    /// Percent of playouts in which the opponent's reply was a bingo
+    pub ply1_bingo_pct: f32,
+    /// Percent of playouts in which our follow-up was a bingo
+    pub ply2_bingo_pct: f32,
+    /// From the endgame solver (exact) rather than playouts
+    pub is_endgame: bool,
 }
 
 /// Who plays the very last move of the game.
@@ -198,10 +217,10 @@ pub struct App {
     pub sort_mode: SortMode,
     pub message: Option<String>,
     undo_stack: Vec<UndoState>,
-    pub mcts_results: Option<Vec<MctsResult>>,
-    pub refengine_results: Option<Vec<RefSimResult>>,
-    mcts_receiver: Option<Receiver<Vec<MctsResult>>>,
-    refengine_receiver: Option<Receiver<Result<SimulationOutput, String>>>,
+    /// Evaluation results for the current suggestions (playouts or endgame).
+    pub sim_results: Option<Vec<SimResult>>,
+    playout_receiver: Option<Receiver<Vec<MctsResult>>>,
+    inference_receiver: Option<Receiver<Option<InferenceResult>>>,
     endgame_receiver: Option<Receiver<Vec<EndgameMove>>>,
     pub mcts_progress: Option<MctsProgress>,
     refengine_simulator: Option<Arc<RefSimulator>>,
@@ -258,10 +277,9 @@ impl App {
             sort_mode,
             message: Some("Loading dictionary...".to_string()),
             undo_stack: Vec::new(),
-            mcts_results: None,
-            refengine_results: None,
-            mcts_receiver: None,
-            refengine_receiver: None,
+            sim_results: None,
+            playout_receiver: None,
+            inference_receiver: None,
             endgame_receiver: None,
             mcts_progress: None,
             refengine_simulator,
@@ -601,52 +619,72 @@ impl App {
 
     // ── Business logic ──────────────────────────────────────────────
 
-    /// Returns true if any background simulation is in progress.
+    /// Returns true if any background evaluation is in progress.
     pub fn is_mcts_running(&self) -> bool {
-        self.mcts_receiver.is_some()
-            || self.refengine_receiver.is_some()
-            || self.endgame_receiver.is_some()
+        self.playout_receiver.is_some() || self.endgame_receiver.is_some()
     }
 
-    /// Poll background simulation channels and incorporate results. Returns true if new results arrived.
+    /// Convert a playout result into the display record the suggestions
+    /// table reads (bingo rates as percentages, win rate as a percentage).
+    fn sim_result_from_playout(r: &MctsResult) -> SimResult {
+        SimResult {
+            word: r.mv.word.clone(),
+            row: r.mv.row,
+            col: r.mv.col,
+            direction: r.mv.direction,
+            win_pct: r.win_rate * 100.0,
+            sim_equity: r.mcts_equity,
+            ply1_bingo_pct: r.opp_bingo_rate * 100.0,
+            ply2_bingo_pct: r.our_bingo_rate * 100.0,
+            is_endgame: false,
+        }
+    }
+
+    /// Poll background channels and incorporate results. Returns true if new results arrived.
     pub fn poll_mcts(&mut self) -> bool {
-        // Check Crossplay endgame solver results first.
+        // Opponent-rack inference (RefEngine) finishes independently of ranking.
+        if let Some(ref receiver) = self.inference_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    if result.is_some() {
+                        self.inferred_opponent_rack = result;
+                    }
+                    self.inference_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.inference_receiver = None;
+                }
+            }
+        }
+
+        // Crossplay endgame solver results.
         if let Some(ref receiver) = self.endgame_receiver {
             match receiver.try_recv() {
                 Ok(endgame_results) => {
                     let count = endgame_results.len();
 
-                    // Convert EndgameMove results to RefSimResult for display
-                    // compatibility. The game ends after these two plies, so
-                    // the final margin is known exactly: win% is 100/50/0.
+                    // Convert EndgameMove results into display records. The
+                    // game ends after these two plies, so the final margin is
+                    // known exactly: win% is 100/50/0.
                     let score_diff = self.our_score as i32 - self.opp_score as i32;
-                    let sim_results: Vec<RefSimResult> = endgame_results
+                    let sim_results: Vec<SimResult> = endgame_results
                         .iter()
                         .map(|eg| {
                             let val = eg.endgame_value as f32;
                             let final_margin = score_diff + eg.endgame_value;
-                            RefSimResult {
+                            SimResult {
                                 word: eg.mv.word.clone(),
                                 row: eg.mv.row,
                                 col: eg.mv.col,
                                 direction: eg.mv.direction,
-                                score: eg.mv.score,
-                                leave: eg
-                                    .mv
-                                    .leave
-                                    .iter()
-                                    .map(|t| if t.is_blank { '?' } else { t.letter })
-                                    .collect(),
                                 win_pct: match final_margin.cmp(&0) {
                                     std::cmp::Ordering::Greater => 100.0,
                                     std::cmp::Ordering::Less => 0.0,
                                     std::cmp::Ordering::Equal => 50.0,
                                 },
                                 sim_equity: val,
-                                iterations: 0,
-                                ply1_score: 0.0,
                                 ply1_bingo_pct: 0.0,
-                                ply2_score: 0.0,
                                 ply2_bingo_pct: 0.0,
                                 is_endgame: true,
                             }
@@ -663,11 +701,7 @@ impl App {
                     }
                     self.suggestions = new_suggestions;
 
-                    self.refengine_results = Some(sim_results);
-                    self.mcts_results = None;
-                    // Don't clear inferred_opponent_rack here — the endgame
-                    // solver doesn't produce inference, so preserve any existing
-                    // inference from a prior RefEngine run.
+                    self.sim_results = Some(sim_results);
                     self.last_applied_board = Some(self.state.board.clone());
                     self.sort_mode = SortMode::MctsEquity;
                     self.apply_sort();
@@ -705,94 +739,8 @@ impl App {
             }
         }
 
-        // Check RefEngine results (for non-endgame simulation).
-        if let Some(ref receiver) = self.refengine_receiver {
-            match receiver.try_recv() {
-                Ok(Ok(output)) => {
-                    let results = output.sim_results;
-                    self.inferred_opponent_rack = output.inference;
-
-                    let mut added_count = 0;
-                    for result in &results {
-                        let exists = self.suggestions.iter().any(|s| {
-                            s.word.eq_ignore_ascii_case(&result.word)
-                                && s.row == result.row
-                                && s.col == result.col
-                                && s.direction == result.direction
-                        });
-
-                        if !exists {
-                            let data = crate::solver::ExternalMoveData {
-                                word: &result.word,
-                                row: result.row,
-                                col: result.col,
-                                direction: result.direction,
-                                score: result.score,
-                                equity: result.sim_equity,
-                            };
-                            match Move::from_external(&data, &self.state.board, &self.state.rack) {
-                                Some(mv) => {
-                                    self.suggestions.push(mv);
-                                    added_count += 1;
-                                }
-                                None => {
-                                    log(&format!(
-                                        "Warning: could not reconstruct RefEngine move '{}' at ({},{}) {:?} from current rack",
-                                        result.word, result.row, result.col, result.direction
-                                    ));
-                                }
-                            }
-                        }
-                    }
-
-                    self.refengine_results = Some(results);
-                    self.mcts_results = None;
-                    self.last_applied_board = Some(self.state.board.clone());
-                    self.sort_mode = SortMode::MctsEquity;
-                    self.apply_sort();
-                    self.selected_suggestion = 0;
-                    self.refengine_receiver = None;
-                    self.mcts_progress = None;
-
-                    let count = self.refengine_results.as_ref().map(|r| r.len()).unwrap_or(0);
-                    let infer_note = if self.inferred_opponent_rack.is_some() {
-                        " + opp rack"
-                    } else {
-                        ""
-                    };
-                    let msg = if added_count > 0 {
-                        format!(
-                            "RefEngine: {} moves (+{} new){}",
-                            count, added_count, infer_note
-                        )
-                    } else {
-                        format!("RefEngine: simulated {} moves{}", count, infer_note)
-                    };
-                    self.message = Some(msg);
-                    return true;
-                }
-                Ok(Err(e)) => {
-                    self.refengine_receiver = None;
-                    self.mcts_progress = None;
-                    self.message = Some(format!("RefEngine error: {}", e));
-                    return true;
-                }
-                Err(mpsc::TryRecvError::Empty) => {
-                    if let Some(ref mut progress) = self.mcts_progress {
-                        progress.spinner_frame += 1;
-                    }
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.refengine_receiver = None;
-                    self.mcts_progress = None;
-                    self.message = Some("RefEngine evaluation failed".to_string());
-                    return true;
-                }
-            }
-        }
-
-        // Then check MCTS results (fallback).
-        if let Some(ref receiver) = self.mcts_receiver {
+        // Playout results.
+        if let Some(ref receiver) = self.playout_receiver {
             match receiver.try_recv() {
                 Ok(results) => {
                     let mut new_suggestions = Vec::with_capacity(results.len());
@@ -809,24 +757,41 @@ impl App {
                         new_suggestions.push(result.mv.clone());
                     }
 
-                    let evaluated_count = results.len();
-                    if evaluated_count < self.suggestions.len() {
-                        new_suggestions.extend(self.suggestions[evaluated_count..].iter().cloned());
-                    }
+                    // Evaluated moves first, then the rest of the list.
+                    let evaluated: std::collections::HashSet<(String, usize, usize, Direction)> =
+                        results
+                            .iter()
+                            .map(|r| (r.mv.word.clone(), r.mv.row, r.mv.col, r.mv.direction))
+                            .collect();
+                    new_suggestions.extend(
+                        self.suggestions
+                            .iter()
+                            .filter(|m| {
+                                !evaluated.contains(&(m.word.clone(), m.row, m.col, m.direction))
+                            })
+                            .cloned(),
+                    );
 
                     self.suggestions = new_suggestions;
-                    self.mcts_results = Some(results);
-                    self.refengine_results = None;
+                    self.sim_results =
+                        Some(results.iter().map(Self::sim_result_from_playout).collect());
+                    self.last_applied_board = Some(self.state.board.clone());
                     self.selected_suggestion = 0;
                     self.sort_mode = SortMode::MctsEquity;
-                    self.mcts_receiver = None;
+                    self.apply_sort();
+                    self.playout_receiver = None;
                     self.mcts_progress = None;
 
-                    let count = self.mcts_results.as_ref().map(|r| r.len()).unwrap_or(0);
-                    self.message = Some(format!(
-                        "Playout: {} moves ranked by expected final spread",
-                        count
-                    ));
+                    let shortened = results.iter().any(|r| r.iterations < results[0].iterations);
+                    let count = results.len();
+                    self.message = Some(if shortened {
+                        format!(
+                            "Playout: {} moves ranked by expected final spread (some cut short)",
+                            count
+                        )
+                    } else {
+                        format!("Playout: {} moves ranked by expected final spread", count)
+                    });
                     return true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -835,7 +800,7 @@ impl App {
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.mcts_receiver = None;
+                    self.playout_receiver = None;
                     self.mcts_progress = None;
                     self.message = Some("Playout evaluation failed".to_string());
                     return true;
@@ -1093,8 +1058,7 @@ impl App {
 
     fn clear_suggestions(&mut self) {
         self.suggestions.clear();
-        self.mcts_results = None;
-        self.refengine_results = None;
+        self.sim_results = None;
         // Intentionally preserve inferred_opponent_rack: inference results
         // are expensive to compute and should persist until replaced by new
         // inference from the next RefEngine simulation.
@@ -1192,8 +1156,7 @@ impl App {
 
             self.suggestions = all_suggestions;
             self.selected_suggestion = 0;
-            self.mcts_results = None;
-            self.refengine_results = None;
+            self.sim_results = None;
 
             if self.suggestions.is_empty() {
                 self.message = Some("No valid moves found".to_string());
@@ -1373,18 +1336,27 @@ impl App {
         Some((word, score))
     }
 
-    /// Launch RefEngine simulation (or endgame solver) on a background thread.
+    /// Launch the evaluation for the current position on a background
+    /// thread. Every phase is judged under Crossplay rules by the native
+    /// engines; RefEngine only infers the opponent's likely rack.
     pub fn run_mcts_evaluation(&mut self) {
         if self.is_mcts_running() {
             return;
         }
+        // One log per evaluation keeps the log viewer readable.
+        crate::logging::clear_log();
 
         if self.suggestions.is_empty() {
             self.message = Some("Generate suggestions first (Ctrl+S)".to_string());
             return;
         }
 
-        let unseen = RefSimulator::unseen_count(&self.state);
+        let Some(dict) = self.dictionary.clone() else {
+            self.message = Some("Dictionary not loaded".to_string());
+            return;
+        };
+
+        let unseen = self.state.unseen_tile_count();
         if self.our_move_ends_game() {
             // Nothing follows our play: either the opponent has no tiles, or
             // we emptied the bag and they have already taken their last turn.
@@ -1400,156 +1372,124 @@ impl App {
         }
 
         // Bag empty, opponent still holds tiles and gets the final move:
-        // exact 2-ply search with the Crossplay-native solver (our score
-        // minus the opponent's best reply; no leftover-tile penalties).
+        // exact 2-ply search (our score minus the opponent's best reply,
+        // passing included; no leftover-tile penalties).
         if self.state.is_endgame() {
-            if let Some(dict) = self.dictionary.clone() {
-                let state = self.state.clone();
-
-                // The solver regenerates every play itself (the list on
-                // screen is capped), so no count is known up front.
-                self.mcts_progress = Some(MctsProgress {
-                    total_candidates: 0,
-                    spinner_frame: 0,
-                });
-                let caveat = if self.final_turn_known {
-                    ""
-                } else {
-                    " — assuming they emptied the bag; Ctrl+E if you did"
-                };
-                self.message = Some(format!(
-                    "Endgame: searching the opponent's replies ({} tiles){}...",
-                    unseen, caveat
-                ));
-
-                let (tx, rx) = mpsc::channel();
-                self.endgame_receiver = Some(rx);
-
-                thread::spawn(move || {
-                    let solver = EndgameSolver::new(&dict);
-
-                    // Build opponent rack from unseen tiles
-                    let unseen_tiles = state.unseen_tiles();
-                    let mut opp_rack = Vec::new();
-                    for (letter, count) in &unseen_tiles {
-                        for _ in 0..*count {
-                            if *letter == '?' {
-                                opp_rack.push(crate::tile::Tile::blank(' '));
-                            } else {
-                                opp_rack.push(crate::tile::Tile::new(*letter));
-                            }
-                        }
-                    }
-
-                    let our_rack: Vec<_> = state.rack.tiles();
-                    let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
-                    let _ = tx.send(results);
-                });
-
-                return;
-            }
-        }
-
-        // Pre-endgame (1-7 tiles in the bag): the game ends within a few
-        // plies and the equal-turn rule decides who gets the last word.
-        // RefEngine would play this out under Scrabble's go-out rules, so use
-        // the native Crossplay playout instead.
-        let bag = unseen.saturating_sub(crate::tile::RACK_SIZE);
-        if bag <= crate::tile::RACK_SIZE {
-            if let Some(dict) = self.dictionary.clone() {
-                let config = MctsConfig::pre_endgame()
-                    .with_score_diff(self.our_score as i32 - self.opp_score as i32);
-                self.mcts_progress = Some(MctsProgress {
-                    total_candidates: self.suggestions.len().min(config.num_candidates),
-                    spinner_frame: 0,
-                });
-                self.message = Some(format!(
-                    "Pre-endgame: playing out {} candidates ({} in bag)...",
-                    self.suggestions.len().min(config.num_candidates),
-                    bag
-                ));
-                let state = self.state.clone();
-                let candidates = self.candidates_by_static_equity();
-                let (tx, rx) = mpsc::channel();
-                self.mcts_receiver = Some(rx);
-                thread::spawn(move || {
-                    let evaluator = MctsEvaluator::new(config);
-                    let results = evaluator.evaluate(&state, &candidates, &dict);
-                    let _ = tx.send(results);
-                });
-                return;
-            }
-        }
-
-        self.mcts_progress = Some(MctsProgress {
-            total_candidates: self.suggestions.len().min(15),
-
-            spinner_frame: 0,
-        });
-
-        if let Some(ref refengine) = self.refengine_simulator {
             let state = self.state.clone();
-            let refengine = Arc::clone(refengine);
 
-            let phase = crate::refengine_mcts::RefSimConfig::phase_label(unseen);
-            self.message = Some(format!("Simulating ({})...", phase));
-
-            // Use opponent tiles saved during find_moves() (before auto-scoring
-            // updated the board snapshot). Falls back to live detection.
-            let opponent_tiles = self
-                .pending_opponent_tiles
-                .take()
-                .or_else(|| self.detect_opponent_tiles());
-            let pre_opponent_board = self
-                .pre_opponent_board
-                .take()
-                .or_else(|| self.last_applied_board.clone());
-            let scores = (self.our_score, self.opp_score);
-
-            log(&format!(
-                "run_mcts_evaluation: opponent_tiles={:?}, has_pre_board={}, scores={:?}",
-                opponent_tiles,
-                pre_opponent_board.is_some(),
-                scores
+            // The solver regenerates every play itself (the list on
+            // screen is capped), so no count is known up front.
+            self.mcts_progress = Some(MctsProgress {
+                total_candidates: 0,
+                spinner_frame: 0,
+            });
+            let caveat = if self.final_turn_known {
+                ""
+            } else {
+                " — assuming they emptied the bag; Ctrl+E if you did"
+            };
+            self.message = Some(format!(
+                "Endgame: searching the opponent's replies ({} tiles){}...",
+                unseen, caveat
             ));
 
             let (tx, rx) = mpsc::channel();
-            self.refengine_receiver = Some(rx);
+            self.endgame_receiver = Some(rx);
 
             thread::spawn(move || {
-                let result = refengine.simulate_and_infer(
-                    &state,
-                    opponent_tiles.as_deref(),
-                    pre_opponent_board.as_ref(),
-                    scores,
-                );
-                let _ = tx.send(result);
+                let solver = EndgameSolver::new(&dict);
+
+                // Build opponent rack from unseen tiles
+                let unseen_tiles = state.unseen_tiles();
+                let mut opp_rack = Vec::new();
+                for (letter, count) in &unseen_tiles {
+                    for _ in 0..*count {
+                        if *letter == '?' {
+                            opp_rack.push(crate::tile::Tile::blank(' '));
+                        } else {
+                            opp_rack.push(crate::tile::Tile::new(*letter));
+                        }
+                    }
+                }
+
+                let our_rack: Vec<_> = state.rack.tiles();
+                let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
+                let _ = tx.send(results);
             });
 
+            self.start_inference();
             return;
         }
 
-        let Some(dict) = self.dictionary.clone() else {
-            self.message = Some("Dictionary not loaded".to_string());
-            self.mcts_progress = None;
-            return;
-        };
-
+        // Bag not empty: Monte Carlo playouts under Crossplay rules. The
+        // playout depth follows the bag: with few tiles left the game ends
+        // inside the horizon and the equal-turn ending is played exactly.
+        let bag = self.state.bag_size();
         let config =
-            MctsConfig::default().with_score_diff(self.our_score as i32 - self.opp_score as i32);
-        let state = self.state.clone();
+            MctsConfig::for_bag(bag).with_score_diff(self.our_score as i32 - self.opp_score as i32);
         let candidates = self.candidates_by_static_equity();
-
+        let count = candidates.len().min(config.num_candidates);
+        self.mcts_progress = Some(MctsProgress {
+            total_candidates: count,
+            spinner_frame: 0,
+        });
+        self.message = Some(format!(
+            "{}: playing out {} candidates ({} in bag, {} plies)...",
+            crate::stats::GamePhase::from_unseen_count(unseen as u32).label(),
+            count,
+            bag,
+            config.max_plies
+        ));
+        let state = self.state.clone();
         let (tx, rx) = mpsc::channel();
-        self.mcts_receiver = Some(rx);
-
+        self.playout_receiver = Some(rx);
         thread::spawn(move || {
             let evaluator = MctsEvaluator::new(config);
             let results = evaluator.evaluate(&state, &candidates, &dict);
             let _ = tx.send(results);
         });
 
-        self.message = None;
+        self.start_inference();
+    }
+
+    /// Ask RefEngine what the opponent probably kept, if their last move was
+    /// detected on the board and the bag still has tiles. Runs in the
+    /// background; the result only updates the stats pane.
+    fn start_inference(&mut self) {
+        let Some(ref refengine) = self.refengine_simulator else {
+            return;
+        };
+        if self.inference_receiver.is_some() || self.state.is_endgame() {
+            return;
+        }
+        // Use opponent tiles saved during find_moves() (before auto-scoring
+        // updated the board snapshot). Falls back to live detection.
+        let Some(opponent_tiles) = self
+            .pending_opponent_tiles
+            .take()
+            .or_else(|| self.detect_opponent_tiles())
+        else {
+            return;
+        };
+        let pre_opponent_board = self
+            .pre_opponent_board
+            .take()
+            .or_else(|| self.last_applied_board.clone());
+        let scores = (self.our_score, self.opp_score);
+        let state = self.state.clone();
+        let refengine = Arc::clone(refengine);
+
+        let (tx, rx) = mpsc::channel();
+        self.inference_receiver = Some(rx);
+        thread::spawn(move || {
+            let result = refengine.infer_opponent_rack(
+                &state,
+                &opponent_tiles,
+                pre_opponent_board.as_ref(),
+                scores,
+            );
+            let _ = tx.send(result);
+        });
     }
 
     /// Find moves, focus the suggestions pane, and start simulation.
@@ -1609,10 +1549,22 @@ impl App {
         } else {
             format!("{}", diff)
         };
-        self.message = Some(format!(
-            "Applied: {} ({} pts) \u{2014} Score: {}-{} ({})",
-            mv.word, mv.score, self.our_score, self.opp_score, diff_str
-        ));
+        self.message = Some(match &mv.kind {
+            crate::solver::MoveKind::Play => format!(
+                "Applied: {} ({} pts) \u{2014} Score: {}-{} ({})",
+                mv.word, mv.score, self.our_score, self.opp_score, diff_str
+            ),
+            crate::solver::MoveKind::Exchange(tiles) => format!(
+                "Exchanged {} tiles \u{2014} type the new tiles into the rack",
+                tiles.len()
+            ),
+            crate::solver::MoveKind::Pass => {
+                format!(
+                    "Passed \u{2014} Score: {}-{} ({})",
+                    self.our_score, self.opp_score, diff_str
+                )
+            }
+        });
         self.clear_suggestions();
     }
 
@@ -1673,7 +1625,7 @@ impl App {
 
     /// Advance to the next sort mode, re-sort suggestions, and persist.
     pub fn cycle_sort_mode(&mut self) {
-        let has_sim = self.mcts_results.is_some() || self.refengine_results.is_some();
+        let has_sim = self.sim_results.is_some();
         self.sort_mode = self.sort_mode.next(has_sim);
         self.apply_sort();
         self.selected_suggestion = 0;
@@ -1697,110 +1649,26 @@ impl App {
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
-            SortMode::MctsEquity => {
-                if let Some(ref results) = self.refengine_results {
+            SortMode::MctsEquity | SortMode::WinPct => {
+                let by_win = self.sort_mode == SortMode::WinPct;
+                if let Some(ref results) = self.sim_results {
                     let sim_map: std::collections::HashMap<_, _> = results
                         .iter()
                         .map(|r| {
-                            let word_upper = r.word.to_uppercase();
-                            ((word_upper, r.row, r.col, r.direction), r.sim_equity)
+                            let key = (r.word.to_uppercase(), r.row, r.col, r.direction);
+                            (key, if by_win { r.win_pct } else { r.sim_equity })
                         })
                         .collect();
 
                     self.suggestions.sort_by(|a, b| {
-                        let a_word = a.word.to_uppercase();
-                        let b_word = b.word.to_uppercase();
-                        let a_sim = sim_map.get(&(a_word.clone(), a.row, a.col, a.direction));
-                        let b_sim = sim_map.get(&(b_word.clone(), b.row, b.col, b.direction));
+                        let a_sim =
+                            sim_map.get(&(a.word.to_uppercase(), a.row, a.col, a.direction));
+                        let b_sim =
+                            sim_map.get(&(b.word.to_uppercase(), b.row, b.col, b.direction));
 
                         match (a_sim, b_sim) {
-                            (Some(a_eq), Some(b_eq)) => {
-                                b_eq.partial_cmp(a_eq).unwrap_or(std::cmp::Ordering::Equal)
-                            }
-                            (Some(_), None) => std::cmp::Ordering::Less,
-                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                            (None, None) => b
-                                .equity
-                                .partial_cmp(&a.equity)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        }
-                    });
-                } else if let Some(ref results) = self.mcts_results {
-                    let mcts_map: std::collections::HashMap<_, _> = results
-                        .iter()
-                        .map(|r| {
-                            (
-                                (&r.mv.word, r.mv.row, r.mv.col, r.mv.direction),
-                                r.mcts_equity,
-                            )
-                        })
-                        .collect();
-
-                    self.suggestions.sort_by(|a, b| {
-                        let a_mcts = mcts_map.get(&(&a.word, a.row, a.col, a.direction));
-                        let b_mcts = mcts_map.get(&(&b.word, b.row, b.col, b.direction));
-
-                        match (a_mcts, b_mcts) {
-                            (Some(a_eq), Some(b_eq)) => {
-                                b_eq.partial_cmp(a_eq).unwrap_or(std::cmp::Ordering::Equal)
-                            }
-                            (Some(_), None) => std::cmp::Ordering::Less,
-                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                            (None, None) => b
-                                .equity
-                                .partial_cmp(&a.equity)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        }
-                    });
-                } else {
-                    self.suggestions.sort_by(|a, b| {
-                        b.equity
-                            .partial_cmp(&a.equity)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                }
-            }
-            SortMode::WinPct => {
-                if let Some(ref results) = self.refengine_results {
-                    let win_map: std::collections::HashMap<_, _> = results
-                        .iter()
-                        .map(|r| {
-                            let word_upper = r.word.to_uppercase();
-                            ((word_upper, r.row, r.col, r.direction), r.win_pct)
-                        })
-                        .collect();
-
-                    self.suggestions.sort_by(|a, b| {
-                        let a_word = a.word.to_uppercase();
-                        let b_word = b.word.to_uppercase();
-                        let a_win = win_map.get(&(a_word, a.row, a.col, a.direction));
-                        let b_win = win_map.get(&(b_word, b.row, b.col, b.direction));
-
-                        match (a_win, b_win) {
-                            (Some(a_w), Some(b_w)) => {
-                                b_w.partial_cmp(a_w).unwrap_or(std::cmp::Ordering::Equal)
-                            }
-                            (Some(_), None) => std::cmp::Ordering::Less,
-                            (None, Some(_)) => std::cmp::Ordering::Greater,
-                            (None, None) => b
-                                .equity
-                                .partial_cmp(&a.equity)
-                                .unwrap_or(std::cmp::Ordering::Equal),
-                        }
-                    });
-                } else if let Some(ref results) = self.mcts_results {
-                    let win_map: std::collections::HashMap<_, _> = results
-                        .iter()
-                        .map(|r| ((&r.mv.word, r.mv.row, r.mv.col, r.mv.direction), r.win_rate))
-                        .collect();
-
-                    self.suggestions.sort_by(|a, b| {
-                        let a_win = win_map.get(&(&a.word, a.row, a.col, a.direction));
-                        let b_win = win_map.get(&(&b.word, b.row, b.col, b.direction));
-
-                        match (a_win, b_win) {
-                            (Some(a_w), Some(b_w)) => {
-                                b_w.partial_cmp(a_w).unwrap_or(std::cmp::Ordering::Equal)
+                            (Some(a_v), Some(b_v)) => {
+                                b_v.partial_cmp(a_v).unwrap_or(std::cmp::Ordering::Equal)
                             }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
@@ -1884,6 +1752,7 @@ mod tests {
 
     fn fake_move(tiles: usize) -> Move {
         Move {
+            kind: crate::solver::MoveKind::Play,
             word: "X".repeat(tiles),
             row: 7,
             col: 0,

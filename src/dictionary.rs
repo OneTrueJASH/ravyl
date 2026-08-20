@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use fst::raw::Node;
 use fst::Set;
 
-use crate::leaves::LeaveValues;
-use crate::solver::leave_value_with_phase;
+use crate::leaves::{bingo_bonus_correction, LeaveValues};
+use crate::solver::{leave_value_with_phase, BINGO_BONUS};
 use crate::tile::Tile;
 
 /// Dictionary loaded from a pre-compiled FST for fast lookups
@@ -57,14 +57,16 @@ impl Dictionary {
     /// (`unseen` = bag + opponent rack; `None` means full weight).
     ///
     /// Uses the fitted leave table when loaded and the leave is in it (the
-    /// table covers 1–6 tiles), otherwise the per-letter heuristic.
+    /// table covers 1–6 tiles), corrected from Scrabble's 50-point bingo
+    /// bonus to Crossplay's 40 (see [`bingo_bonus_correction`]); otherwise
+    /// the per-letter heuristic.
     pub fn leave_value(&self, leave: &[Tile], unseen: Option<usize>) -> f32 {
         if leave.is_empty() {
             return 0.0;
         }
         if let Some(table) = &self.leaves {
             if let Some(v) = table.value(leave) {
-                return v * phase_scale(unseen);
+                return (v + bingo_bonus_correction(leave, BINGO_BONUS)) * phase_scale(unseen);
             }
         }
         leave_value_with_phase(leave, unseen)

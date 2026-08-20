@@ -31,8 +31,11 @@ use rayon::prelude::*;
 
 use crate::board::Board;
 use crate::dictionary::Dictionary;
+use crate::game::exchange_moves;
+#[cfg(test)]
+use crate::game::full_tile_set;
 use crate::game::SolverState;
-use crate::solver::{Move, Solver};
+use crate::solver::{Move, MoveKind, Solver, EXCHANGE_MIN_BAG};
 use crate::tile::{Rack, Tile, RACK_SIZE};
 
 /// Configuration for Monte Carlo evaluation
@@ -84,6 +87,26 @@ impl MctsConfig {
         }
     }
 
+    /// Settings by bag size. The ending is always played exactly whenever
+    /// a playout reaches it; the depth decides how often it does:
+    /// - 1-7 in the bag: to the end of the game (see `pre_endgame`)
+    /// - 8-21: four plies, enough for either side to empty the bag
+    /// - more: two plies (our move, the reply, our follow-up) plus leaves
+    pub fn for_bag(bag: usize) -> Self {
+        if bag <= RACK_SIZE {
+            Self::pre_endgame()
+        } else if bag <= 3 * RACK_SIZE {
+            MctsConfig {
+                num_candidates: 25,
+                iterations_per_candidate: 150,
+                max_plies: 4,
+                ..Self::default()
+            }
+        } else {
+            Self::default()
+        }
+    }
+
     pub fn with_score_diff(mut self, score_diff: i32) -> Self {
         self.score_diff = score_diff;
         self
@@ -104,6 +127,10 @@ pub struct MctsResult {
     pub win_rate: f32,
     /// Playouts completed
     pub iterations: usize,
+    /// Share of playouts in which the opponent's reply was a bingo
+    pub opp_bingo_rate: f32,
+    /// Share of playouts in which our follow-up move was a bingo
+    pub our_bingo_rate: f32,
 }
 
 /// Pool of available tiles for random drawing
@@ -174,6 +201,20 @@ impl Player {
     }
 }
 
+/// One point of a playout's history: after `mover`'s move, the spread from
+/// our point of view and the tiles left in the bag.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))] // read by the self-play studies
+pub struct TracePoint {
+    pub mover_is_us: bool,
+    pub spread: i32,
+    pub bag: usize,
+    pub was_bingo: bool,
+    /// Phase-scaled leave value of our rack minus the opponent's, as the
+    /// cut-off valuation in [`Playout::run`] would add it.
+    pub leave_adj: f32,
+}
+
 /// One simulated game from the position after our candidate move.
 struct Playout<'a> {
     dict: &'a Dictionary,
@@ -184,9 +225,35 @@ struct Playout<'a> {
     spread: i32,
     /// Player who drew the last tile, once the bag is empty.
     final_turn_owner: Option<Player>,
+    /// For returning exchanged tiles to random places in the bag.
+    rng: Rng,
+    /// Whether each player's first move in this playout was a bingo.
+    first_move_bingo: [Option<bool>; 2],
+    /// Move-by-move history, kept only when requested (self-play studies).
+    trace: Option<Vec<TracePoint>>,
 }
 
 impl<'a> Playout<'a> {
+    fn new(
+        dict: &'a Dictionary,
+        board: Board,
+        racks: [Vec<Tile>; 2],
+        bag: Vec<Tile>,
+        seed: u64,
+    ) -> Self {
+        Playout {
+            dict,
+            board,
+            racks,
+            bag,
+            spread: 0,
+            final_turn_owner: None,
+            rng: Rng::with_seed(seed),
+            first_move_bingo: [None, None],
+            trace: None,
+        }
+    }
+
     fn rack(&self, p: Player) -> &Vec<Tile> {
         &self.racks[p as usize]
     }
@@ -202,10 +269,14 @@ impl<'a> Playout<'a> {
         self.bag.len() + RACK_SIZE
     }
 
-    /// Remove `mv`'s tiles from `p`'s rack, place them, and draw.
+    /// Make `mv` for `p`: place or exchange its tiles, score it, draw, and
+    /// for an exchange return the exchanged tiles to the bag afterwards (so
+    /// the bag size is unchanged and an exchange can never empty it).
     fn commit(&mut self, p: Player, mv: &Move) {
         for (r, c, tile) in &mv.tiles_used {
             self.board.place_tile(*r, *c, *tile);
+        }
+        for tile in mv.tiles_from_rack() {
             let rack = self.rack_mut(p);
             let idx = rack
                 .iter()
@@ -217,6 +288,9 @@ impl<'a> Playout<'a> {
         }
         let signed = mv.score as i32;
         self.spread += if p == Player::Us { signed } else { -signed };
+        if self.first_move_bingo[p as usize].is_none() {
+            self.first_move_bingo[p as usize] = Some(mv.is_bingo);
+        }
 
         let need = RACK_SIZE
             .saturating_sub(self.rack(p).len())
@@ -228,6 +302,31 @@ impl<'a> Playout<'a> {
                 self.final_turn_owner = Some(p);
             }
         }
+        if let MoveKind::Exchange(returned) = &mv.kind {
+            for &tile in returned {
+                let at = self.rng.usize(..=self.bag.len());
+                self.bag.insert(at, tile);
+            }
+        }
+        if self.trace.is_some() {
+            let leave_adj = self.leave_adjustment();
+            if let Some(trace) = &mut self.trace {
+                trace.push(TracePoint {
+                    mover_is_us: p == Player::Us,
+                    spread: self.spread,
+                    bag: self.bag.len(),
+                    was_bingo: mv.is_bingo,
+                    leave_adj,
+                });
+            }
+        }
+    }
+
+    /// Our rack's leave value minus the opponent's, phase-scaled.
+    fn leave_adjustment(&self) -> f32 {
+        let unseen = self.unseen_for_phase();
+        self.dict.leave_value(self.rack(Player::Us), Some(unseen))
+            - self.dict.leave_value(self.rack(Player::Opp), Some(unseen))
     }
 
     /// Highest-scoring move for `p` (None means pass).
@@ -237,11 +336,31 @@ impl<'a> Playout<'a> {
         solver.find_moves(&rack).into_iter().max_by_key(|m| m.score)
     }
 
-    /// Best move by static equity for `p` (None means pass).
+    /// Best move by static equity for `p`, including exchanges when the bag
+    /// allows them (None means pass).
     fn best_by_equity(&self, p: Player) -> Option<Move> {
         let solver = Solver::new(&self.board, self.dict);
         let rack = rack_from(self.rack(p));
-        solver.find_moves(&rack).into_iter().next()
+        let best_play = solver.find_moves(&rack).into_iter().next();
+        if self.bag.len() < EXCHANGE_MIN_BAG {
+            return best_play;
+        }
+        let unseen = self.unseen_for_phase();
+        let best_exchange = exchange_moves(self.rack(p), self.dict, Some(unseen))
+            .into_iter()
+            .max_by(|a, b| {
+                a.equity
+                    .partial_cmp(&b.equity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        match (best_play, best_exchange) {
+            (Some(play), Some(exch)) => Some(if exch.equity > play.equity {
+                exch
+            } else {
+                play
+            }),
+            (play, exch) => play.or(exch),
+        }
     }
 
     /// `p`'s last turn with `p.other()` holding the final move: choose the
@@ -285,9 +404,37 @@ impl<'a> Playout<'a> {
         (best_move, best_value)
     }
 
+    /// A fresh game: empty board, shuffled full bag, both racks drawn.
+    #[cfg(test)]
+    fn new_game(dict: &'a Dictionary, seed: u64) -> Self {
+        let mut rng = Rng::with_seed(seed);
+        let mut bag = full_tile_set();
+        rng.shuffle(&mut bag);
+        let us: Vec<Tile> = bag.drain(bag.len() - RACK_SIZE..).collect();
+        let opp: Vec<Tile> = bag.drain(bag.len() - RACK_SIZE..).collect();
+        Self::new(dict, Board::new(), [us, opp], bag, rng.u64(..))
+    }
+
     /// Play the game out from `to_move`'s turn. Returns the final spread
-    /// (plus leave adjustments if the ply limit cut the game short).
-    fn run(&mut self, mut to_move: Player, max_plies: usize) -> f32 {
+    /// (plus leave and tempo adjustments if the ply limit cut the game short).
+    #[cfg(test)]
+    fn run(&mut self, to_move: Player, max_plies: usize) -> f32 {
+        self.run_with(to_move, max_plies, &mut |_, _| {}).value
+    }
+
+    /// As [`Self::run`], calling `observe(self, to_move)` before every move
+    /// of the greedy phase (self-play studies sample positions this way).
+    fn run_with(
+        &mut self,
+        mut to_move: Player,
+        max_plies: usize,
+        observe: &mut dyn FnMut(&Playout<'a>, Player),
+    ) -> PlayoutOutcome {
+        let finished = |p: &Playout| PlayoutOutcome {
+            value: p.spread as f32,
+            finished: true,
+            bag: p.bag.len(),
+        };
         let mut plies = 0;
         loop {
             match self.final_turn_owner {
@@ -296,7 +443,7 @@ impl<'a> Playout<'a> {
                     if let Some(mv) = self.best_by_score(to_move) {
                         self.commit(to_move, &mv);
                     }
-                    return self.spread as f32;
+                    return finished(self);
                 }
                 Some(_) => {
                     // Last turn before the owner's final move: exact 2-ply.
@@ -311,18 +458,33 @@ impl<'a> Playout<'a> {
             }
 
             if plies >= max_plies {
-                // Cut short: value the racks statically.
-                let unseen = self.unseen_for_phase();
-                let ours = self.dict.leave_value(self.rack(Player::Us), Some(unseen));
-                let theirs = self.dict.leave_value(self.rack(Player::Opp), Some(unseen));
-                return self.spread as f32 + ours - theirs;
+                // Cut short: value the racks statically, plus the tempo of
+                // whoever is to move.
+                let tempo = if to_move == Player::Us { TEMPO } else { -TEMPO };
+                return PlayoutOutcome {
+                    value: self.spread as f32 + self.leave_adjustment() + tempo,
+                    finished: false,
+                    bag: self.bag.len(),
+                };
             }
 
+            observe(self, to_move);
             if let Some(mv) = self.best_by_equity(to_move) {
                 self.commit(to_move, &mv);
             } else if self.bag.is_empty() {
                 // No bag, no move: treat as the game ending here.
-                return self.spread as f32;
+                return finished(self);
+            } else if self.trace.is_some() {
+                let leave_adj = self.leave_adjustment();
+                if let Some(trace) = &mut self.trace {
+                    trace.push(TracePoint {
+                        mover_is_us: to_move == Player::Us,
+                        spread: self.spread,
+                        bag: self.bag.len(),
+                        was_bingo: false,
+                        leave_adj,
+                    });
+                }
             }
             plies += 1;
             to_move = to_move.other();
@@ -343,6 +505,9 @@ struct CandidateSim<'a> {
     total: f32,
     wins: f32,
     iterations: usize,
+    /// Playouts in which the opponent's reply / our follow-up was a bingo.
+    opp_bingos: u32,
+    our_bingos: u32,
     /// Every playout value, in order; candidates share draw sequences, so
     /// element-wise differences between candidates are paired samples.
     values: Vec<f32>,
@@ -354,11 +519,14 @@ impl<'a> CandidateSim<'a> {
         base_state.apply_move(mv);
         let our_leave: Vec<Tile> = base_state.rack.tiles();
 
-        // Unseen tiles after our move = bag + opponent's rack. While the bag
-        // has tiles the opponent holds a full rack.
-        let pool = TilePool::from_remaining(&base_state.unseen_tiles());
+        // Tiles we may draw from: the unseen tiles before our move (bag +
+        // opponent's rack). A play moves tiles to the board, which leaves
+        // this set unchanged; an exchange returns its tiles to the bag only
+        // after the draw, so they must not be in the pool either. While the
+        // bag has tiles the opponent holds a full rack.
+        let pool = TilePool::from_remaining(&state.unseen_tiles());
         let bag_size = pool.len().saturating_sub(RACK_SIZE);
-        let draw_count = mv.tiles_used.len().min(bag_size);
+        let draw_count = mv.tiles_from_rack().len().min(bag_size);
 
         CandidateSim {
             mv,
@@ -377,6 +545,8 @@ impl<'a> CandidateSim<'a> {
             total: 0.0,
             wins: 0.0,
             iterations: 0,
+            opp_bingos: 0,
+            our_bingos: 0,
             values: Vec::new(),
         }
     }
@@ -389,15 +559,23 @@ impl<'a> CandidateSim<'a> {
         }
     }
 
-    fn record(&mut self, value: f32) {
-        self.values.push(value);
-        self.total += value;
-        let final_diff = self.score_diff as f32 + value;
-        if final_diff > 0.0 {
-            self.wins += 1.0;
-        } else if final_diff == 0.0 {
-            self.wins += 0.5;
-        }
+    /// Add one playout. A finished game contributes a win, a loss or half
+    /// a point for a tie; a cut-off game contributes the probability that
+    /// the remaining spread swing (normal with the bag-dependent sd)
+    /// leaves us ahead.
+    fn record(&mut self, outcome: PlayoutOutcome) {
+        self.values.push(outcome.value);
+        self.total += outcome.value;
+        let final_diff = self.score_diff as f32 + outcome.value;
+        self.wins += if outcome.finished {
+            match final_diff.partial_cmp(&0.0) {
+                Some(std::cmp::Ordering::Greater) => 1.0,
+                Some(std::cmp::Ordering::Less) => 0.0,
+                _ => 0.5,
+            }
+        } else {
+            normal_cdf(final_diff / remaining_spread_sd(outcome.bag))
+        };
         self.iterations += 1;
     }
 
@@ -411,7 +589,11 @@ impl<'a> CandidateSim<'a> {
         if self.pool.is_empty() {
             // Opponent has nothing: our move ends the game.
             for _ in 0..playouts {
-                self.record(self.mv.score as f32);
+                self.record(PlayoutOutcome {
+                    value: self.mv.score as f32,
+                    finished: true,
+                    bag: 0,
+                });
             }
             return;
         }
@@ -426,38 +608,95 @@ impl<'a> CandidateSim<'a> {
 
             let mut our_rack = self.our_leave.clone();
             our_rack.extend_from_slice(drawn);
+            let mut bag = bag.to_vec();
+            if let MoveKind::Exchange(returned) = &self.mv.kind {
+                // Exchanged tiles go back after we draw; the bag is shuffled
+                // so the position does not matter.
+                bag.extend_from_slice(returned);
+                self.rng.shuffle(&mut bag);
+            }
 
-            let mut playout = Playout {
+            let seed = self.rng.u64(..);
+            let mut playout = Playout::new(
                 dict,
-                board: self.board.clone(),
-                racks: [our_rack, opp_rack.to_vec()],
-                bag: bag.to_vec(),
-                spread: self.mv.score as i32,
-                final_turn_owner: None,
-            };
+                self.board.clone(),
+                [our_rack, opp_rack.to_vec()],
+                bag,
+                seed,
+            );
+            playout.spread = self.mv.score as i32;
             // If our move emptied the bag, we own the final turn: the
             // opponent gets one last turn and then we play the final move.
             if playout.bag.is_empty() && self.bag_size > 0 {
                 playout.final_turn_owner = Some(Player::Us);
             }
 
-            let value = playout.run(Player::Opp, max_plies);
-            self.record(value);
+            let outcome = playout.run_with(Player::Opp, max_plies, &mut |_, _| {});
+            self.opp_bingos +=
+                u32::from(playout.first_move_bingo[Player::Opp as usize] == Some(true));
+            self.our_bingos +=
+                u32::from(playout.first_move_bingo[Player::Us as usize] == Some(true));
+            self.record(outcome);
         }
     }
 
     fn result(&self) -> MctsResult {
+        let n = self.iterations.max(1) as f32;
         MctsResult {
             mv: self.mv.clone(),
             mcts_equity: self.mean(),
             win_rate: if self.iterations == 0 {
                 0.5
             } else {
-                self.wins / self.iterations as f32
+                self.wins / n
             },
             iterations: self.iterations,
+            opp_bingo_rate: self.opp_bingos as f32 / n,
+            our_bingo_rate: self.our_bingos as f32 / n,
         }
     }
+}
+
+/// Worth of being the player to move when a playout is cut off mid-game,
+/// in points of final spread. Measured by self-play (`study_spread_variance`,
+/// 800 games, 2026-08-20): with the bag holding 8+ tiles, the final spread
+/// minus (spread so far + leave values) averaged +17.6 / +19.6 with us to
+/// move and -20.9 / -23.2 with the opponent to move, whichever side had
+/// started the game. The same offset applies to every candidate, so it
+/// changes win estimates, not rankings.
+const TEMPO: f32 = 21.0;
+
+/// Standard deviation of the spread still to come from a mid-game
+/// position, by tiles left in the bag. Same study: the variance of the
+/// residual grows linearly with the bag, var = 159 + 79.8 * bag (sd 12.6
+/// with an empty bag, 64 with 50 tiles, 84 at the start of the game).
+fn remaining_spread_sd(bag: usize) -> f32 {
+    (159.4 + 79.8 * bag as f32).sqrt()
+}
+
+/// Standard normal CDF (Abramowitz & Stegun 7.1.26, |error| < 1.5e-7).
+fn normal_cdf(x: f32) -> f32 {
+    let z = (x as f64) / std::f64::consts::SQRT_2;
+    let t = 1.0 / (1.0 + 0.327_591_1 * z.abs());
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let erf = 1.0 - poly * (-z * z).exp();
+    let erf = if z >= 0.0 { erf } else { -erf };
+    (0.5 * (1.0 + erf)) as f32
+}
+
+/// Result of one playout.
+#[derive(Debug, Clone, Copy)]
+struct PlayoutOutcome {
+    /// Spread change from our point of view (exact if `finished`, otherwise
+    /// spread so far plus leave values plus the tempo of the side to move).
+    value: f32,
+    /// The game reached its end inside the ply limit.
+    finished: bool,
+    /// Tiles left in the bag where the playout stopped.
+    bag: usize,
 }
 
 /// Candidates trailing the leader by more than this many points after a
@@ -650,17 +889,17 @@ mod tests {
 
         // We move first and empty the bag (bag is empty from the start here,
         // with us as owner): the opponent gets a last turn, then we play.
-        let mut playout = Playout {
-            dict: &dict,
-            board: board.clone(),
-            racks: [
+        let mut playout = Playout::new(
+            &dict,
+            board.clone(),
+            [
                 vec![Tile::new('S'), Tile::new('E')],
                 vec![Tile::new('Z'), Tile::new('A')],
             ],
-            bag: vec![],
-            spread: 0,
-            final_turn_owner: Some(Player::Us),
-        };
+            vec![],
+            1,
+        );
+        playout.final_turn_owner = Some(Player::Us);
         let value = playout.run(Player::Opp, 10);
         // The opponent played (ZA somewhere, > 0 points) and we replied; the
         // playout stopped there even though both racks may still hold tiles.
@@ -669,17 +908,17 @@ mod tests {
 
         // Reproduce by hand: the opponent's best last turn is the 2-ply
         // optimum, and our final move is our best score on the board after it.
-        let mut check = Playout {
-            dict: &dict,
+        let mut check = Playout::new(
+            &dict,
             board,
-            racks: [
+            [
                 vec![Tile::new('S'), Tile::new('E')],
                 vec![Tile::new('Z'), Tile::new('A')],
             ],
-            bag: vec![],
-            spread: 0,
-            final_turn_owner: Some(Player::Us),
-        };
+            vec![],
+            1,
+        );
+        check.final_turn_owner = Some(Player::Us);
         let (opp_mv, opp_value) = check.best_last_turn(Player::Opp);
         let opp_score = opp_mv.as_ref().map(|m| m.score as i32).unwrap_or(0);
         if let Some(m) = &opp_mv {
@@ -721,6 +960,16 @@ mod tests {
             assert!(r.iterations >= 2);
         }
         assert_eq!(results[0].iterations, 10);
+    }
+
+    #[test]
+    fn normal_cdf_and_spread_sd() {
+        assert!((normal_cdf(0.0) - 0.5).abs() < 1e-6);
+        assert!((normal_cdf(1.0) - 0.841_345).abs() < 1e-4);
+        assert!((normal_cdf(-2.0) - 0.022_750).abs() < 1e-4);
+        assert!(normal_cdf(10.0) > 0.999_99);
+        assert!(remaining_spread_sd(0) > 12.0 && remaining_spread_sd(0) < 13.0);
+        assert!(remaining_spread_sd(86) > 80.0 && remaining_spread_sd(86) < 90.0);
     }
 
     #[test]
@@ -809,7 +1058,11 @@ mod tests {
         // tiles, so the three blanks are unseen and land in the opponent's
         // rack: the slowest realistic case for the 2-ply replies.
         const END_BLANKS_UNSEEN: &str = "3N3Q3M3/3OP2UNTEACH1/3BE2O3N3/3LA2T2MYOPE/2FER2H1LO4/2O6AB4/2R1F4U3DE/2TRIVET1D3AY/4LA1A1IODIZE/4KI1JINX2ES/5R1E1G4O/OUTIES1S3G2R/11L2E/8WAHINES/2EGALITE2A3";
+        const EMPTY: &str = "15/15/15/15/15/15/15/15/15/15/15/15/15/15/15";
+        const BEECH: &str = "15/15/15/15/15/15/15/3BEECH7/7I7/7K7/7E7/7r7/15/15/15";
         for (board, rack) in [
+            (EMPTY, "AEINRST"),
+            (BEECH, "AEINRS?"),
             (MID, "AEIST"),
             (MID, "AEST"),
             (MID, "ES"),
@@ -819,29 +1072,346 @@ mod tests {
             let state = SolverState::from_cgp(&format!("{} {}", board, rack)).unwrap();
             let bag = state.unseen_tile_count() - RACK_SIZE;
             let suggestions = state.get_suggestions(&dict);
-            let config = MctsConfig::pre_endgame();
+            let config = MctsConfig::for_bag(bag);
             let t = Instant::now();
             let results = MctsEvaluator::new(config.clone()).evaluate(&state, &suggestions, &dict);
             let elapsed = t.elapsed();
             println!(
-                "rack {:5} bag {}  {} candidates x {} playouts: {:?}",
+                "rack {:7} bag {:2} {} plies  {} candidates x {} playouts: {:?}",
                 rack,
                 bag,
+                config.max_plies,
                 results.len(),
                 config.iterations_per_candidate,
                 elapsed
             );
             for r in results.iter().take(5) {
                 println!(
-                    "   {:8} {:>4} score {:>3} static {:>6.1} sim {:>6.1} win {:.0}%",
+                    "   {:10} {:>4} score {:>3} static {:>6.1} sim {:>6.1} win {:.0}% bingo {:.0}/{:.0} n={}",
                     r.mv.word,
                     r.mv.coords(),
                     r.mv.score,
                     r.mv.equity,
                     r.mcts_equity,
-                    r.win_rate * 100.0
+                    r.win_rate * 100.0,
+                    r.our_bingo_rate * 100.0,
+                    r.opp_bingo_rate * 100.0,
+                    r.iterations
                 );
             }
         }
+    }
+
+    /// Solve the normal equations `a x = b` (small dense system) by Gaussian
+    /// elimination with partial pivoting.
+    fn solve_linear(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+        let n = b.len();
+        for col in 0..n {
+            let pivot = (col..n)
+                .max_by(|&i, &j| a[i][col].abs().partial_cmp(&a[j][col].abs()).unwrap())
+                .unwrap();
+            a.swap(col, pivot);
+            b.swap(col, pivot);
+            let p = a[col][col];
+            if p.abs() < 1e-12 {
+                continue;
+            }
+            for row in 0..n {
+                if row == col {
+                    continue;
+                }
+                let f = a[row][col] / p;
+                if f == 0.0 {
+                    continue;
+                }
+                let pivot_row = a[col].clone();
+                for (x, pv) in a[row].iter_mut().zip(&pivot_row).skip(col) {
+                    *x -= f * pv;
+                }
+                b[row] -= f * b[col];
+            }
+        }
+        (0..n)
+            .map(|i| {
+                if a[i][i].abs() < 1e-12 {
+                    0.0
+                } else {
+                    b[i] / a[i][i]
+                }
+            })
+            .collect()
+    }
+
+    /// Logistic regression by Newton's method with a small ridge term.
+    fn fit_logistic(xs: &[Vec<f64>], ys: &[f64], iters: usize) -> Vec<f64> {
+        let d = xs[0].len();
+        let mut w = vec![0.0; d];
+        for _ in 0..iters {
+            let mut grad = vec![0.0; d];
+            let mut hess = vec![vec![0.0; d]; d];
+            for (x, &y) in xs.iter().zip(ys) {
+                let z: f64 = x.iter().zip(&w).map(|(a, b)| a * b).sum();
+                let p = 1.0 / (1.0 + (-z).exp());
+                let r = p - y;
+                for i in 0..d {
+                    grad[i] += r * x[i];
+                    let s = p * (1.0 - p) * x[i];
+                    for j in 0..d {
+                        hess[i][j] += s * x[j];
+                    }
+                }
+            }
+            for i in 0..d {
+                hess[i][i] += 1e-3;
+                grad[i] += 1e-3 * w[i];
+            }
+            let step = solve_linear(hess, grad);
+            for i in 0..d {
+                w[i] -= step[i];
+            }
+        }
+        w
+    }
+
+    /// Self-play study of the spread still to come. For every position
+    /// with the opponent to move (where a playout cut off by the ply limit
+    /// stops), record final spread minus (spread + leave adjustment) and
+    /// report its mean and standard deviation by tiles left in the bag.
+    /// Run with `cargo test --release study_spread_variance -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn study_spread_variance() {
+        let dict = load_default_dictionary().unwrap();
+        let games: usize = std::env::var("GAMES")
+            .ok()
+            .and_then(|g| g.parse().ok())
+            .unwrap_or(400);
+        let started = Instant::now();
+        // Half the games we start, half the opponent starts.
+        let traces: Vec<(bool, Vec<TracePoint>, i32)> = (0..games as u64)
+            .into_par_iter()
+            .map(|seed| {
+                let we_start = seed % 2 == 0;
+                let mut g = Playout::new_game(&dict, 1000 + seed);
+                g.trace = Some(Vec::new());
+                let first = if we_start { Player::Us } else { Player::Opp };
+                let final_spread = g.run(first, 1000) as i32;
+                (we_start, g.trace.take().unwrap(), final_spread)
+            })
+            .collect();
+        println!("{} games in {:?}", games, started.elapsed());
+
+        // Residuals bucketed by bag size, opponent to move next; tempo
+        // offsets by who started and who is to move.
+        let mut by_bag: Vec<Vec<f64>> = vec![Vec::new(); 101];
+        let mut by_bag_us: Vec<Vec<f64>> = vec![Vec::new(); 101];
+        let mut tempo: [Vec<f64>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        let mut plies = 0usize;
+        let mut bingos = 0usize;
+        let mut final_spreads = [Vec::new(), Vec::new()];
+        for (we_start, trace, final_spread) in &traces {
+            final_spreads[usize::from(*we_start)].push(*final_spread as f64);
+            for t in trace {
+                plies += 1;
+                bingos += usize::from(t.was_bingo);
+                let residual = *final_spread as f64 - (t.spread as f64 + t.leave_adj as f64);
+                // Only mid-game points (bag >= 8) for the tempo estimate.
+                if t.bag >= 8 {
+                    tempo[usize::from(*we_start) * 2 + usize::from(t.mover_is_us)].push(residual);
+                }
+                if t.mover_is_us {
+                    by_bag[t.bag].push(residual);
+                } else {
+                    by_bag_us[t.bag].push(-residual);
+                }
+            }
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+        println!(
+            "{} plies, {:.1}% bingos, mean final spread: we start {:+.1}, they start {:+.1}",
+            plies,
+            100.0 * bingos as f64 / plies as f64,
+            mean(&final_spreads[1]),
+            mean(&final_spreads[0])
+        );
+        println!("tempo (mean residual, bag >= 8):");
+        println!(
+            "  they started, we are to move:   {:+.1} (n={})",
+            mean(&tempo[0]),
+            tempo[0].len()
+        );
+        println!(
+            "  they started, they are to move: {:+.1} (n={})",
+            mean(&tempo[1]),
+            tempo[1].len()
+        );
+        println!(
+            "  we started, we are to move:     {:+.1} (n={})",
+            mean(&tempo[2]),
+            tempo[2].len()
+        );
+        println!(
+            "  we started, they are to move:   {:+.1} (n={})",
+            mean(&tempo[3]),
+            tempo[3].len()
+        );
+        println!("bag  n     mean   sd   (opponent to move; residual = final - spread - leaves)");
+        let mut fit_x = Vec::new();
+        let mut fit_y = Vec::new();
+        for (bag, v) in by_bag.iter().enumerate() {
+            if v.len() < 30 {
+                continue;
+            }
+            let n = v.len() as f64;
+            let mean = v.iter().sum::<f64>() / n;
+            let var = v.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+            println!("{:3} {:5} {:+6.1} {:5.1}", bag, v.len(), mean, var.sqrt());
+            fit_x.push(bag as f64);
+            fit_y.push(var);
+        }
+        // Least squares for var = alpha + beta * bag.
+        let n = fit_x.len() as f64;
+        let mx = fit_x.iter().sum::<f64>() / n;
+        let my = fit_y.iter().sum::<f64>() / n;
+        let sxy: f64 = fit_x
+            .iter()
+            .zip(&fit_y)
+            .map(|(x, y)| (x - mx) * (y - my))
+            .sum();
+        let sxx: f64 = fit_x.iter().map(|x| (x - mx).powi(2)).sum();
+        let beta = sxy / sxx;
+        let alpha = my - beta * mx;
+        println!("variance fit: var(bag) = {:.1} + {:.2} * bag  (sd at 0: {:.1}, at 50: {:.1}, at 86: {:.1})",
+            alpha, beta, alpha.max(0.0).sqrt(), (alpha + 50.0 * beta).sqrt(), (alpha + 86.0 * beta).sqrt());
+        let mut all_us: Vec<f64> = by_bag_us.iter().flatten().copied().collect();
+        all_us.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mean_us = all_us.iter().sum::<f64>() / all_us.len().max(1) as f64;
+        println!(
+            "mean residual with us to move (sign flipped): {:+.2}",
+            mean_us
+        );
+    }
+
+    /// Self-play study of bingo probability by leave: at positions from
+    /// self-play games, keep a random leave of 0-6 tiles from the mover's
+    /// rack plus bag, draw the rest, and record whether a bingo exists. A
+    /// logistic model on letter counts is fitted and printed; it drives the
+    /// bingo-bonus correction to the Scrabble-fitted leave table.
+    /// Run with `cargo test --release study_bingo_probability -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn study_bingo_probability() {
+        let dict = load_default_dictionary().unwrap();
+        let games: usize = std::env::var("GAMES")
+            .ok()
+            .and_then(|g| g.parse().ok())
+            .unwrap_or(300);
+        let started = Instant::now();
+        // (letter counts incl. blank at 26, bingo?)
+        let samples: Vec<([u8; 27], bool)> = (0..games as u64)
+            .into_par_iter()
+            .flat_map_iter(|seed| {
+                let mut rng = Rng::with_seed(5000 + seed);
+                let mut out = Vec::new();
+                let mut g = Playout::new_game(&dict, 2000 + seed);
+                g.run_with(Player::Us, 1000, &mut |p, to_move| {
+                    for _ in 0..3 {
+                        let mut pool: Vec<Tile> = p.rack(to_move).clone();
+                        pool.extend_from_slice(&p.bag);
+                        if pool.len() < RACK_SIZE {
+                            return;
+                        }
+                        rng.shuffle(&mut pool);
+                        let k = rng.usize(0..=6);
+                        let leave = &pool[..k];
+                        let rack: Vec<Tile> = pool[..RACK_SIZE].to_vec();
+                        let mut counts = [0u8; 27];
+                        for t in leave {
+                            let i = if t.is_blank {
+                                26
+                            } else {
+                                (t.letter as u8 - b'A') as usize
+                            };
+                            counts[i] += 1;
+                        }
+                        let moves = Solver::new(&p.board, p.dict).find_moves(&rack_from(&rack));
+                        let bingo = moves.iter().any(|m| m.is_bingo);
+                        out.push((counts, bingo));
+                    }
+                });
+                out
+            })
+            .collect();
+        println!(
+            "{} samples from {} games in {:?}",
+            samples.len(),
+            games,
+            started.elapsed()
+        );
+
+        let xs: Vec<Vec<f64>> = samples
+            .iter()
+            .map(|(c, _)| {
+                let mut x = vec![1.0];
+                x.extend(c.iter().map(|&n| n as f64));
+                x
+            })
+            .collect();
+        let ys: Vec<f64> = samples.iter().map(|(_, b)| f64::from(*b)).collect();
+        let w = fit_logistic(&xs, &ys, 8);
+        let p_of =
+            |x: &[f64]| 1.0 / (1.0 + (-(x.iter().zip(&w).map(|(a, b)| a * b).sum::<f64>())).exp());
+        let p0 = p_of(
+            &xs[0]
+                .iter()
+                .enumerate()
+                .map(|(i, _)| if i == 0 { 1.0 } else { 0.0 })
+                .collect::<Vec<_>>(),
+        );
+        println!(
+            "overall bingo rate {:.3}; p(empty leave) = {:.3}",
+            ys.iter().sum::<f64>() / ys.len() as f64,
+            p0
+        );
+        println!("bias {:+.3}", w[0]);
+        println!("letter  weight  p(single)  correction = -10*(p-p0)");
+        for i in 0..27 {
+            let letter = if i == 26 {
+                '?'
+            } else {
+                (b'A' + i as u8) as char
+            };
+            let mut x = vec![0.0; 28];
+            x[0] = 1.0;
+            x[i + 1] = 1.0;
+            let p = p_of(&x);
+            println!(
+                "  {}   {:+.3}   {:.3}   {:+.2}",
+                letter,
+                w[i + 1],
+                p,
+                -10.0 * (p - p0)
+            );
+        }
+        // Held-out check: log-loss of the model vs the constant model.
+        let n = ys.len() as f64;
+        let (mut ll_model, mut ll_const) = (0.0, 0.0);
+        let pbar = ys.iter().sum::<f64>() / n;
+        for (x, &y) in xs.iter().zip(&ys) {
+            let p = p_of(x).clamp(1e-6, 1.0 - 1e-6);
+            ll_model += y * p.ln() + (1.0 - y) * (1.0 - p).ln();
+            ll_const += y * pbar.ln() + (1.0 - y) * (1.0 - pbar).ln();
+        }
+        println!(
+            "log-loss model {:.4} vs constant {:.4}",
+            -ll_model / n,
+            -ll_const / n
+        );
+        println!(
+            "WEIGHTS {:?}",
+            w.iter()
+                .map(|v| (v * 1000.0).round() / 1000.0)
+                .collect::<Vec<_>>()
+        );
     }
 }

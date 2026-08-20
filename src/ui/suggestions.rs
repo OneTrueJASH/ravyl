@@ -11,11 +11,10 @@ use ratatui::{
     widgets::{Block, Cell, Padding, Paragraph, Row, Table, TableState, Tabs},
 };
 
+use crate::app::SimResult;
 use crate::app::SortMode;
 use crate::board::Direction;
 use crate::logging::log;
-use crate::refengine_mcts::RefSimResult;
-use crate::mcts::MctsResult;
 use crate::solver::Move;
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
@@ -47,33 +46,14 @@ pub struct SimData {
     pub is_endgame: bool,
 }
 
-/// Maps moves to their simulation equity, combining MCTS and RefEngine results.
+/// Maps moves to their evaluation results (playouts or endgame search).
 pub struct SimEquityLookup {
-    /// Native playout results: (expected spread, win rate 0–1)
-    mcts_map: HashMap<(String, usize, usize, Direction), (f32, f32)>,
-    refengine_map: HashMap<(String, usize, usize, Direction), SimData>,
+    map: HashMap<(String, usize, usize, Direction), SimData>,
 }
 
 impl SimEquityLookup {
-    pub fn new(
-        mcts_results: Option<&[MctsResult]>,
-        refengine_results: Option<&[RefSimResult]>,
-    ) -> Self {
-        let mcts_map = mcts_results
-            .map(|results| {
-                results
-                    .iter()
-                    .map(|r| {
-                        (
-                            (r.mv.word.clone(), r.mv.row, r.mv.col, r.mv.direction),
-                            (r.mcts_equity, r.win_rate),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let refengine_map: HashMap<(String, usize, usize, Direction), SimData> = refengine_results
+    pub fn new(results: Option<&[SimResult]>) -> Self {
+        let map: HashMap<(String, usize, usize, Direction), SimData> = results
             .map(|results| {
                 results
                     .iter()
@@ -94,10 +74,7 @@ impl SimEquityLookup {
             })
             .unwrap_or_default();
 
-        SimEquityLookup {
-            mcts_map,
-            refengine_map,
-        }
+        SimEquityLookup { map }
     }
 
     pub fn get_equity(
@@ -108,22 +85,7 @@ impl SimEquityLookup {
         direction: Direction,
     ) -> Option<f32> {
         let key = (word.to_string(), row, col, direction);
-        self.refengine_map
-            .get(&key)
-            .map(|d| d.sim_equity)
-            .or_else(|| self.mcts_map.get(&key).map(|(eq, _)| *eq))
-    }
-
-    /// Native playout result for a move: (expected spread, win rate 0–1).
-    pub fn get_playout(
-        &self,
-        word: &str,
-        row: usize,
-        col: usize,
-        direction: Direction,
-    ) -> Option<(f32, f32)> {
-        let key = (word.to_string(), row, col, direction);
-        self.mcts_map.get(&key).copied()
+        self.map.get(&key).map(|d| d.sim_equity)
     }
 
     pub fn get_full(
@@ -134,15 +96,11 @@ impl SimEquityLookup {
         direction: Direction,
     ) -> Option<&SimData> {
         let key = (word.to_string(), row, col, direction);
-        self.refengine_map.get(&key)
+        self.map.get(&key)
     }
 
     pub fn has_data(&self) -> bool {
-        !self.mcts_map.is_empty() || !self.refengine_map.is_empty()
-    }
-
-    pub fn is_refengine(&self) -> bool {
-        !self.refengine_map.is_empty()
+        !self.map.is_empty()
     }
 }
 
@@ -153,8 +111,7 @@ pub fn render_suggestions(
     moves: &[Move],
     selected: usize,
     is_focused: bool,
-    mcts_results: Option<&[MctsResult]>,
-    refengine_results: Option<&[RefSimResult]>,
+    sim_results: Option<&[SimResult]>,
 ) {
     let border_color = if is_focused {
         theme::PANE_SUGGESTIONS
@@ -162,9 +119,9 @@ pub fn render_suggestions(
         theme::BORDER_NORMAL
     };
 
-    let sim_lookup = SimEquityLookup::new(mcts_results, refengine_results);
+    let sim_lookup = SimEquityLookup::new(sim_results);
 
-    if let Some(results) = refengine_results {
+    if let Some(results) = sim_results {
         if !moves.is_empty() {
             log_suggestions(moves, &sim_lookup, results.len());
         }
@@ -201,7 +158,7 @@ pub fn render_suggestions(
     };
     let hdr_style = Style::new().fg(theme::TEXT_DIM);
 
-    let header = if sim_lookup.is_refengine() {
+    let header = if has_sim {
         Row::new(vec![
             Cell::from("Pos").style(hdr_style),
             Cell::from("Word").style(hdr_style),
@@ -209,16 +166,6 @@ pub fn render_suggestions(
             right("Equity", hdr_style),
             right("Win%", hdr_style),
             right("Bingo", hdr_style),
-            Cell::from("Leave").style(hdr_style),
-        ])
-    } else if has_sim {
-        Row::new(vec![
-            Cell::from("Pos").style(hdr_style),
-            Cell::from("Word").style(hdr_style),
-            right("Score", hdr_style),
-            right("Equity", hdr_style),
-            right("Sim", hdr_style),
-            right("Win%", hdr_style),
             Cell::from("Leave").style(hdr_style),
         ])
     } else {
@@ -280,20 +227,18 @@ pub fn render_suggestions(
             };
             let tiles_cell = Cell::from(leave_text).style(Style::new().fg(leave_color));
 
-            if sim_lookup.is_refengine() {
+            if has_sim {
                 if let Some(sim) = sim_lookup.get_full(&mv.word, mv.row, mv.col, mv.direction) {
                     let sim_cell = right(
-                        &format!("{:.0}", sim.sim_equity),
+                        &format!("{:+.0}", sim.sim_equity),
                         Style::new().fg(theme::SIM_EQUITY_FG),
                     );
 
                     let wc = theme::win_color(sim.win_pct);
-                    let win_cell = if sim.is_endgame {
-                        right(&format!("{:+.0}", sim.sim_equity), Style::new().fg(wc))
-                    } else {
-                        right(&format!("{:.0}%", sim.win_pct), Style::new().fg(wc))
-                    };
+                    let win_cell = right(&format!("{:.0}%", sim.win_pct), Style::new().fg(wc));
 
+                    // Endgame lines are exact; playouts report our follow-up
+                    // bingo rate over the opponent's reply bingo rate.
                     let bingo_text = if sim.is_endgame {
                         "end".to_string()
                     } else {
@@ -322,43 +267,13 @@ pub fn render_suggestions(
                         tiles_cell,
                     ])
                 }
-            } else if has_sim {
-                let (sim_cell, win_cell) = if let Some((equity, win_rate)) =
-                    sim_lookup.get_playout(&mv.word, mv.row, mv.col, mv.direction)
-                {
-                    let win_pct = win_rate * 100.0;
-                    (
-                        right(
-                            &format!("{:+.0}", equity),
-                            Style::new().fg(theme::SIM_EQUITY_FG),
-                        ),
-                        right(
-                            &format!("{:.0}%", win_pct),
-                            Style::new().fg(theme::win_color(win_pct)),
-                        ),
-                    )
-                } else {
-                    (
-                        right("-", Style::new().fg(theme::TEXT_DIM)),
-                        right("-", Style::new().fg(theme::TEXT_DIM)),
-                    )
-                };
-                Row::new(vec![
-                    pos_cell,
-                    word_cell,
-                    pts_cell,
-                    equity_cell,
-                    sim_cell,
-                    win_cell,
-                    tiles_cell,
-                ])
             } else {
                 Row::new(vec![pos_cell, word_cell, pts_cell, equity_cell, tiles_cell])
             }
         })
         .collect();
 
-    let widths = if sim_lookup.is_refengine() {
+    let widths = if has_sim {
         vec![
             Constraint::Length(4),
             Constraint::Length(10),
@@ -366,16 +281,6 @@ pub fn render_suggestions(
             Constraint::Length(6),
             Constraint::Length(4),
             Constraint::Length(5),
-            Constraint::Fill(1),
-        ]
-    } else if has_sim {
-        vec![
-            Constraint::Length(4),
-            Constraint::Length(10),
-            Constraint::Length(5),
-            Constraint::Length(6),
-            Constraint::Length(5),
-            Constraint::Length(4),
             Constraint::Fill(1),
         ]
     } else {

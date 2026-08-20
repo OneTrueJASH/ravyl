@@ -189,7 +189,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
 
     // Sort-mode tabs.
     if let Some(tab_area) = layout.suggestions_tab_area {
-        let has_sim = app.mcts_results.is_some() || app.refengine_results.is_some();
+        let has_sim = app.sim_results.is_some();
         ui::suggestions::render_sort_tabs(
             frame,
             tab_area,
@@ -207,8 +207,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             &app.suggestions,
             app.selected_suggestion,
             app.focus == Focus::Suggestions,
-            app.mcts_results.as_deref(),
-            app.refengine_results.as_deref(),
+            app.sim_results.as_deref(),
         );
     }
 
