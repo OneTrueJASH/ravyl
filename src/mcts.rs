@@ -243,7 +243,7 @@ impl<'a> Playout<'a> {
         let rack = rack_from(self.rack(p));
         let other_rack = rack_from(self.rack(p.other()));
         let mut moves = solver.find_moves(&rack);
-        moves.sort_by(|a, b| b.score.cmp(&a.score));
+        moves.sort_by_key(|m| std::cmp::Reverse(m.score));
 
         let reply_score = |board: &Board| -> i32 {
             Solver::new(board, self.dict)

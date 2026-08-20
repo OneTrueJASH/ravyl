@@ -443,10 +443,8 @@ impl App {
                 KeyCode::Tab => self.next_focus(),
                 KeyCode::Esc => self.show_escape_menu(),
                 KeyCode::Char(' ') => self.toggle_direction(),
-                KeyCode::Enter => {
-                    if !self.suggestions.is_empty() {
-                        self.apply_suggestion();
-                    }
+                KeyCode::Enter if !self.suggestions.is_empty() => {
+                    self.apply_suggestion();
                 }
                 _ => {}
             },
@@ -792,6 +790,15 @@ impl App {
                 Ok(results) => {
                     let mut new_suggestions = Vec::with_capacity(results.len());
                     for result in &results {
+                        log(&format!(
+                            "Playout: {} {} score={} spread={:+.1} win={:.0}% ({} playouts)",
+                            result.mv.word,
+                            result.mv.coords(),
+                            result.mv.score,
+                            result.mcts_equity,
+                            result.win_rate * 100.0,
+                            result.iterations
+                        ));
                         new_suggestions.push(result.mv.clone());
                     }
 
@@ -1154,7 +1161,7 @@ impl App {
             if is_last_move {
                 // No reply is coming and there is no leave to protect:
                 // rank by raw score.
-                all_suggestions.sort_by(|a, b| b.score.cmp(&a.score));
+                all_suggestions.sort_by_key(|m| std::cmp::Reverse(m.score));
             } else {
                 const MAX_SUGGESTIONS: usize = 100;
                 all_suggestions.truncate(MAX_SUGGESTIONS);
@@ -1281,7 +1288,6 @@ impl App {
         };
 
         // Sort placed tiles in word order
-        let mut placed = placed;
         match dir {
             Direction::Horizontal => placed.sort_by_key(|(_, c, _)| *c),
             Direction::Vertical => placed.sort_by_key(|(r, _, _)| *r),
@@ -1782,7 +1788,7 @@ impl App {
                 }
             }
             SortMode::Score => {
-                self.suggestions.sort_by(|a, b| b.score.cmp(&a.score));
+                self.suggestions.sort_by_key(|m| std::cmp::Reverse(m.score));
             }
             SortMode::Leave => {
                 self.suggestions.sort_by(|a, b| {

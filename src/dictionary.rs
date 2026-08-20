@@ -48,6 +48,7 @@ impl Dictionary {
 
     /// True when leave values come from a fitted table rather than the
     /// per-letter heuristic.
+    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn has_leave_table(&self) -> bool {
         self.leaves.is_some()
     }
@@ -70,12 +71,14 @@ impl Dictionary {
     }
 
     /// Check if a word is valid
+    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn is_valid(&self, word: &str) -> bool {
         let upper = word.to_ascii_uppercase();
         self.fst.contains(upper.as_bytes())
     }
 
     /// Check if a prefix could lead to a valid word
+    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn has_prefix(&self, prefix: &str) -> bool {
         if prefix.is_empty() {
             return true;
