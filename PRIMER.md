@@ -16,10 +16,10 @@ Complete TUI redesign of `crossplay-solver`.
 | `settings` | `Settings` with `DisplaySettings` (`default_sort`, `sidebar_visible`), TOML persistence at `~/.config/cpsolver2/settings.toml`; constant: `LEXICON = "NWL23"` |
 | `logging` | Instance-specific logging to `/tmp/crossplay-<pid>.log` |
 | `refengine_ffi` | FFI bindings to RefEngine C library (`librefengine.dylib`), `RefEngine` safe wrapper |
-| `refengine_mcts` | `RefSimulator`, `RefSimConfig`, `RefSimResult`, `InferenceResult`, CGP conversion, adaptive simulation based on game phase. Configured with `-bb 40` at start-up so every simulated ply scores Crossplay bingos. Used only with 8+ tiles in the bag |
-| `mcts` | `MctsEvaluator`, `MctsResult`, `MctsConfig`, `TilePool` — Monte Carlo playouts under Crossplay's equal-turn ending (exact 2-ply on the last turn, score-only final move, no leftover penalties). The pre-endgame engine (1–7 tiles in the bag) and the fallback when RefEngine is unavailable; common random numbers across candidates, paired-difference pruning, Rayon parallelism |
+| `refengine_mcts` | `RefSimulator` (RefEngine handle configured with `-bb 40`), `InferenceResult`, `infer_opponent_rack()`, CGP conversion. RefEngine is used only to infer the opponent's likely leave and as the reference move generator in tests; its simulation and endgame search (Scrabble ending rules) are not used |
+| `mcts` | `MctsEvaluator`, `MctsResult`, `MctsConfig` (`for_bag`), `TilePool`, `TracePoint` — Monte Carlo playouts under Crossplay rules for every phase with the bag non-empty: greedy static-equity play (including exchanges) until the bag empties, then exact 2-ply last turn and score-only final move; cut-off positions valued as spread + leaves + tempo (±21); win probability from a normal model with sd² = 159 + 80 × bag; common random numbers across candidates, paired-difference pruning, wall-clock budget, Rayon parallelism. Also hosts the self-play studies (`study_spread_variance`, `study_bingo_probability`, ignored tests) that produced those constants |
 | `endgame` | `EndgameSolver`, `EndgameMove`, `PvMove`, `PASS_WORD` — Crossplay-native endgame solver: exact 2-ply (including passing) when the opponent replies, score-only when our move ends the game |
-| `app` | `App` (central state), `Focus`, `SortMode`, `FinalTurn` (who plays the last move once the bag is empty), `DialogState`, `BoardTab`, `handle_key()`/`handle_mouse()` event handlers, undo support, engine routing by game phase |
+| `app` | `App` (central state), `Focus`, `SortMode`, `FinalTurn` (who plays the last move once the bag is empty), `SimResult` (display record for playout/endgame results), `DialogState`, `BoardTab`, `handle_key()`/`handle_mouse()` event handlers, undo support, engine routing by game phase, background RefEngine inference |
 | `ui::theme` | Centralized color/style constants — all UI colors defined here |
 | `ui::hit` | Thread-local hit map for mouse click resolution (`HitTarget`, `register_hit()`, `resolve_click()`) |
 | `ui::events` | `AppAction` enum (`Quit`, `Redraw`, `Nothing`) |
@@ -44,8 +44,9 @@ Complete TUI redesign of `crossplay-solver`.
 6. **Clean event loop** — main loop dispatches `Event::Key` / `Event::Mouse` to `App`, which returns `AppAction`
 7. **Settings auto-persisted via keybindings** — no settings dialog; sort mode and sidebar visibility are saved on toggle
 8. **Native endgame solver** — `endgame.rs` implements Crossplay-specific 2-ply endgame (equal turn rule, no tile penalties)
-9. **Engine routing by phase** — `App::run_mcts_evaluation`: our move ends the game → sort by score; bag empty and the opponent replies → `EndgameSolver`; 1–7 tiles in the bag → native playout (`mcts.rs`); otherwise RefEngine simulation. RefEngine's own endgame solver applies Scrabble rules and is never used for ranking
-10. **Leave values from RefEngine's table** — static equity reads `NWL23.klv2` (fitted for standard Scrabble; blank/bingo-heavy leaves are somewhat overvalued for Crossplay) and falls back to the per-letter heuristic in `solver.rs` when the file is missing. Leave weight is scaled by phase: ×0.6 with one draw left, ×0.25 once the bag is empty
+9. **Engine routing by phase** — `App::run_mcts_evaluation`: our move ends the game → sort by score; bag empty and the opponent replies → `EndgameSolver`; otherwise native playouts (`mcts.rs`) with depth by bag size (2 plies with 22+ in the bag, 4 with 8–21, to the end with 1–7). Every engine applies Crossplay's ending; RefEngine's simulation and endgame solver apply Scrabble rules and are never used for ranking
+10. **Leave values from RefEngine's table, corrected** — static equity reads `NWL23.klv2` (fitted for standard Scrabble with a 50-point bingo) and subtracts 10 × (next-turn bingo probability of the leave − that of an empty leave), with the probability from a logistic model fitted on Crossplay self-play (`leaves.rs`). Falls back to the per-letter heuristic in `solver.rs` when the file is missing. Leave weight is scaled by phase: ×0.6 with one draw left, ×0.25 once the bag is empty
+11. **Exchanges** — offered and played out whenever the bag holds at least `EXCHANGE_MIN_BAG` (7) tiles; the threshold is the common word-game convention and has not been confirmed from NYT's own rules text
 
 ## Named Constants
 
@@ -79,4 +80,5 @@ The `Settings` struct contains only `DisplaySettings`:
 - Endgame: when a player draws the last tile from the bag, the *other* player gets one last turn and then the player who emptied the bag plays the final move (equal turn rule). The game then ends even if both still hold tiles
 - No leftover tile penalty — unplayed rack tiles don't affect scoring
 - No go-out bonus — emptying your rack gives no extra points
+- A turn may also be used to pass, or to exchange any number of tiles (the turn is forfeited; assumed to require at least 7 tiles in the bag)
 - Consequence for the solver: with the bag empty, the opponent only replies to our play if *they* emptied the bag. `App.final_turn` tracks this (inferred from moves applied through the app; Ctrl+E overrides it for hand-entered positions; the stats pane shows `last:OPP?` while it is only assumed)

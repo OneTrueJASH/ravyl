@@ -8,9 +8,10 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 
 - **Interactive 15x15 board** with cursor navigation, tile preview, and premium square rendering
 - **Anchor-based move generation** with cross-word validation and FST-backed dictionary lookup
-- **RefEngine integration** for Monte Carlo simulation, adaptive game-phase evaluation, and opponent rack inference via FFI to the RefEngine C engine
-- **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties, and a **Crossplay-rules playout** for the pre-endgame, when 1–7 tiles remain in the bag (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
-- **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table
+- **Crossplay-rules Monte Carlo playouts** for every phase of the game, including exchanges, with expected final spread, win probability and bingo rates per candidate (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
+- **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
+- **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
+- **Opponent rack inference** via FFI to the RefEngine C engine
 - **Mouse support** with clickable board squares, suggestions, and UI elements
 - **Fluid layout** that adapts to any terminal size, down to a borderless grid on small terminals
 - **Preferences persisted to TOML** (sort mode, sidebar visibility)
@@ -30,7 +31,7 @@ Crossplay differs from Scrabble in several important ways that affect optimal st
 
 The endgame difference is the most strategically significant. In Scrabble, emptying your rack is paramount. In Crossplay, the player who draws the last tile gets the last word: the other player takes one more turn, then the bag-emptier plays the final move, and the game ends even if both still hold tiles. So when the bag is empty on your turn, the opponent only gets a reply if *they* emptied the bag. The solver tracks this (`last:YOU`/`last:OPP` in the stats pane, Ctrl+E to override for positions entered by hand): with a reply coming it searches every play, and passing, against the opponent's best response; without one it ranks by score.
 
-With 1–7 tiles left in the bag the app plays each candidate out under these rules many times (RefEngine would apply Scrabble's go-out rules there). With more tiles in the bag, RefEngine Monte Carlo simulation — configured for the 40-point bingo — ranks the moves.
+With tiles still in the bag the app plays each candidate out many times under these rules (both sides may exchange while the bag holds 7 or more tiles), reports the expected final spread, and estimates the win probability from a variance model fitted on Crossplay self-play. RefEngine's own simulation is not used for ranking because it plays the ending under Scrabble rules; it only infers what the opponent probably kept.
 
 ## Building
 
@@ -80,7 +81,7 @@ On macOS, the `build.rs` script sets the rpath so the binary can find `librefeng
 1. **Set up the position**: Focus the board (Tab), type letters to place tiles. Press `?` on a tile to mark it as a blank.
 2. **Set your rack**: Tab to the rack, type your tile letters (`?` for blanks).
 3. **Solve**: Press `Ctrl+S` (or Enter from rack) to generate all legal moves, ranked by static equity.
-4. **Simulate**: Press `M`. With 8+ tiles in the bag this runs RefEngine Monte Carlo simulation; with 1–7 it plays the ending out under Crossplay rules; with the bag empty it runs the endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag.
+4. **Simulate**: Press `M`. With tiles in the bag this plays the candidates out under Crossplay rules (deeper as the bag empties); with the bag empty it runs the endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag. Exchanges appear as `EXCH` rows; applying one clears those tiles so you can type the replacements.
 5. **Apply**: Select a move with arrow keys and press Enter to apply it to the board.
 6. **Repeat**: After your opponent plays, update the board with their tiles and solve again.
 
