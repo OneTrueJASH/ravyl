@@ -298,15 +298,17 @@ impl<'a> Playout<'a> {
         if need > 0 {
             let drawn: Vec<Tile> = self.bag.drain(self.bag.len() - need..).collect();
             self.rack_mut(p).extend(drawn);
-            if self.bag.is_empty() {
-                self.final_turn_owner = Some(p);
-            }
         }
         if let MoveKind::Exchange(returned) = &mv.kind {
             for &tile in returned {
                 let at = self.rng.usize(..=self.bag.len());
                 self.bag.insert(at, tile);
             }
+        }
+        // Only a play can draw the last tile: an exchange puts back as many
+        // as it took, so the bag is checked after the return.
+        if need > 0 && self.bag.is_empty() {
+            self.final_turn_owner = Some(p);
         }
         if self.trace.is_some() {
             let leave_adj = self.leave_adjustment();
@@ -659,19 +661,22 @@ impl<'a> CandidateSim<'a> {
 
 /// Worth of being the player to move when a playout is cut off mid-game,
 /// in points of final spread. Measured by self-play (`study_spread_variance`,
-/// 800 games, 2026-08-20): with the bag holding 8+ tiles, the final spread
-/// minus (spread so far + leave values) averaged +17.6 / +19.6 with us to
-/// move and -20.9 / -23.2 with the opponent to move, whichever side had
-/// started the game. The same offset applies to every candidate, so it
-/// changes win estimates, not rankings.
+/// 1000 games, 2026-08-20, with racks valued through the leave table): with
+/// the bag holding 8+ tiles, the final spread minus (spread so far + leave
+/// values) averaged +18.5 / +22.7 with us to move and -22.5 / -18.7 with the
+/// opponent to move, whichever side had started the game (earlier runs of
+/// 400-800 games gave 17.6-23.2). The same offset applies to every
+/// candidate, so it changes win estimates, not rankings.
 const TEMPO: f32 = 21.0;
 
 /// Standard deviation of the spread still to come from a mid-game
 /// position, by tiles left in the bag. Same study: the variance of the
-/// residual grows linearly with the bag, var = 159 + 79.8 * bag (sd 12.6
-/// with an empty bag, 64 with 50 tiles, 84 at the start of the game).
+/// residual grows linearly with the bag, slope 79.4-79.8 per tile across
+/// runs and an intercept between 92 and 213 (few samples at small bags,
+/// where playouts usually finish exactly anyway): var = 150 + 79.8 * bag
+/// (sd 12 with an empty bag, 64 with 50 tiles, 84 at the start).
 fn remaining_spread_sd(bag: usize) -> f32 {
-    (159.4 + 79.8 * bag as f32).sqrt()
+    (150.0 + 79.8 * bag as f32).sqrt()
 }
 
 /// Standard normal CDF (Abramowitz & Stegun 7.1.26, |error| < 1.5e-7).
@@ -968,7 +973,7 @@ mod tests {
         assert!((normal_cdf(1.0) - 0.841_345).abs() < 1e-4);
         assert!((normal_cdf(-2.0) - 0.022_750).abs() < 1e-4);
         assert!(normal_cdf(10.0) > 0.999_99);
-        assert!(remaining_spread_sd(0) > 12.0 && remaining_spread_sd(0) < 13.0);
+        assert!(remaining_spread_sd(0) > 11.0 && remaining_spread_sd(0) < 13.0);
         assert!(remaining_spread_sd(86) > 80.0 && remaining_spread_sd(86) < 90.0);
     }
 
@@ -1471,6 +1476,26 @@ mod tests {
             .collect();
         assert_eq!(multiset(&before), multiset(&after));
         assert!(p.bag.iter().any(|t| t.is_blank) && p.bag.iter().any(|t| t.letter == 'Q'));
+    }
+
+    /// A seven-tile exchange with exactly seven tiles in the bag must not
+    /// count as drawing the last tile (regression: the emptiness check ran
+    /// before the exchanged tiles went back).
+    #[test]
+    fn full_exchange_with_bag_of_seven_does_not_claim_final_turn() {
+        let dict = load_default_dictionary().unwrap();
+        let mut p = Playout::new(
+            &dict,
+            Board::new(),
+            [tiles_of("UUVVWWI"), tiles_of("AAAAAAA")],
+            tiles_of("EEEEEEE"),
+            9,
+        );
+        let mv = Move::exchange(&p.racks[0], tiles_of("UUVVWWI"), 0.0);
+        p.commit(Player::Us, &mv);
+        assert_eq!(p.bag.len(), 7);
+        assert!(p.final_turn_owner.is_none());
+        assert_eq!(multiset(&p.racks[0]), multiset(&tiles_of("EEEEEEE")));
     }
 
     /// The three ways the bag can empty, each followed by exactly one more

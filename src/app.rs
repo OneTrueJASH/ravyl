@@ -47,6 +47,8 @@ pub struct SimResult {
     pub ply2_bingo_pct: f32,
     /// From the endgame solver (exact) rather than playouts
     pub is_endgame: bool,
+    /// Playouts behind the estimate (0 for exact endgame lines)
+    pub iterations: usize,
 }
 
 /// Who plays the very last move of the game.
@@ -624,6 +626,12 @@ impl App {
         self.playout_receiver.is_some() || self.endgame_receiver.is_some()
     }
 
+    /// Returns true if anything at all is still running in the background,
+    /// including opponent-rack inference (which outlives the ranking).
+    pub fn has_background_work(&self) -> bool {
+        self.is_mcts_running() || self.inference_receiver.is_some()
+    }
+
     /// Convert a playout result into the display record the suggestions
     /// table reads (bingo rates as percentages, win rate as a percentage).
     fn sim_result_from_playout(r: &MctsResult) -> SimResult {
@@ -637,6 +645,7 @@ impl App {
             ply1_bingo_pct: r.opp_bingo_rate * 100.0,
             ply2_bingo_pct: r.our_bingo_rate * 100.0,
             is_endgame: false,
+            iterations: r.iterations,
         }
     }
 
@@ -687,6 +696,7 @@ impl App {
                                 ply1_bingo_pct: 0.0,
                                 ply2_bingo_pct: 0.0,
                                 is_endgame: true,
+                                iterations: 0,
                             }
                         })
                         .collect();
@@ -1416,8 +1426,6 @@ impl App {
                 let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
                 let _ = tx.send(results);
             });
-
-            self.start_inference();
             return;
         }
 
@@ -1652,11 +1660,15 @@ impl App {
             SortMode::MctsEquity | SortMode::WinPct => {
                 let by_win = self.sort_mode == SortMode::WinPct;
                 if let Some(ref results) = self.sim_results {
+                    // Candidates pruned early carry a short-run estimate;
+                    // rank them after those that received the full budget.
+                    let full = results.iter().map(|r| r.iterations).max().unwrap_or(0);
                     let sim_map: std::collections::HashMap<_, _> = results
                         .iter()
                         .map(|r| {
                             let key = (r.word.to_uppercase(), r.row, r.col, r.direction);
-                            (key, if by_win { r.win_pct } else { r.sim_equity })
+                            let tier = if r.iterations == full { 1.0 } else { 0.0 };
+                            (key, (tier, if by_win { r.win_pct } else { r.sim_equity }))
                         })
                         .collect();
 
@@ -1797,6 +1809,38 @@ mod tests {
         assert_eq!(app.final_turn, FinalTurn::Us);
         app.reset();
         assert_eq!(app.final_turn, FinalTurn::Opponent);
+    }
+
+    /// Inference runs after the ranking finishes; the main loop must keep
+    /// polling until it has landed, or the stats pane never shows it and
+    /// the next evaluation would pick up a stale result.
+    #[test]
+    fn inference_is_polled_after_ranking() {
+        let mut app = test_app();
+        app.dictionary = Some(Arc::new(
+            crate::dictionary::load_default_dictionary().unwrap(),
+        ));
+        // Our opening, then the opponent hooked an S: the diff yields tiles.
+        app.state =
+            SolverState::from_cgp("15/15/15/15/15/15/15/3ANESTRI5/15/15/15/15/15/15/15 DEGILOU")
+                .unwrap();
+        app.last_applied_board = Some(app.state.board.clone());
+        app.state.place_tile(7, 10, 'S', false);
+        app.find_moves();
+        app.run_mcts_evaluation();
+        let started = std::time::Instant::now();
+        while app.has_background_work() && started.elapsed().as_secs() < 60 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            app.poll_mcts();
+        }
+        assert!(!app.has_background_work());
+        assert!(app.sim_results.is_some());
+        if app.refengine_simulator.is_some() {
+            assert!(
+                app.inferred_opponent_rack.is_some(),
+                "inference result never arrived"
+            );
+        }
     }
 
     #[test]

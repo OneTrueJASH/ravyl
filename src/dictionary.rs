@@ -60,6 +60,10 @@ impl Dictionary {
     /// table covers 1–6 tiles), corrected from Scrabble's 50-point bingo
     /// bonus to Crossplay's 40 (see [`bingo_bonus_correction`]); otherwise
     /// the per-letter heuristic.
+    ///
+    /// A full 7-tile rack (the racks at a playout cut-off) is valued on the
+    /// same scale as the mean of its seven 6-tile sub-leaves, each looked up
+    /// in the table, so the cut-off valuation and static equity agree.
     pub fn leave_value(&self, leave: &[Tile], unseen: Option<usize>) -> f32 {
         if leave.is_empty() {
             return 0.0;
@@ -67,6 +71,25 @@ impl Dictionary {
         if let Some(table) = &self.leaves {
             if let Some(v) = table.value(leave) {
                 return (v + bingo_bonus_correction(leave, BINGO_BONUS)) * phase_scale(unseen);
+            }
+            if leave.len() == crate::tile::RACK_SIZE {
+                let mut total = 0.0;
+                let mut found = 0;
+                for skip in 0..leave.len() {
+                    let sub: Vec<Tile> = leave
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| *i != skip)
+                        .map(|(_, t)| *t)
+                        .collect();
+                    if let Some(v) = table.value(&sub) {
+                        total += v + bingo_bonus_correction(&sub, BINGO_BONUS);
+                        found += 1;
+                    }
+                }
+                if found == leave.len() {
+                    return total / found as f32 * phase_scale(unseen);
+                }
             }
         }
         leave_value_with_phase(leave, unseen)

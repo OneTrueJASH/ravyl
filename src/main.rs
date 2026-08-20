@@ -85,8 +85,8 @@ where
     loop {
         terminal.draw(|f| draw_ui(f, app))?;
 
-        // Poll for simulation results.
-        if app.is_mcts_running() {
+        // Poll for evaluation and inference results.
+        if app.has_background_work() {
             app.poll_mcts();
         }
 
