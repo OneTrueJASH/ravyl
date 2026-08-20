@@ -406,7 +406,13 @@ mod ui_tests {
     #[test]
     #[ignore]
     fn ui_snapshots() {
-        let app = sample_app();
+        let mut app = sample_app();
+        // Evaluate so the results columns are populated in the renders.
+        app.run_mcts_evaluation();
+        while app.is_mcts_running() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            app.poll_mcts();
+        }
         for (w, h) in [(200, 52), (170, 45), (120, 36), (90, 30), (80, 24)] {
             println!("===== {}x{} =====", w, h);
             for line in render_at(&app, w, h) {

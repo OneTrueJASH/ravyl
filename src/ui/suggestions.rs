@@ -163,7 +163,7 @@ pub fn render_suggestions(
             Cell::from("Pos").style(hdr_style),
             Cell::from("Word").style(hdr_style),
             right("Score", hdr_style),
-            right("Equity", hdr_style),
+            right("Sim", hdr_style),
             right("Win%", hdr_style),
             right("Bingo", hdr_style),
             Cell::from("Leave").style(hdr_style),

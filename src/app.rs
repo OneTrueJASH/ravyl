@@ -169,7 +169,7 @@ impl SortMode {
     pub fn label(&self) -> &'static str {
         match self {
             SortMode::Equity => "Equity",
-            SortMode::MctsEquity => "RefEngine",
+            SortMode::MctsEquity => "Sim",
             SortMode::WinPct => "Win%",
             SortMode::Score => "Score",
             SortMode::Leave => "Leave",
