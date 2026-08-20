@@ -277,10 +277,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             let content = vec![
                 Line::from(""),
                 Line::from(vec![
-                    Span::styled(
-                        "  Score: ",
-                        Style::default().fg(ui::theme::TEXT_PRIMARY),
-                    ),
+                    Span::styled("  Score: ", Style::default().fg(ui::theme::TEXT_PRIMARY)),
                     Span::styled(
                         &display,
                         Style::default()

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use fst::raw::Node;
 use fst::Set;
 
 /// Dictionary loaded from a pre-compiled FST for fast lookups
@@ -55,6 +56,31 @@ impl Dictionary {
         } else {
             false
         }
+    }
+
+    /// Root node of the underlying FST, for incremental prefix walking.
+    ///
+    /// The move generator descends one letter at a time with [`Self::child`]
+    /// instead of re-validating whole prefixes, so each step is a single
+    /// transition lookup rather than a range query.
+    #[inline]
+    pub fn root(&self) -> Node<'_> {
+        self.fst.as_fst().root()
+    }
+
+    /// Follow the transition for `byte` (an uppercase ASCII letter) out of
+    /// `node`, returning the child node if the extended prefix exists.
+    #[inline]
+    pub fn child(&self, node: Node<'_>, byte: u8) -> Option<Node<'_>> {
+        node.find_input(byte)
+            .map(|i| self.fst.as_fst().node(node.transition(i).addr))
+    }
+
+    /// Node reached by following a transition's address (used when iterating
+    /// a node's transitions directly).
+    #[inline]
+    pub fn node_at(&self, addr: fst::raw::CompiledAddr) -> Node<'_> {
+        self.fst.as_fst().node(addr)
     }
 
     /// Get the total number of words in the dictionary

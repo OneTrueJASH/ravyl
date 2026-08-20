@@ -844,10 +844,7 @@ impl App {
             our_score: self.our_score,
             opp_score: self.opp_score,
             last_applied_board: self.last_applied_board.clone(),
-            message: format!(
-                "Score: {}-{}",
-                self.our_score, self.opp_score
-            ),
+            message: format!("Score: {}-{}", self.our_score, self.opp_score),
         });
 
         let label = match target {

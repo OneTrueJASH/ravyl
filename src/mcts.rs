@@ -199,9 +199,14 @@ impl MctsEvaluator {
         let mut iterations_completed = 0;
 
         for _ in 0..self.config.iterations_per_candidate {
-            if let Some(result) =
-                self.simulate_iteration(&base_state, mv, &base_pool, unseen_count, dictionary, &mut rng)
-            {
+            if let Some(result) = self.simulate_iteration(
+                &base_state,
+                mv,
+                &base_pool,
+                unseen_count,
+                dictionary,
+                &mut rng,
+            ) {
                 total_spread += result.spread;
                 iterations_completed += 1;
             }
@@ -245,7 +250,10 @@ impl MctsEvaluator {
         let mut sim_state = base_state.clone();
         let (opp_score, opp_leave_equity) = if let Some(best_opp) = opp_moves.first() {
             sim_state.apply_move(best_opp);
-            (best_opp.score, leave_value_with_phase(&best_opp.leave, Some(unseen_count)))
+            (
+                best_opp.score,
+                leave_value_with_phase(&best_opp.leave, Some(unseen_count)),
+            )
         } else {
             (0, 0.0)
         };
@@ -274,9 +282,15 @@ impl MctsEvaluator {
 
         let (followup_score, our_leave_equity) = if let Some(best_followup) = followup_moves.first()
         {
-            (best_followup.score, leave_value_with_phase(&best_followup.leave, Some(unseen_count)))
+            (
+                best_followup.score,
+                leave_value_with_phase(&best_followup.leave, Some(unseen_count)),
+            )
         } else {
-            (0, leave_value_with_phase(&followup_rack.tiles(), Some(unseen_count)))
+            (
+                0,
+                leave_value_with_phase(&followup_rack.tiles(), Some(unseen_count)),
+            )
         };
 
         // 6. Calculate spread and leave differences
