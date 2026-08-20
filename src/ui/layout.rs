@@ -5,15 +5,19 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-use crate::board::BOARD_SIZE;
+use crate::ui::board_view::BoardGeometry;
 
-/// Minimum cell dimensions.
-const MIN_CELL_WIDTH: u16 = 7;
-const MIN_CELL_HEIGHT: u16 = 4;
+/// Narrowest board pane worth keeping next to a sidebar: the compact grid
+/// (5 + 14*4) plus its border.
+pub const BOARD_MIN_WIDTH: u16 = 63;
+/// Narrowest board pane that still shows every square (mini grid + border).
+const BOARD_ABS_MIN_WIDTH: u16 = 47;
+const MIN_LAYOUT_HEIGHT: u16 = 20;
 
-/// Absolute minimum board grid size.
-pub const BOARD_MIN_WIDTH: u16 = 93; // 7 + 14*6 + 2
-const BOARD_MIN_HEIGHT: u16 = 48; // 4 + 14*3 + 2
+/// Sidebar width needed for the rack tiles (7 x 5 + gaps + border).
+const MIN_SIDEBAR_WIDTH: u16 = 45;
+/// Gap between the board pane and the sidebar.
+const GAP: u16 = 1;
 
 /// Minimum sidebar width where suggestions are useful.
 const SUGGESTIONS_MIN_WIDTH: u16 = 30;
@@ -39,15 +43,13 @@ pub struct AppLayout {
 }
 
 impl AppLayout {
-    /// Calculate ideal board pane width so cells maintain a ~7:4 aspect ratio.
+    /// Board pane width (grid + border) for the geometry that the terminal
+    /// height allows, given unlimited width.
     fn ideal_board_width(terminal_height: u16) -> u16 {
         // Vertical overhead: title(1) + tab(1) + message(1) + status(1) + board border(2)
         let board_inner_h = terminal_height.saturating_sub(6);
-        let max_cell_h = board_inner_h
-            .div_ceil(BOARD_SIZE as u16)
-            .max(MIN_CELL_HEIGHT);
-        let cell_w = (max_cell_h * 7 / 4).max(MIN_CELL_WIDTH);
-        (BOARD_SIZE as u16 * cell_w - (BOARD_SIZE as u16 - 1)) + 2 // grid width + outer border
+        let geometry = BoardGeometry::fit(u16::MAX, board_inner_h);
+        geometry.grid_size().0 + 2
     }
 
     /// Compute layout from terminal size.
@@ -67,7 +69,7 @@ impl AppLayout {
         let status_bar = vert[2];
 
         // If too small for any meaningful layout, give everything to board.
-        if area.width < BOARD_MIN_WIDTH || area.height < 20 {
+        if area.width < BOARD_ABS_MIN_WIDTH || area.height < MIN_LAYOUT_HEIGHT {
             return AppLayout {
                 title_bar,
                 board_area: content,
@@ -80,32 +82,34 @@ impl AppLayout {
             };
         }
 
-        // Determine board width: ideal from height, clamped to leave room for sidebar.
-        let min_sidebar = 45u16; // rack tiles need ~41
-        let gap = 1u16; // visual gap between left and right halves
-        let ideal_bw = Self::ideal_board_width(area.height)
-            .max(BOARD_MIN_WIDTH)
-            .min(area.width.saturating_sub(min_sidebar + gap));
+        // The board comes first: the sidebar only appears once both fit.
+        let has_sidebar = area.width >= BOARD_MIN_WIDTH + GAP + MIN_SIDEBAR_WIDTH;
+        let (board_section, sidebar) = if has_sidebar {
+            // Board width: ideal from height, clamped to leave room for sidebar.
+            let ideal_bw = Self::ideal_board_width(area.height)
+                .max(BOARD_MIN_WIDTH)
+                .min(area.width - (MIN_SIDEBAR_WIDTH + GAP));
 
-        // Horizontal: board | gap | sidebar
-        let horiz = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(ideal_bw),
-                Constraint::Length(gap),
-                Constraint::Fill(1),
-            ])
-            .split(content);
-
-        let board_section = horiz[0];
-        let sidebar = horiz[2];
+            // Horizontal: board | gap | sidebar
+            let horiz = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(ideal_bw),
+                    Constraint::Length(GAP),
+                    Constraint::Fill(1),
+                ])
+                .split(content);
+            (horiz[0], horiz[2])
+        } else {
+            (content, Rect::default())
+        };
 
         // Board section: tab(1) | board | message(1)
         let board_v = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Min(BOARD_MIN_HEIGHT),
+                Constraint::Min(1),
                 Constraint::Length(1),
             ])
             .split(board_section);

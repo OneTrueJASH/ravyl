@@ -19,6 +19,84 @@ use crate::ui::theme;
 const MIN_CELL_WIDTH: u16 = 7;
 const MIN_CELL_HEIGHT: u16 = 4;
 
+/// How board cells are drawn for the space available.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoardGeometry {
+    pub cell_w: u16,
+    pub cell_h: u16,
+    /// Cells share thick borders (cell_h >= 3); otherwise the grid is a
+    /// plain coloured matrix with one row per board row.
+    pub bordered: bool,
+}
+
+impl BoardGeometry {
+    /// Largest geometry that fits in `inner_w` x `inner_h` cells.
+    ///
+    /// Full size keeps a ~7:4 cell aspect with 4+ row cells (needs 46 rows);
+    /// compact uses 3-row cells with a single content row (needs 31 rows);
+    /// below that the board is a borderless grid with 1-row cells.
+    pub fn fit(inner_w: u16, inner_h: u16) -> Self {
+        let n = BOARD_SIZE as u16;
+        // Bordered grids share borders: total = cell + (n - 1) * (cell - 1).
+        let bordered_fits = |cell_w: u16, cell_h: u16| {
+            cell_w + (n - 1) * (cell_w - 1) <= inner_w && cell_h + (n - 1) * (cell_h - 1) <= inner_h
+        };
+
+        if bordered_fits(MIN_CELL_WIDTH, MIN_CELL_HEIGHT) {
+            let max_from_width = inner_w.div_ceil(n);
+            let max_from_height = inner_h.div_ceil(n);
+            let cell_h_for_width = (max_from_width * 4 + 3) / 7;
+            let cell_h = max_from_height.min(cell_h_for_width).max(MIN_CELL_HEIGHT);
+            let cell_w = (cell_h * 7 / 4).max(MIN_CELL_WIDTH);
+            return BoardGeometry {
+                cell_w,
+                cell_h,
+                bordered: true,
+            };
+        }
+
+        // Compact: 3-row cells, as wide as fits between 5 and 7.
+        for cell_w in (5..=7).rev() {
+            if bordered_fits(cell_w, 3) {
+                return BoardGeometry {
+                    cell_w,
+                    cell_h: 3,
+                    bordered: true,
+                };
+            }
+        }
+
+        // Mini: borderless, one row per board row, 3-4 columns per cell.
+        let cell_w = (inner_w / n).clamp(3, 4);
+        BoardGeometry {
+            cell_w,
+            cell_h: 1,
+            bordered: false,
+        }
+    }
+
+    /// Total grid size in terminal cells.
+    pub fn grid_size(&self) -> (u16, u16) {
+        let n = BOARD_SIZE as u16;
+        if self.bordered {
+            (
+                self.cell_w + (n - 1) * (self.cell_w - 1),
+                self.cell_h + (n - 1) * (self.cell_h - 1),
+            )
+        } else {
+            (self.cell_w * n, self.cell_h * n)
+        }
+    }
+
+    fn step(&self) -> (u16, u16) {
+        if self.bordered {
+            (self.cell_w - 1, self.cell_h - 1)
+        } else {
+            (self.cell_w, self.cell_h)
+        }
+    }
+}
+
 fn premium_label(premium: &Premium) -> &'static str {
     match premium {
         Premium::TripleWord => "3W",
@@ -47,6 +125,7 @@ pub struct BoardWidget<'a> {
     is_focused: bool,
     typing_direction: Direction,
     preview: HashMap<(usize, usize), &'a Tile>,
+    geometry: BoardGeometry,
 }
 
 impl<'a> BoardWidget<'a> {
@@ -66,6 +145,11 @@ impl<'a> BoardWidget<'a> {
             is_focused,
             typing_direction,
             preview,
+            geometry: BoardGeometry {
+                cell_w: MIN_CELL_WIDTH,
+                cell_h: MIN_CELL_HEIGHT,
+                bordered: true,
+            },
         }
     }
 
@@ -85,18 +169,22 @@ impl<'a> BoardWidget<'a> {
         tile_value: Option<u32>,
     ) {
         let cell_area = Rect::new(x, y, cell_w, cell_h);
-        let block = Block::bordered()
-            .border_type(BorderType::Thick)
-            .border_style(Style::new().fg(border_color).bold())
-            .merge_borders(MergeStrategy::Exact);
-        block.render(cell_area, buf);
-
-        let inner = Rect::new(
-            x + 1,
-            y + 1,
-            cell_w.saturating_sub(2),
-            cell_h.saturating_sub(2),
-        );
+        let inner = if self.geometry.bordered {
+            let block = Block::bordered()
+                .border_type(BorderType::Thick)
+                .border_style(Style::new().fg(border_color).bold())
+                .merge_borders(MergeStrategy::Exact);
+            block.render(cell_area, buf);
+            Rect::new(
+                x + 1,
+                y + 1,
+                cell_w.saturating_sub(2),
+                cell_h.saturating_sub(2),
+            )
+        } else {
+            // Borderless: leave the last column as a gap between cells.
+            Rect::new(x, y, cell_w.saturating_sub(1), cell_h)
+        };
 
         if let Some(bg) = bg_color {
             let fill_style = Style::new().bg(bg);
@@ -111,7 +199,13 @@ impl<'a> BoardWidget<'a> {
 
         if !label.is_empty() && inner.height > 0 && inner.width > 0 {
             let label_len = label.chars().count() as u16;
-            let label_x = inner.x + inner.width.saturating_sub(label_len) / 2;
+            // With a single content row the value shares it: keep the label
+            // at the left so the two never collide.
+            let label_x = if inner.height == 1 && tile_value.is_some() {
+                inner.x
+            } else {
+                inner.x + inner.width.saturating_sub(label_len) / 2
+            };
             let label_y = inner.y + inner.height / 2;
             let style = if let Some(bg) = bg_color {
                 Style::new().fg(fg_color).bg(bg).bold()
@@ -163,7 +257,7 @@ impl<'a> BoardWidget<'a> {
 }
 
 impl Widget for BoardWidget<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+    fn render(mut self, area: Rect, buf: &mut Buffer) {
         let border_color = if self.is_focused {
             theme::TAB_BOARD_ACTIVE
         } else {
@@ -180,17 +274,10 @@ impl Widget for BoardWidget<'_> {
         // Register focus pane hit for the whole board area.
         register_hit(area, HitTarget::FocusPane(crate::app::Focus::Board));
 
-        let max_from_width = inner.width.div_ceil(BOARD_SIZE as u16);
-        let max_from_height = inner.height.div_ceil(BOARD_SIZE as u16);
-        let cell_h_for_width = (max_from_width * 4 + 3) / 7;
-        let cell_h = max_from_height.min(cell_h_for_width).max(MIN_CELL_HEIGHT);
-        let cell_w = (cell_h * 7 / 4).max(MIN_CELL_WIDTH);
-
-        let step_x = cell_w - 1;
-        let step_y = cell_h - 1;
-
-        let board_w = cell_w + (BOARD_SIZE as u16 - 1) * step_x;
-        let board_h = cell_h + (BOARD_SIZE as u16 - 1) * step_y;
+        self.geometry = BoardGeometry::fit(inner.width, inner.height);
+        let BoardGeometry { cell_w, cell_h, .. } = self.geometry;
+        let (step_x, step_y) = self.geometry.step();
+        let (board_w, board_h) = self.geometry.grid_size();
 
         let start_x = inner.x + (inner.width.saturating_sub(board_w)) / 2;
         let start_y = inner.y + (inner.height.saturating_sub(board_h)) / 2;
@@ -303,6 +390,13 @@ impl Widget for BoardWidget<'_> {
                         .expect("row/col within board dimensions");
                     let fg = premium_fg(&board_cell.premium);
                     let label = premium_label(&board_cell.premium);
+                    // Without borders an empty plain square needs some ink
+                    // or the grid disappears.
+                    let label = if !self.geometry.bordered && label.is_empty() {
+                        "\u{00b7}"
+                    } else {
+                        label
+                    };
                     self.draw_cell(
                         buf, cell_x, cell_y, cell_w, cell_h, border, None, fg, label, false, None,
                     );

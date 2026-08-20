@@ -203,6 +203,7 @@ pub fn render_suggestions(
 
     let header = if sim_lookup.is_refengine() {
         Row::new(vec![
+            Cell::from("Pos").style(hdr_style),
             Cell::from("Word").style(hdr_style),
             right("Score", hdr_style),
             right("Equity", hdr_style),
@@ -212,6 +213,7 @@ pub fn render_suggestions(
         ])
     } else if has_sim {
         Row::new(vec![
+            Cell::from("Pos").style(hdr_style),
             Cell::from("Word").style(hdr_style),
             right("Score", hdr_style),
             right("Equity", hdr_style),
@@ -221,6 +223,7 @@ pub fn render_suggestions(
         ])
     } else {
         Row::new(vec![
+            Cell::from("Pos").style(hdr_style),
             Cell::from("Word").style(hdr_style),
             right("Score", hdr_style),
             right("Equity", hdr_style),
@@ -230,11 +233,15 @@ pub fn render_suggestions(
     .style(Style::new().fg(theme::TEXT_DIM))
     .bottom_margin(0);
 
-    // Register per-row hits.
-    // We need to estimate row positions. The block border is 1, header is 1, padding 0.
+    // Register per-row hits. The table state is rebuilt every frame with
+    // offset 0, so ratatui scrolls just enough to show the selected row:
+    // offset = selected - (visible - 1) once the selection is past the
+    // first page. Mirror that here so clicks map to the rows on screen.
+    let visible = area.height.saturating_sub(3) as usize; // borders + header
+    let offset = selected.saturating_sub(visible.saturating_sub(1));
     let inner_start_y = area.y + 2; // border(1) + header(1)
-    for (i, _) in moves.iter().enumerate() {
-        let row_y = inner_start_y + i as u16;
+    for (slot, i) in (offset..moves.len()).enumerate() {
+        let row_y = inner_start_y + slot as u16;
         if row_y < area.y + area.height.saturating_sub(1) {
             register_hit(
                 Rect::new(area.x, row_y, area.width, 1),
@@ -251,6 +258,7 @@ pub fn render_suggestions(
             } else {
                 mv.word.clone()
             };
+            let pos_cell = Cell::from(mv.coords()).style(Style::new().fg(theme::TEXT_DIM));
             let word_cell = Cell::from(word_text).style(Style::new().bold());
             let pts_cell = right(&format!("{}", mv.score), Style::new().fg(theme::SCORE_FG));
             let equity_cell = right(
@@ -301,10 +309,11 @@ pub fn render_suggestions(
                     let bingo_cell = right(&bingo_text, Style::new().fg(bingo_color));
 
                     Row::new(vec![
-                        word_cell, pts_cell, sim_cell, win_cell, bingo_cell, tiles_cell,
+                        pos_cell, word_cell, pts_cell, sim_cell, win_cell, bingo_cell, tiles_cell,
                     ])
                 } else {
                     Row::new(vec![
+                        pos_cell,
                         word_cell,
                         pts_cell,
                         Cell::from("-").style(Style::new().fg(theme::TEXT_DIM)),
@@ -335,6 +344,7 @@ pub fn render_suggestions(
                     )
                 };
                 Row::new(vec![
+                    pos_cell,
                     word_cell,
                     pts_cell,
                     equity_cell,
@@ -343,13 +353,14 @@ pub fn render_suggestions(
                     tiles_cell,
                 ])
             } else {
-                Row::new(vec![word_cell, pts_cell, equity_cell, tiles_cell])
+                Row::new(vec![pos_cell, word_cell, pts_cell, equity_cell, tiles_cell])
             }
         })
         .collect();
 
     let widths = if sim_lookup.is_refengine() {
         vec![
+            Constraint::Length(4),
             Constraint::Length(10),
             Constraint::Length(5),
             Constraint::Length(6),
@@ -359,6 +370,7 @@ pub fn render_suggestions(
         ]
     } else if has_sim {
         vec![
+            Constraint::Length(4),
             Constraint::Length(10),
             Constraint::Length(5),
             Constraint::Length(6),
@@ -368,6 +380,7 @@ pub fn render_suggestions(
         ]
     } else {
         vec![
+            Constraint::Length(4),
             Constraint::Length(10),
             Constraint::Length(5),
             Constraint::Length(6),

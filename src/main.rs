@@ -296,3 +296,112 @@ fn draw_ui(frame: &mut Frame, app: &App) {
         }
     }
 }
+
+#[cfg(test)]
+mod ui_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    /// Render the whole UI at a terminal size and return it as text lines.
+    fn render_at(app: &App, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw_ui(f, app)).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn sample_app() -> App {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let mut app = App::with_settings(settings::Settings::default());
+        let dict = dictionary::load_default_dictionary().unwrap();
+        app.set_dictionary(dict);
+        app.state = game::SolverState::from_cgp(
+            "15/15/15/15/15/15/15/3BEECH7/7I7/7K7/7E7/7r7/15/15/15 AEINRS?",
+        )
+        .unwrap();
+        app.our_score = 42;
+        app.opp_score = 57;
+        app.find_moves();
+        app.focus = Focus::Suggestions;
+        // Preview a move that stays clear of the top and bottom rows, so the
+        // edge premium squares remain visible for the layout checks.
+        app.selected_suggestion = app
+            .suggestions
+            .iter()
+            .position(|m| m.tiles_used.iter().all(|(r, _, _)| *r != 0 && *r != 14))
+            .unwrap_or(0);
+        app
+    }
+
+    /// Every board row must be visible at common terminal sizes: the board
+    /// picks a geometry that fits instead of clipping its bottom rows.
+    #[test]
+    fn board_fits_common_terminal_sizes() {
+        let app = sample_app();
+        for (w, h) in [
+            (220, 60),
+            (200, 50),
+            (170, 45),
+            (140, 40),
+            (120, 34),
+            (100, 30),
+            (80, 24),
+        ] {
+            let lines = render_at(&app, w, h);
+            let text = lines.join("\n");
+            // Rows 1 and 15 read 3L .. 3W .. 2L .. 3W .. 3L left to right and
+            // no other row does; both must be on screen.
+            let edge_rows = lines
+                .iter()
+                .filter(|l| {
+                    let b = match l.find("3W") {
+                        Some(b) => b,
+                        None => return false,
+                    };
+                    let c = match l[b..].find("2L") {
+                        Some(c) => b + c,
+                        None => return false,
+                    };
+                    let d = match l[c..].find("3W") {
+                        Some(d) => c + d,
+                        None => return false,
+                    };
+                    matches!((l.find("3L"), l.rfind("3L")), (Some(a), Some(e)) if a < b && d < e)
+                })
+                .count();
+            assert_eq!(
+                edge_rows, 2,
+                "{}x{}: expected top and bottom board rows on screen\n{}",
+                w, h, text
+            );
+            assert!(
+                lines.iter().any(|l| l.contains('K') && l.contains('6')),
+                "{}x{}: K tile missing\n{}",
+                w,
+                h,
+                text
+            );
+        }
+    }
+
+    /// Dump renders for eyeballing. Run with
+    /// `cargo test --release ui_snapshots -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn ui_snapshots() {
+        let app = sample_app();
+        for (w, h) in [(200, 52), (170, 45), (120, 36), (90, 30), (80, 24)] {
+            println!("===== {}x{} =====", w, h);
+            for line in render_at(&app, w, h) {
+                println!("{}", line.trim_end());
+            }
+        }
+    }
+}
