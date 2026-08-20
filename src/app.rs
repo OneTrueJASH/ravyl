@@ -30,6 +30,40 @@ pub enum ScoreTarget {
     Opponent,
 }
 
+/// Who plays the very last move of the game.
+///
+/// Crossplay's equal-turn rule: when a player draws the last tile from the
+/// bag, the other player gets one more turn and then the player who emptied
+/// the bag plays the final move. So when the bag is empty on our turn, the
+/// opponent only gets to reply if *they* emptied the bag. The app infers
+/// this from moves applied through the suggestions list and the user can
+/// override it with Ctrl+E.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FinalTurn {
+    /// The opponent emptied the bag: we play our last turn, they reply.
+    #[default]
+    Opponent,
+    /// We emptied the bag: the opponent has already played their last
+    /// turn, so our next move ends the game.
+    Us,
+}
+
+impl FinalTurn {
+    pub fn toggle(self) -> Self {
+        match self {
+            FinalTurn::Opponent => FinalTurn::Us,
+            FinalTurn::Us => FinalTurn::Opponent,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FinalTurn::Opponent => "OPP",
+            FinalTurn::Us => "YOU",
+        }
+    }
+}
+
 /// Dialog state for popup interactions
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DialogState {
@@ -133,6 +167,7 @@ struct UndoState {
     our_score: u32,
     opp_score: u32,
     last_applied_board: Option<Board>,
+    final_turn: FinalTurn,
     message: String,
 }
 
@@ -184,6 +219,8 @@ pub struct App {
     pub settings: Settings,
     pub our_score: u32,
     pub opp_score: u32,
+    /// Who has the final move once the bag is empty (see [`FinalTurn`]).
+    pub final_turn: FinalTurn,
 }
 
 impl App {
@@ -236,6 +273,7 @@ impl App {
             settings,
             our_score: 0,
             opp_score: 0,
+            final_turn: FinalTurn::default(),
         }
     }
 
@@ -257,6 +295,15 @@ impl App {
         // Backslash toggles sidebar.
         if key.code == KeyCode::Char('\\') && !self.has_dialog() {
             self.toggle_sidebar();
+            return AppAction::Redraw;
+        }
+
+        // Ctrl+E toggles who has the final turn of the game.
+        if key.code == KeyCode::Char('e')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && !self.has_dialog()
+        {
+            self.toggle_final_turn();
             return AppAction::Redraw;
         }
 
@@ -634,7 +681,7 @@ impl App {
                     }
 
                     self.message = Some(format!(
-                        "Endgame: {} moves evaluated (Crossplay rules, no tile penalty)",
+                        "Endgame: {} moves ranked by score minus opponent's best reply",
                         count
                     ));
                     return true;
@@ -844,6 +891,7 @@ impl App {
             our_score: self.our_score,
             opp_score: self.opp_score,
             last_applied_board: self.last_applied_board.clone(),
+            final_turn: self.final_turn,
             message: format!("Score: {}-{}", self.our_score, self.opp_score),
         });
 
@@ -1034,6 +1082,28 @@ impl App {
         // inference from the next RefEngine simulation.
     }
 
+    /// Flip who has the final move of the game (see [`FinalTurn`]).
+    pub fn toggle_final_turn(&mut self) {
+        self.final_turn = self.final_turn.toggle();
+        self.clear_suggestions();
+        self.message = Some(match self.final_turn {
+            FinalTurn::Opponent => {
+                "Final turn: opponent (they emptied the bag — they reply to your play)".to_string()
+            }
+            FinalTurn::Us => {
+                "Final turn: you (you emptied the bag — no reply after your play)".to_string()
+            }
+        });
+    }
+
+    /// True when our next play is the last move of the game: either the
+    /// opponent has no tiles, or the bag is empty and we emptied it (the
+    /// opponent has already taken their last turn).
+    pub fn our_move_ends_game(&self) -> bool {
+        let unseen = self.state.unseen_tile_count();
+        unseen == 0 || (self.state.is_endgame() && self.final_turn == FinalTurn::Us)
+    }
+
     /// Run the solver to generate all legal moves for the current board and rack.
     pub fn find_moves(&mut self) {
         if self.state.rack.is_empty() {
@@ -1054,6 +1124,7 @@ impl App {
                 our_score: self.our_score,
                 opp_score: self.opp_score,
                 last_applied_board: self.last_applied_board.clone(),
+                final_turn: self.final_turn,
                 message: format!("Before opp: {}", word),
             });
             self.opp_score += score;
@@ -1075,9 +1146,11 @@ impl App {
             let mut all_suggestions = self.state.get_suggestions(dict);
             let total_count = all_suggestions.len();
 
-            let is_last_move = self.state.unseen_tile_count() == 0;
+            let is_last_move = self.our_move_ends_game();
 
             if is_last_move {
+                // No reply is coming and there is no leave to protect:
+                // rank by raw score.
                 all_suggestions.sort_by(|a, b| b.score.cmp(&a.score));
             } else {
                 const MAX_SUGGESTIONS: usize = 100;
@@ -1092,7 +1165,10 @@ impl App {
             if self.suggestions.is_empty() {
                 self.message = Some("No valid moves found".to_string());
             } else if is_last_move {
-                self.message = Some(format!("Last move: {} plays", total_count));
+                self.message = Some(format!(
+                    "Final move of the game: {} plays, sorted by score",
+                    total_count
+                ));
             } else if total_count > 100 {
                 self.message = Some(format!("Showing top 100 of {} moves", total_count));
             } else {
@@ -1277,38 +1353,24 @@ impl App {
         }
 
         let unseen = RefSimulator::unseen_count(&self.state);
-        if unseen == 0 {
-            // No opponent tiles remain — this is our absolute last move.
-            // Covers the case where we emptied the bag, the opponent already
-            // played their final turn, and now it's our turn with nothing left
-            // to respond to. Pure score maximization (no 2-ply needed).
+        if self.our_move_ends_game() {
+            // Nothing follows our play: either the opponent has no tiles, or
+            // we emptied the bag and they have already taken their last turn.
+            // Pure score maximization, no search needed.
             self.sort_mode = SortMode::Score;
             self.apply_sort();
             self.selected_suggestion = 0;
             self.message = Some(format!(
-                "Last move: {} plays (sorted by score)",
+                "Final move of the game: {} plays, sorted by score",
                 self.suggestions.len()
             ));
             return;
         }
 
-        // Endgame: use Crossplay-native solver (no leftover tile penalties).
-        //
-        // When unseen > 0 and is_endgame(), the opponent still holds tiles and
-        // will play after us. opponent_has_turn=true is always correct here:
-        //
-        //   Crossplay turn order after bag empties:
-        //     1. Player who did NOT empty the bag plays their last turn
-        //     2. Player who emptied the bag plays their final turn
-        //
-        //   From this tool's perspective, we are always choosing OUR next move.
-        //   If the opponent has tiles (unseen > 0), they will respond to our
-        //   move, so we need 2-ply search (our move minus opponent's best reply).
-        //
-        //   The "we go last, no response" case is handled above (unseen == 0):
-        //   the opponent already played, their tiles are gone, and we just
-        //   maximize our own score.
-        if RefSimulator::is_endgame(&self.state) && unseen > 0 {
+        // Bag empty, opponent still holds tiles and gets the final move:
+        // exact 2-ply search with the Crossplay-native solver (our score
+        // minus the opponent's best reply; no leftover-tile penalties).
+        if self.state.is_endgame() {
             if let Some(dict) = self.dictionary.clone() {
                 let state = self.state.clone();
                 let total_moves = self.suggestions.len();
@@ -1319,7 +1381,7 @@ impl App {
                     spinner_frame: 0,
                 });
                 self.message = Some(format!(
-                    "Endgame solver: evaluating {} moves ({} opp tiles)...",
+                    "Endgame solver: evaluating {} moves against {} opponent tiles...",
                     total_moves, unseen
                 ));
 
@@ -1343,8 +1405,6 @@ impl App {
                     }
 
                     let our_rack: Vec<_> = state.rack.tiles();
-                    // 2-ply: we play, opponent responds with their best move.
-                    // See comment above for why opponent_has_turn is always true here.
                     let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
                     let _ = tx.send(results);
                 });
@@ -1443,6 +1503,7 @@ impl App {
             our_score: self.our_score,
             opp_score: self.opp_score,
             last_applied_board: self.last_applied_board.clone(),
+            final_turn: self.final_turn,
             message: format!(
                 "Before: {}",
                 self.suggestions[self.selected_suggestion].word
@@ -1450,6 +1511,24 @@ impl App {
         });
 
         let mv = self.suggestions[self.selected_suggestion].clone();
+
+        // Track who empties the bag. While the bag has tiles the opponent
+        // holds a full rack, so bag = unseen - RACK_SIZE. If this play draws
+        // the last tile we get the final move; otherwise the opponent's next
+        // play is the one that could empty it, which would give them the
+        // final move.
+        let bag_before = self
+            .state
+            .unseen_tile_count()
+            .saturating_sub(crate::tile::RACK_SIZE);
+        if bag_before > 0 {
+            self.final_turn = if mv.tiles_used.len() >= bag_before {
+                FinalTurn::Us
+            } else {
+                FinalTurn::Opponent
+            };
+        }
+
         self.state.apply_move(&mv);
         self.our_score += mv.score;
         self.last_applied_board = Some(self.state.board.clone());
@@ -1474,6 +1553,7 @@ impl App {
             self.our_score = undo_state.our_score;
             self.opp_score = undo_state.opp_score;
             self.last_applied_board = undo_state.last_applied_board;
+            self.final_turn = undo_state.final_turn;
             self.clear_suggestions();
             self.message = Some(format!("Undone: {}", undo_state.message));
         } else {
@@ -1509,6 +1589,7 @@ impl App {
         self.pre_opponent_board = None;
         self.our_score = 0;
         self.opp_score = 0;
+        self.final_turn = FinalTurn::default();
         self.message = Some("Reset complete".to_string());
     }
 
@@ -1674,5 +1755,102 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::SolverState;
+
+    /// Build an App without touching the user's settings file.
+    fn test_app() -> App {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        App::with_settings(Settings::default())
+    }
+
+    /// The full Crossplay tile set, in distribution order.
+    const TILE_SET: &str = "AAAAAAAAABBCCDDDDEEEEEEEEEEEEFFGGGHHHIIIIIIIIJKLLLLMMNNNNNOOOOOOOOPPQRRRRRRSSSSSTTTTTTUUUVVWWXYYZ???";
+
+    /// Put the first `on_board` tiles of the set on the board (row-major)
+    /// and the next `in_rack` tiles in our rack, so exactly
+    /// `100 - on_board - in_rack` tiles are unseen.
+    fn state_with(on_board: usize, in_rack: usize) -> SolverState {
+        let mut state = SolverState::new();
+        let tiles: Vec<char> = TILE_SET.chars().collect();
+        for (i, &ch) in tiles.iter().take(on_board).enumerate() {
+            state.place_tile(i / BOARD_SIZE, i % BOARD_SIZE, ch, false);
+        }
+        for &ch in tiles.iter().skip(on_board).take(in_rack) {
+            assert!(state.add_to_rack(ch));
+        }
+        state
+    }
+
+    fn fake_move(tiles: usize) -> Move {
+        Move {
+            word: "X".repeat(tiles),
+            row: 7,
+            col: 0,
+            direction: Direction::Horizontal,
+            score: 5,
+            tiles_used: (0..tiles).map(|i| (7, i, Tile::new('X'))).collect(),
+            is_bingo: false,
+            leave: vec![],
+            equity: 5.0,
+        }
+    }
+
+    #[test]
+    fn final_turn_inferred_from_applied_move() {
+        let mut app = test_app();
+        app.dictionary = Some(Arc::new(
+            crate::dictionary::load_default_dictionary().unwrap(),
+        ));
+
+        // 80 tiles on the board + 7 in our rack = 13 unseen = bag of 6.
+        app.state = state_with(80, 7);
+        assert_eq!(app.state.unseen_tile_count(), 13);
+        assert_eq!(app.final_turn, FinalTurn::Opponent);
+
+        // Playing 3 tiles leaves 3 in the bag: the opponent could empty it.
+        app.suggestions = vec![fake_move(3)];
+        app.apply_suggestion();
+        assert_eq!(app.final_turn, FinalTurn::Opponent);
+        app.undo();
+
+        // Playing 6 tiles draws the last one: we get the final move.
+        app.suggestions = vec![fake_move(6)];
+        app.apply_suggestion();
+        assert_eq!(app.final_turn, FinalTurn::Us);
+
+        // Undo restores the previous inference.
+        app.undo();
+        assert_eq!(app.final_turn, FinalTurn::Opponent);
+
+        // Manual toggle and reset.
+        app.toggle_final_turn();
+        assert_eq!(app.final_turn, FinalTurn::Us);
+        app.reset();
+        assert_eq!(app.final_turn, FinalTurn::Opponent);
+    }
+
+    #[test]
+    fn our_move_ends_game_depends_on_final_turn() {
+        let mut app = test_app();
+        app.state = state_with(90, 3);
+        assert_eq!(app.state.unseen_tile_count(), 7);
+        assert!(app.state.is_endgame());
+
+        app.final_turn = FinalTurn::Opponent;
+        assert!(!app.our_move_ends_game(), "opponent still replies");
+        app.final_turn = FinalTurn::Us;
+        assert!(app.our_move_ends_game(), "we emptied the bag: no reply");
+
+        // Opponent out of tiles: last move regardless of who emptied the bag.
+        app.state = state_with(95, 5);
+        assert_eq!(app.state.unseen_tile_count(), 0);
+        app.final_turn = FinalTurn::Opponent;
+        assert!(app.our_move_ends_game());
     }
 }

@@ -62,12 +62,11 @@ pub fn render_hints(
     focus: Focus,
     has_suggestions: bool,
     is_simulating: bool,
+    is_endgame: bool,
 ) {
     let mut spans = vec![
         Span::styled(" F1", Style::default().fg(theme::HINT_KEY)),
         Span::styled(" Help ", Style::default().fg(theme::HINT_DESC)),
-        Span::styled("F2", Style::default().fg(theme::HINT_KEY)),
-        Span::styled(" Settings ", Style::default().fg(theme::HINT_DESC)),
     ];
 
     // Context hints based on focus
@@ -97,6 +96,13 @@ pub fn render_hints(
             ]);
         }
         _ => {}
+    }
+
+    if is_endgame {
+        spans.extend([
+            Span::styled("^E", Style::default().fg(theme::HINT_KEY)),
+            Span::styled(" Final turn ", Style::default().fg(theme::HINT_DESC)),
+        ]);
     }
 
     spans.extend([

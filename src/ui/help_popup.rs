@@ -20,7 +20,10 @@ impl HelpPopup {
     }
 
     pub fn area(terminal_area: Rect) -> Rect {
-        centered_rect(terminal_area, 50, 46)
+        // Size to the content (plus the border); centered_rect clips to the
+        // terminal, in which case the tail of the list is cut off.
+        let height = Self::build_content().len() as u16 + 2;
+        centered_rect(terminal_area, 50, height)
     }
 
     fn build_content() -> Vec<Line<'static>> {
@@ -63,6 +66,10 @@ impl HelpPopup {
             Line::from(vec![
                 Span::styled("^R        ", key_style),
                 Span::styled("Reset board", desc_style),
+            ]),
+            Line::from(vec![
+                Span::styled("^E        ", key_style),
+                Span::styled("Toggle who has the final turn", desc_style),
             ]),
             Line::from(vec![
                 Span::styled("^C        ", key_style),
@@ -155,14 +162,9 @@ impl HelpPopup {
             Line::from(""),
             Line::from(Span::styled("ABOUT", header_style)),
             Line::from(Span::styled(
-                "RefEngine: Professional Scrabble engine by",
+                "Simulation: RefEngine — RefEngine",
                 desc_style,
             )),
-            Line::from(Span::styled(
-                "        RefEngine",
-                desc_style,
-            )),
-            Line::from(""),
             Line::from(Span::styled(
                 "github.com/OneTrueJASH/crossplay-solver",
                 Style::default().fg(theme::TITLE_FG),

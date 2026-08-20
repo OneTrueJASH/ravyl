@@ -8,9 +8,10 @@ use ratatui::{
     widgets::{Block, Padding, Widget},
 };
 
+use crate::app::FinalTurn;
 use crate::game::SolverState;
 use crate::refengine_mcts::InferenceResult;
-use crate::stats::GameStats;
+use crate::stats::{GamePhase, GameStats};
 use crate::tile::{letter_value, Rack};
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
@@ -26,24 +27,25 @@ pub struct RackStatsWidget<'a> {
     inferred_rack: Option<&'a InferenceResult>,
     our_score: u32,
     opp_score: u32,
+    final_turn: FinalTurn,
 }
 
 impl<'a> RackStatsWidget<'a> {
     pub fn new(
         state: &'a SolverState,
-        rack: &'a Rack,
         is_focused: bool,
         inferred_rack: Option<&'a InferenceResult>,
-        our_score: u32,
-        opp_score: u32,
+        scores: (u32, u32),
+        final_turn: FinalTurn,
     ) -> Self {
         Self {
             state,
-            rack,
+            rack: &state.rack,
             is_focused,
             inferred_rack,
-            our_score,
-            opp_score,
+            our_score: scores.0,
+            opp_score: scores.1,
+            final_turn,
         }
     }
 
@@ -294,6 +296,13 @@ impl Widget for RackStatsWidget<'_> {
                     Style::new().fg(theme::TEXT_DIM)
                 };
                 Self::render_text(buf, x, row, max_x, &s_text, s_style);
+                x += s_text.len() as u16;
+
+                // Bag empty: show who plays the final move (Ctrl+E toggles).
+                if stats.game_phase == GamePhase::Endgame {
+                    let last_text = format!("  last:{}", self.final_turn.label());
+                    Self::render_text(buf, x, row, max_x, &last_text, Style::new().fg(pc).bold());
+                }
                 row += 1;
             }
 
@@ -430,12 +439,11 @@ pub fn render_rack_stats(
     frame: &mut ratatui::Frame,
     area: Rect,
     state: &SolverState,
-    rack: &Rack,
     is_focused: bool,
     inferred_rack: Option<&InferenceResult>,
-    our_score: u32,
-    opp_score: u32,
+    scores: (u32, u32),
+    final_turn: FinalTurn,
 ) {
-    let widget = RackStatsWidget::new(state, rack, is_focused, inferred_rack, our_score, opp_score);
+    let widget = RackStatsWidget::new(state, is_focused, inferred_rack, scores, final_turn);
     frame.render_widget(widget, area);
 }

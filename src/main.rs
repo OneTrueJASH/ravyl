@@ -168,11 +168,10 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             frame,
             rack_area,
             &app.state,
-            &app.state.rack,
             app.focus == Focus::Rack,
             app.inferred_opponent_rack.as_ref(),
-            app.our_score,
-            app.opp_score,
+            (app.our_score, app.opp_score),
+            app.final_turn,
         );
     }
 
@@ -208,6 +207,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
         app.focus,
         !app.suggestions.is_empty(),
         app.is_mcts_running(),
+        app.state.is_endgame(),
     );
 
     // Dialog popups on top.
