@@ -7,6 +7,7 @@ pub mod board;
 pub mod dictionary;
 pub mod endgame;
 pub mod game;
+pub mod leaves;
 pub mod logging;
 pub mod solver;
 pub mod tile;

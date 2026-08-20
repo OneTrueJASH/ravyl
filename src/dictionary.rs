@@ -4,11 +4,17 @@ use anyhow::{Context, Result};
 use fst::raw::Node;
 use fst::Set;
 
+use crate::leaves::LeaveValues;
+use crate::solver::leave_value_with_phase;
+use crate::tile::Tile;
+
 /// Dictionary loaded from a pre-compiled FST for fast lookups
 pub struct Dictionary {
     /// FST set for O(1) word validation and prefix matching
     fst: Set<Vec<u8>>,
     word_count: usize,
+    /// Leave values from RefEngine's table, when the file was found.
+    leaves: Option<LeaveValues>,
 }
 
 impl Dictionary {
@@ -29,7 +35,38 @@ impl Dictionary {
         Ok(Dictionary {
             fst,
             word_count: count,
+            leaves: None,
         })
+    }
+
+    /// Attach a leave-value table; static equity uses it instead of the
+    /// per-letter heuristic.
+    pub fn with_leaves(mut self, leaves: LeaveValues) -> Self {
+        self.leaves = Some(leaves);
+        self
+    }
+
+    /// True when leave values come from a fitted table rather than the
+    /// per-letter heuristic.
+    pub fn has_leave_table(&self) -> bool {
+        self.leaves.is_some()
+    }
+
+    /// Strategic value of keeping `leave` on the rack, scaled by game phase
+    /// (`unseen` = bag + opponent rack; `None` means full weight).
+    ///
+    /// Uses the fitted leave table when loaded and the leave is in it (the
+    /// table covers 1–6 tiles), otherwise the per-letter heuristic.
+    pub fn leave_value(&self, leave: &[Tile], unseen: Option<usize>) -> f32 {
+        if leave.is_empty() {
+            return 0.0;
+        }
+        if let Some(table) = &self.leaves {
+            if let Some(v) = table.value(leave) {
+                return v * phase_scale(unseen);
+            }
+        }
+        leave_value_with_phase(leave, unseen)
     }
 
     /// Check if a word is valid
@@ -95,31 +132,55 @@ impl Dictionary {
     }
 }
 
-/// Load the default dictionary from the data directory
-pub fn load_default_dictionary() -> Result<Dictionary> {
-    // Try to find the dictionary relative to the executable
+/// Leave weight by game phase: leaves matter less as redraws run out.
+pub fn phase_scale(unseen: Option<usize>) -> f32 {
+    match unseen {
+        Some(n) if n <= 7 => 0.25, // Endgame: no redraws; the 2-ply solver decides
+        Some(n) if n <= 14 => 0.6, // Pre-endgame: one draw left at most
+        _ => 1.0,
+    }
+}
+
+/// Directories searched for data files: next to the executable, one level
+/// up from it, and the working directory.
+fn data_roots() -> Vec<std::path::PathBuf> {
     let exe_path = std::env::current_exe().ok();
     let exe_dir = exe_path.as_ref().and_then(|p| p.parent());
-
-    // Possible locations to check
-    let candidates = [
-        // Relative to executable (for installed binary)
-        exe_dir.map(|p| p.join("data/words.fst")),
-        exe_dir.map(|p| p.join("../data/words.fst")),
-        // Relative to current working directory (for development)
-        Some(std::path::PathBuf::from("data/words.fst")),
-    ];
-
-    for candidate in candidates.into_iter().flatten() {
-        if candidate.exists() {
-            return Dictionary::load_from_fst(&candidate);
-        }
+    let mut roots = Vec::new();
+    if let Some(dir) = exe_dir {
+        roots.push(dir.to_path_buf());
+        roots.push(dir.join(".."));
     }
+    roots.push(std::path::PathBuf::from("."));
+    roots
+}
 
-    anyhow::bail!(
-        "Could not find words.fst dictionary.\n\
-         Run: cargo run --bin build-wordlist <input.txt> data/words.fst"
-    )
+/// Load the default dictionary (`data/words.fst`), attaching RefEngine's leave
+/// table (`external/refengine/data/lexica/NWL23.klv2`) when it is present.
+pub fn load_default_dictionary() -> Result<Dictionary> {
+    let roots = data_roots();
+    let fst_path = roots
+        .iter()
+        .map(|r| r.join("data/words.fst"))
+        .find(|p| p.exists())
+        .context(
+            "Could not find words.fst dictionary.\n\
+             Run: cargo run --bin build-wordlist <input.txt> data/words.fst",
+        )?;
+    let dict = Dictionary::load_from_fst(&fst_path)?;
+
+    let leaves_path = roots
+        .iter()
+        .map(|r| r.join("external/refengine/data/lexica/NWL23.klv2"))
+        .find(|p| p.exists());
+    match leaves_path.map(LeaveValues::load) {
+        Some(Ok(table)) => Ok(dict.with_leaves(table)),
+        Some(Err(e)) => {
+            eprintln!("Leave table unusable, using heuristic leave values: {e:#}");
+            Ok(dict)
+        }
+        None => Ok(dict),
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ mod board;
 mod dictionary;
 mod endgame;
 mod game;
+mod leaves;
 mod logging;
 mod refengine_ffi;
 mod refengine_mcts;

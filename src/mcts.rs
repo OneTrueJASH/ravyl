@@ -30,7 +30,7 @@ use rayon::prelude::*;
 use crate::board::Board;
 use crate::dictionary::Dictionary;
 use crate::game::SolverState;
-use crate::solver::{leave_value_with_phase, Move, Solver};
+use crate::solver::{Move, Solver};
 use crate::tile::{Rack, Tile, RACK_SIZE};
 
 /// Configuration for Monte Carlo evaluation
@@ -305,8 +305,8 @@ impl<'a> Playout<'a> {
             if plies >= max_plies {
                 // Cut short: value the racks statically.
                 let unseen = self.unseen_for_phase();
-                let ours = leave_value_with_phase(self.rack(Player::Us), Some(unseen));
-                let theirs = leave_value_with_phase(self.rack(Player::Opp), Some(unseen));
+                let ours = self.dict.leave_value(self.rack(Player::Us), Some(unseen));
+                let theirs = self.dict.leave_value(self.rack(Player::Opp), Some(unseen));
                 return self.spread as f32 + ours - theirs;
             }
 
