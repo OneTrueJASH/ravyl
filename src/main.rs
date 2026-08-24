@@ -176,12 +176,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
 
     // Rack + stats.
     if let Some(rack_area) = layout.rack_area {
-        let opp_skill = (app.opp_moves_measured > 0).then(|| {
-            (
-                app.opp_loss_total / app.opp_moves_measured as f32,
-                app.opp_moves_measured,
-            )
-        });
+        let opp_skill = app.opp_error_estimate();
         ui::stats_view::render_rack_stats(
             frame,
             rack_area,

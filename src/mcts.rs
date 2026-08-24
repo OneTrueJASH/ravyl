@@ -1613,6 +1613,138 @@ mod tests {
         );
     }
 
+    /// Calibration of the observed-move-loss estimator: self-play games
+    /// where the opponent plays at a known softmax temperature, recording
+    /// their true equity loss per move (their rack is known here) next to
+    /// what `observed_move_loss` measures blind from sampled completions.
+    /// The linear fit measured = a + b*tau justifies (or corrects) how the
+    /// app maps a measured loss to a playout temperature.
+    /// Run with `cargo test --release study_loss_calibration -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn study_loss_calibration() {
+        use crate::game::observed_move_loss;
+
+        let dict = load_default_dictionary().unwrap();
+        let games: usize = std::env::var("GAMES")
+            .ok()
+            .and_then(|g| g.parse().ok())
+            .unwrap_or(24);
+        let taus = [0.0f32, 4.0, 8.0, 12.0];
+        let started = Instant::now();
+
+        let full_counts = {
+            let mut counts = std::collections::HashMap::new();
+            for t in full_tile_set() {
+                let c = if t.is_blank { '?' } else { t.letter };
+                *counts.entry(c).or_insert(0u32) += 1;
+            }
+            counts
+        };
+        // The unseen pool from our side of the table after the opponent's
+        // move: everything minus the board and our own rack.
+        let pool_after = |g: &Playout| {
+            let mut counts = full_counts.clone();
+            for r in 0..crate::board::BOARD_SIZE {
+                for c in 0..crate::board::BOARD_SIZE {
+                    if let Some(t) = g.board.get_tile(r, c) {
+                        let key = if t.is_blank { '?' } else { t.letter };
+                        if let Some(n) = counts.get_mut(&key) {
+                            *n = n.saturating_sub(1);
+                        }
+                    }
+                }
+            }
+            for t in g.rack(Player::Us) {
+                let key = if t.is_blank { '?' } else { t.letter };
+                if let Some(n) = counts.get_mut(&key) {
+                    *n = n.saturating_sub(1);
+                }
+            }
+            counts
+        };
+
+        let mut fit_points = Vec::new();
+        for &tau in &taus {
+            let per_game: Vec<(Vec<f32>, Vec<f32>)> = (0..games as u64)
+                .into_par_iter()
+                .map(|seed| {
+                    let mut g = Playout::new_game(&dict, 9_000 + seed);
+                    g.opp_temperature = tau;
+                    let mut to_move = if seed % 2 == 0 {
+                        Player::Us
+                    } else {
+                        Player::Opp
+                    };
+                    let mut true_losses = Vec::new();
+                    let mut measured = Vec::new();
+                    for ply in 0..40u64 {
+                        if g.final_turn_owner.is_some() || g.bag.is_empty() {
+                            break;
+                        }
+                        if to_move == Player::Opp && g.rack(Player::Opp).len() == RACK_SIZE {
+                            let best = g.best_by_equity(Player::Opp);
+                            let prev_board = g.board.clone();
+                            let chosen = g.policy_move(Player::Opp);
+                            let (Some(best), Some(chosen)) = (best, chosen) else {
+                                break;
+                            };
+                            true_losses.push((best.equity - chosen.equity).max(0.0));
+                            let is_play = matches!(chosen.kind, MoveKind::Play);
+                            g.commit(Player::Opp, &chosen);
+                            if is_play {
+                                if let Some(m) = observed_move_loss(
+                                    &prev_board,
+                                    &chosen.tiles_used,
+                                    chosen.score,
+                                    &pool_after(&g),
+                                    &dict,
+                                    10,
+                                    seed * 101 + ply,
+                                ) {
+                                    measured.push(m);
+                                }
+                            }
+                        } else if let Some(mv) = g.policy_move(to_move) {
+                            g.commit(to_move, &mv);
+                        } else {
+                            break;
+                        }
+                        to_move = to_move.other();
+                    }
+                    (true_losses, measured)
+                })
+                .collect();
+
+            let true_all: Vec<f32> = per_game.iter().flat_map(|(t, _)| t.clone()).collect();
+            let meas_all: Vec<f32> = per_game.iter().flat_map(|(_, m)| m.clone()).collect();
+            let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len().max(1) as f32;
+            println!(
+                "tau {:>4.1}: {} opp moves, true loss {:>5.2}, measured {:>5.2} ({} measured)",
+                tau,
+                true_all.len(),
+                mean(&true_all),
+                mean(&meas_all),
+                meas_all.len(),
+            );
+            fit_points.push((tau as f64, mean(&meas_all) as f64));
+        }
+
+        // Least-squares measured = a + b*tau.
+        let n = fit_points.len() as f64;
+        let sx: f64 = fit_points.iter().map(|(x, _)| x).sum();
+        let sy: f64 = fit_points.iter().map(|(_, y)| y).sum();
+        let sxx: f64 = fit_points.iter().map(|(x, _)| x * x).sum();
+        let sxy: f64 = fit_points.iter().map(|(x, y)| x * y).sum();
+        let b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+        let a = (sy - b * sx) / n;
+        println!(
+            "fit: measured = {:.2} + {:.3}*tau  =>  temperature = (measured - {:.2}) / {:.3}",
+            a, b, a, b
+        );
+        println!("total {:?}", started.elapsed());
+    }
+
     /// Self-play study of bingo probability by leave: at positions from
     /// self-play games, keep a random leave of 0-6 tiles from the mover's
     /// rack plus bag, draw the rest, and record whether a bingo exists. A

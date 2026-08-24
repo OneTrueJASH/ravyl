@@ -267,6 +267,18 @@ const MAX_OPP_TEMPERATURE: f32 = 12.0;
 /// against; more samples cost more movegen calls during Ctrl+S.
 const OPP_LOSS_SAMPLES: usize = 10;
 
+/// Fitted by `study_loss_calibration` (mcts.rs, 120 games per point): the
+/// estimator reads `measured ~= 7.78 + 0.557 * tau` for a softmax-`tau`
+/// opponent. The baseline exists because a sampled completion of their
+/// rack usually admits a better play than the tiles they really held, so
+/// even a perfect opponent measures near 8 points of "loss".
+const OPP_LOSS_BASELINE: f32 = 7.78;
+const OPP_LOSS_PER_TEMPERATURE: f32 = 0.557;
+
+/// From the same study, a softmax-`tau` opponent's true mean equity loss
+/// per move is about `0.66 * tau`; used for the display estimate.
+const OPP_TRUE_LOSS_PER_TEMPERATURE: f32 = 0.66;
+
 impl App {
     /// Create a new App with default settings loaded from disk.
     pub fn new() -> Self {
@@ -323,14 +335,31 @@ impl App {
         }
     }
 
-    /// Softmax temperature for the playouts' simulated opponent: their
-    /// measured mean equity loss per move, capped. Zero (a perfect greedy
-    /// opponent) until a move has been measured.
+    /// Softmax temperature for the playouts' simulated opponent, from the
+    /// calibrated inversion of their measured mean loss, shrunk toward
+    /// zero (a perfect opponent) while few moves have been measured so a
+    /// single noisy reading cannot swing the playouts.
     pub fn opp_temperature(&self) -> f32 {
-        if self.opp_moves_measured == 0 {
+        let n = self.opp_moves_measured;
+        if n == 0 {
             return 0.0;
         }
-        (self.opp_loss_total / self.opp_moves_measured as f32).min(MAX_OPP_TEMPERATURE)
+        let measured = self.opp_loss_total / n as f32;
+        let temperature = (measured - OPP_LOSS_BASELINE) / OPP_LOSS_PER_TEMPERATURE;
+        let shrink = n as f32 / (n as f32 + 2.0);
+        (temperature * shrink).clamp(0.0, MAX_OPP_TEMPERATURE)
+    }
+
+    /// Estimated true equity loss per opponent move for the stats pane,
+    /// with the measurement count. `None` until a move has been measured.
+    pub fn opp_error_estimate(&self) -> Option<(f32, u32)> {
+        if self.opp_moves_measured == 0 {
+            return None;
+        }
+        Some((
+            self.opp_temperature() * OPP_TRUE_LOSS_PER_TEMPERATURE,
+            self.opp_moves_measured,
+        ))
     }
 
     // ── Event handlers ──────────────────────────────────────────────
