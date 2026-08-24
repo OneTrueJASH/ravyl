@@ -12,10 +12,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::board::{Board, Direction, BOARD_SIZE};
 use crate::dictionary::Dictionary;
 use crate::endgame::{EndgameMove, EndgameSolver};
-use crate::game::SolverState;
+use crate::game::{observed_move_loss, SolverState};
 use crate::logging::log;
 use crate::refengine_mcts::{InferenceResult, RefSimulator};
-use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult};
+use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult, OpponentModel, TilePool};
 use crate::settings::{self, Settings};
 use crate::solver::{Move, Solver};
 use crate::tile::Tile;
@@ -181,6 +181,9 @@ impl SortMode {
     }
 }
 
+/// An opponent move found by board diff: word, score, and placed tiles.
+type DetectedOpponentMove = (String, u32, Vec<(usize, usize, Tile)>);
+
 /// Saved state for undo
 #[derive(Clone)]
 struct UndoState {
@@ -190,6 +193,8 @@ struct UndoState {
     last_applied_board: Option<Board>,
     final_turn: FinalTurn,
     final_turn_known: bool,
+    opp_loss_total: f32,
+    opp_moves_measured: u32,
     message: String,
 }
 
@@ -246,7 +251,21 @@ pub struct App {
     /// False until the final turn was inferred from an applied move or set
     /// with Ctrl+E; a position entered by hand starts with the default.
     pub final_turn_known: bool,
+    /// Cumulative equity the opponent's observed moves gave up versus their
+    /// best alternatives (see [`crate::game::observed_move_loss`]), and how
+    /// many moves were measured. Their mean drives how strongly the
+    /// playouts' simulated opponent plays.
+    pub opp_loss_total: f32,
+    pub opp_moves_measured: u32,
 }
+
+/// Cap on the playout opponent's softmax temperature: beyond roughly the
+/// tempo of a turn the playouts stop resembling the game.
+const MAX_OPP_TEMPERATURE: f32 = 12.0;
+
+/// How many rack completions each observed opponent move is measured
+/// against; more samples cost more movegen calls during Ctrl+S.
+const OPP_LOSS_SAMPLES: usize = 10;
 
 impl App {
     /// Create a new App with default settings loaded from disk.
@@ -299,7 +318,19 @@ impl App {
             opp_score: 0,
             final_turn: FinalTurn::default(),
             final_turn_known: false,
+            opp_loss_total: 0.0,
+            opp_moves_measured: 0,
         }
+    }
+
+    /// Softmax temperature for the playouts' simulated opponent: their
+    /// measured mean equity loss per move, capped. Zero (a perfect greedy
+    /// opponent) until a move has been measured.
+    pub fn opp_temperature(&self) -> f32 {
+        if self.opp_moves_measured == 0 {
+            return 0.0;
+        }
+        (self.opp_loss_total / self.opp_moves_measured as f32).min(MAX_OPP_TEMPERATURE)
     }
 
     // ── Event handlers ──────────────────────────────────────────────
@@ -885,6 +916,8 @@ impl App {
             last_applied_board: self.last_applied_board.clone(),
             final_turn: self.final_turn,
             final_turn_known: self.final_turn_known,
+            opp_loss_total: self.opp_loss_total,
+            opp_moves_measured: self.opp_moves_measured,
             message: format!("Score: {}-{}", self.our_score, self.opp_score),
         });
 
@@ -1123,7 +1156,7 @@ impl App {
         self.pending_opponent_tiles = self.detect_opponent_tiles();
         self.pre_opponent_board = self.last_applied_board.clone();
 
-        if let Some((word, score)) = self.score_opponent_move() {
+        if let Some((word, score, placed)) = self.score_opponent_move() {
             // Push undo state so the auto-score is reversible
             self.undo_stack.push(UndoState {
                 state: self.state.clone(),
@@ -1132,6 +1165,8 @@ impl App {
                 last_applied_board: self.last_applied_board.clone(),
                 final_turn: self.final_turn,
                 final_turn_known: self.final_turn_known,
+                opp_loss_total: self.opp_loss_total,
+                opp_moves_measured: self.opp_moves_measured,
                 message: format!("Before opp: {}", word),
             });
             self.opp_score += score;
@@ -1147,6 +1182,31 @@ impl App {
                 "Auto-scored opponent: {} ({} pts) \u{2014} {}-{} ({})",
                 word, score, self.our_score, self.opp_score, diff_str
             ));
+
+            // Measure how much equity the move gave up against sampled
+            // completions of their rack; the running mean sets how strongly
+            // the playouts' simulated opponent plays.
+            if let (Some(prev), Some(dict)) = (&self.pre_opponent_board, &self.dictionary) {
+                let pool = self.state.unseen_tiles();
+                if let Some(loss) = observed_move_loss(
+                    prev,
+                    &placed,
+                    score,
+                    &pool,
+                    dict,
+                    OPP_LOSS_SAMPLES,
+                    0xB1A5 ^ (self.opp_score as u64),
+                ) {
+                    self.opp_loss_total += loss;
+                    self.opp_moves_measured += 1;
+                    log(&format!(
+                        "Opponent gave up ~{:.1} equity ({} moves measured, mean {:.1})",
+                        loss,
+                        self.opp_moves_measured,
+                        self.opp_loss_total / self.opp_moves_measured as f32
+                    ));
+                }
+            }
         }
 
         if let Some(dict) = &self.dictionary {
@@ -1239,11 +1299,12 @@ impl App {
     }
 
     /// Detect and score the opponent's move by diffing `last_applied_board`
-    /// against the current board. Returns `(word, score)` if a move is found.
+    /// against the current board. Returns `(word, score, placed tiles)` if
+    /// a move is found.
     ///
     /// The scoring uses `last_applied_board` (where premiums at opponent's
     /// positions are still unused) so premium multipliers apply correctly.
-    fn score_opponent_move(&self) -> Option<(String, u32)> {
+    fn score_opponent_move(&self) -> Option<DetectedOpponentMove> {
         let prev = self.last_applied_board.as_ref()?;
         let dict = self.dictionary.as_ref()?;
 
@@ -1343,7 +1404,7 @@ impl App {
             placed.len()
         ));
 
-        Some((word, score))
+        Some((word, score, placed))
     }
 
     /// Launch the evaluation for the current position on a background
@@ -1449,36 +1510,82 @@ impl App {
             config.max_plies
         ));
         let state = self.state.clone();
+
+        // Opponent model for the playouts: their measured strength, plus
+        // rack marginals from inference. A fresh inference for the move
+        // just detected is worth a short wait; otherwise the last result
+        // still describes the same rack (they have not moved since).
+        let fresh_inference = self.start_inference();
+        let stored_inference = self.inferred_opponent_rack.clone();
+        let temperature = self.opp_temperature();
+
         let (tx, rx) = mpsc::channel();
         self.playout_receiver = Some(rx);
         thread::spawn(move || {
+            let inference = fresh_inference
+                .and_then(|rx| rx.recv_timeout(std::time::Duration::from_secs(3)).ok())
+                .flatten()
+                .or(stored_inference);
+            let model = Self::opponent_model(inference.as_ref(), &state, temperature);
+            match &model {
+                Some(m) if m.has_marginals() => log(&format!(
+                    "Opponent model: rack marginals from inference, temperature {:.1}",
+                    m.temperature
+                )),
+                Some(m) => log(&format!(
+                    "Opponent model: temperature {:.1}, no rack inference",
+                    m.temperature
+                )),
+                None => log("Opponent model: none (uniform deals, greedy opponent)"),
+            }
             let evaluator = MctsEvaluator::new(config);
-            let results = evaluator.evaluate(&state, &candidates, &dict);
+            let results = evaluator.evaluate_with_model(&state, &candidates, &dict, model.as_ref());
             let _ = tx.send(results);
         });
+    }
 
-        self.start_inference();
+    /// Build the playout opponent model from an inference result and the
+    /// measured opponent strength. `None` when there is nothing to model
+    /// (no marginals and a perfect-greedy temperature).
+    fn opponent_model(
+        inference: Option<&InferenceResult>,
+        state: &SolverState,
+        temperature: f32,
+    ) -> Option<OpponentModel> {
+        let mut model = OpponentModel::new(temperature);
+        if let Some(inf) = inference {
+            let kept = crate::tile::RACK_SIZE.saturating_sub(inf.played_tiles.chars().count());
+            let marginals: Vec<(char, f32)> = inf
+                .letter_marginals
+                .iter()
+                .map(|m| (m.letter, m.expected))
+                .collect();
+            let pool = TilePool::from_remaining(&state.unseen_tiles());
+            model = model.with_marginals(&marginals, kept, &pool);
+        }
+        if model.has_marginals() || temperature > 0.0 {
+            Some(model)
+        } else {
+            None
+        }
     }
 
     /// Ask RefEngine what the opponent probably kept, if their last move was
     /// detected on the board and the bag still has tiles. Runs in the
-    /// background; the result only updates the stats pane.
-    fn start_inference(&mut self) {
-        let Some(ref refengine) = self.refengine_simulator else {
-            return;
-        };
+    /// background; the result updates the stats pane, and the returned
+    /// second receiver lets the evaluation thread wait briefly for it so
+    /// fresh inference can bias the playout deals.
+    fn start_inference(&mut self) -> Option<Receiver<Option<InferenceResult>>> {
+        let refengine = self.refengine_simulator.as_ref()?;
         if self.inference_receiver.is_some() || self.state.is_endgame() {
-            return;
+            return None;
         }
         // Use opponent tiles saved during find_moves() (before auto-scoring
         // updated the board snapshot). Falls back to live detection.
-        let Some(opponent_tiles) = self
+        let opponent_tiles = self
             .pending_opponent_tiles
             .take()
-            .or_else(|| self.detect_opponent_tiles())
-        else {
-            return;
-        };
+            .or_else(|| self.detect_opponent_tiles())?;
         let pre_opponent_board = self
             .pre_opponent_board
             .take()
@@ -1488,6 +1595,7 @@ impl App {
         let refengine = Arc::clone(refengine);
 
         let (tx, rx) = mpsc::channel();
+        let (tx_eval, rx_eval) = mpsc::channel();
         self.inference_receiver = Some(rx);
         thread::spawn(move || {
             let result = refengine.infer_opponent_rack(
@@ -1496,8 +1604,10 @@ impl App {
                 pre_opponent_board.as_ref(),
                 scores,
             );
+            let _ = tx_eval.send(result.clone());
             let _ = tx.send(result);
         });
+        Some(rx_eval)
     }
 
     /// Find moves, focus the suggestions pane, and start simulation.
@@ -1522,6 +1632,8 @@ impl App {
             last_applied_board: self.last_applied_board.clone(),
             final_turn: self.final_turn,
             final_turn_known: self.final_turn_known,
+            opp_loss_total: self.opp_loss_total,
+            opp_moves_measured: self.opp_moves_measured,
             message: format!(
                 "Before: {}",
                 self.suggestions[self.selected_suggestion].word
@@ -1586,6 +1698,8 @@ impl App {
             self.last_applied_board = undo_state.last_applied_board;
             self.final_turn = undo_state.final_turn;
             self.final_turn_known = undo_state.final_turn_known;
+            self.opp_loss_total = undo_state.opp_loss_total;
+            self.opp_moves_measured = undo_state.opp_moves_measured;
             self.clear_suggestions();
             self.message = Some(format!("Undone: {}", undo_state.message));
         } else {
@@ -1623,6 +1737,8 @@ impl App {
         self.opp_score = 0;
         self.final_turn = FinalTurn::default();
         self.final_turn_known = false;
+        self.opp_loss_total = 0.0;
+        self.opp_moves_measured = 0;
         self.message = Some("Reset complete".to_string());
     }
 
@@ -1811,6 +1927,47 @@ mod tests {
         assert_eq!(app.final_turn, FinalTurn::Us);
         app.reset();
         assert_eq!(app.final_turn, FinalTurn::Opponent);
+    }
+
+    /// An auto-scored opponent move is measured for equity loss; undoing
+    /// the auto-score rolls the measurement back too.
+    #[test]
+    fn opponent_moves_are_measured_and_undone() {
+        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let mut app = test_app();
+        app.dictionary = Some(Arc::new(
+            crate::dictionary::load_default_dictionary().unwrap(),
+        ));
+
+        // Play our own move first so the board snapshot exists.
+        for ch in ['A', 'E', 'I', 'O', 'U', 'S', 'T'] {
+            app.state.add_to_rack(ch);
+        }
+        app.find_moves();
+        assert!(!app.suggestions.is_empty());
+        app.apply_suggestion();
+        assert_eq!(app.opp_moves_measured, 0);
+
+        // The opponent's tiles appear on the board; the next Ctrl+S
+        // auto-scores and measures them.
+        app.state.place_tile(0, 0, 'C', false);
+        app.state.place_tile(0, 1, 'A', false);
+        app.state.place_tile(0, 2, 'T', false);
+        for ch in ['R', 'E', 'T', 'I', 'N', 'A', 'S'] {
+            app.state.add_to_rack(ch);
+        }
+        let score_before = app.opp_score;
+        app.find_moves();
+        assert!(app.opp_score > score_before, "opponent move was scored");
+        assert_eq!(app.opp_moves_measured, 1);
+        assert!(app.opp_loss_total >= 0.0);
+        assert!(app.opp_temperature() >= 0.0);
+
+        // Undo the auto-score: the measurement goes with it.
+        app.undo();
+        assert_eq!(app.opp_moves_measured, 0);
+        assert_eq!(app.opp_loss_total, 0.0);
+        assert_eq!(app.opp_temperature(), 0.0);
     }
 
     /// Inference runs after the ranking finishes; the main loop must keep

@@ -29,6 +29,9 @@ pub struct RackStatsWidget<'a> {
     opp_score: u32,
     final_turn: FinalTurn,
     final_turn_known: bool,
+    /// Mean measured equity loss per opponent move and how many were
+    /// measured, once any have been.
+    opp_skill: Option<(f32, u32)>,
 }
 
 impl<'a> RackStatsWidget<'a> {
@@ -38,6 +41,7 @@ impl<'a> RackStatsWidget<'a> {
         inferred_rack: Option<&'a InferenceResult>,
         scores: (u32, u32),
         final_turn: (FinalTurn, bool),
+        opp_skill: Option<(f32, u32)>,
     ) -> Self {
         Self {
             state,
@@ -48,6 +52,7 @@ impl<'a> RackStatsWidget<'a> {
             opp_score: scores.1,
             final_turn: final_turn.0,
             final_turn_known: final_turn.1,
+            opp_skill,
         }
     }
 
@@ -344,11 +349,67 @@ impl Widget for RackStatsWidget<'_> {
 
             // === Inferred opponent rack ===
             if let Some(infer) = self.inferred_rack {
-                if !infer.top_leaves.is_empty() && row < inner.y + inner.height {
+                let has_signal = !infer.letter_marginals.is_empty() || !infer.top_leaves.is_empty();
+                if has_signal && row < inner.y + inner.height {
                     Self::render_separator(buf, inner.x, row, inner.width);
                     row += 1;
                 }
-                if let Some((top_leave, pct)) = infer.top_leaves.first() {
+                if !infer.letter_marginals.is_empty() {
+                    // The letters they most likely kept. The blank is the
+                    // headline threat, so it earns a slot whenever it is a
+                    // live possibility.
+                    let mut marginals: Vec<_> = infer
+                        .letter_marginals
+                        .iter()
+                        .filter(|m| m.p_at_least_one >= 1.0)
+                        .collect();
+                    marginals.sort_by(|a, b| {
+                        b.p_at_least_one
+                            .partial_cmp(&a.p_at_least_one)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    if let Some(i) = marginals.iter().position(|m| m.letter == '?') {
+                        if i >= 4 && marginals[i].p_at_least_one >= 5.0 {
+                            let blank = marginals.remove(i);
+                            marginals.insert(3, blank);
+                        }
+                    }
+                    marginals.truncate(4);
+                    if !marginals.is_empty() && row < inner.y + inner.height {
+                        let parts: Vec<String> = marginals
+                            .iter()
+                            .map(|m| format!("{} {:.0}%", m.letter, m.p_at_least_one))
+                            .collect();
+                        let text = format!("Opp kept: {}", parts.join("  "));
+                        Self::render_text(
+                            buf,
+                            inner.x,
+                            row,
+                            max_x,
+                            &text,
+                            Style::new().fg(theme::PHASE_ENDGAME).bold(),
+                        );
+                        row += 1;
+                    }
+                    if row < inner.y + inner.height {
+                        let played_spaced: String = infer
+                            .played_tiles
+                            .chars()
+                            .map(|c| c.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let detail = format!("  played {}", played_spaced);
+                        Self::render_text(
+                            buf,
+                            inner.x,
+                            row,
+                            max_x,
+                            &detail,
+                            Style::new().fg(theme::TEXT_DIM),
+                        );
+                        row += 1;
+                    }
+                } else if let Some((top_leave, pct)) = infer.top_leaves.first() {
                     if row < inner.y + inner.height {
                         let mut full_rack: Vec<char> = infer
                             .played_tiles
@@ -398,6 +459,22 @@ impl Widget for RackStatsWidget<'_> {
                 }
             }
 
+            // === Measured opponent strength ===
+            if let Some((mean_loss, moves)) = self.opp_skill {
+                if row < inner.y + inner.height {
+                    let text = format!("Opp err: {:.1} pts/move ({} measured)", mean_loss, moves);
+                    Self::render_text(
+                        buf,
+                        inner.x,
+                        row,
+                        max_x,
+                        &text,
+                        Style::new().fg(theme::TEXT_DIM),
+                    );
+                    row += 1;
+                }
+            }
+
             // === Separator before unseen grid ===
             if row < inner.y + inner.height {
                 Self::render_separator(buf, inner.x, row, inner.width);
@@ -439,6 +516,7 @@ impl Widget for RackStatsWidget<'_> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_rack_stats(
     frame: &mut ratatui::Frame,
     area: Rect,
@@ -447,7 +525,15 @@ pub fn render_rack_stats(
     inferred_rack: Option<&InferenceResult>,
     scores: (u32, u32),
     final_turn: (FinalTurn, bool),
+    opp_skill: Option<(f32, u32)>,
 ) {
-    let widget = RackStatsWidget::new(state, is_focused, inferred_rack, scores, final_turn);
+    let widget = RackStatsWidget::new(
+        state,
+        is_focused,
+        inferred_rack,
+        scores,
+        final_turn,
+        opp_skill,
+    );
     frame.render_widget(widget, area);
 }

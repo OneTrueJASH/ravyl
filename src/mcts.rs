@@ -177,6 +177,127 @@ impl TilePool {
     }
 }
 
+/// Model of the opponent for playouts: how their hidden rack is dealt and
+/// how strongly they play. The default deals uniformly and plays perfect
+/// greedy, which is exactly the behaviour without a model.
+#[derive(Debug, Clone)]
+pub struct OpponentModel {
+    /// Per-letter sampling weight for the tiles the opponent kept after
+    /// their last play, indexed by letter (26 = blank). The weight is the
+    /// inferred expected count relative to a uniform deal's, so a value
+    /// above 1 tilts the deal toward putting that letter in their rack.
+    /// `None` deals uniformly.
+    kept_weights: Option<[f32; 27]>,
+    /// How many tiles they kept (7 minus the tiles they just played).
+    kept_size: usize,
+    /// Equity spread of the opponent's simulated move choice, in points:
+    /// 0 plays the best move every turn, larger values err more, roughly
+    /// matching a player who gives up `temperature` points per turn.
+    pub temperature: f32,
+}
+
+impl OpponentModel {
+    pub fn new(temperature: f32) -> Self {
+        OpponentModel {
+            kept_weights: None,
+            kept_size: 0,
+            temperature,
+        }
+    }
+
+    /// Attach per-letter marginals from rack inference: `(letter,
+    /// expected)` is the inferred expected count of each letter among the
+    /// `kept_size` tiles the opponent kept ('?' for the blank). Weights
+    /// are clamped so a noisy or stale inference can only tilt the deal,
+    /// never make a holding impossible or certain.
+    pub fn with_marginals(
+        mut self,
+        marginals: &[(char, f32)],
+        kept_size: usize,
+        pool: &TilePool,
+    ) -> Self {
+        if marginals.is_empty() || kept_size == 0 || pool.is_empty() {
+            return self;
+        }
+        let mut counts = [0u32; 27];
+        for tile in &pool.tiles {
+            counts[Self::index(tile)] += 1;
+        }
+        let mut weights = [1.0f32; 27];
+        for &(letter, expected) in marginals {
+            let idx = if letter == '?' {
+                26
+            } else if letter.is_ascii_uppercase() {
+                (letter as u8 - b'A') as usize
+            } else {
+                continue;
+            };
+            if counts[idx] == 0 {
+                continue;
+            }
+            let uniform = kept_size as f32 * counts[idx] as f32 / pool.len() as f32;
+            weights[idx] = (expected / uniform).clamp(0.05, 20.0);
+        }
+        self.kept_weights = Some(weights);
+        self.kept_size = kept_size;
+        self
+    }
+
+    pub fn has_marginals(&self) -> bool {
+        self.kept_weights.is_some()
+    }
+
+    fn index(tile: &Tile) -> usize {
+        if tile.is_blank {
+            26
+        } else {
+            (tile.letter as u8 - b'A') as usize
+        }
+    }
+
+    /// Deal the pool for one playout, laid out as `[our draw | opponent
+    /// rack | bag]` just like a uniform shuffle. The opponent's kept tiles
+    /// are sampled first, by weight and without replacement, and placed at
+    /// the start of their rack region, so they can never appear in our
+    /// draw or the bag; everything else is dealt uniformly (their fresh
+    /// draws are exchangeable with ours).
+    fn dealt(&self, pool: &TilePool, draw_count: usize, rng: &mut Rng) -> Vec<Tile> {
+        let Some(weights) = &self.kept_weights else {
+            return pool.shuffled(rng);
+        };
+        let mut rest = pool.tiles.clone();
+        let mut kept = Vec::with_capacity(self.kept_size);
+        for _ in 0..self.kept_size.min(rest.len()) {
+            let total: f32 = rest.iter().map(|t| weights[Self::index(t)]).sum();
+            let picked = if total > 0.0 {
+                let mut roll = rng.f32() * total;
+                let mut picked = rest.len() - 1;
+                for (i, t) in rest.iter().enumerate() {
+                    roll -= weights[Self::index(t)];
+                    if roll <= 0.0 {
+                        picked = i;
+                        break;
+                    }
+                }
+                picked
+            } else {
+                rng.usize(..rest.len())
+            };
+            kept.push(rest.swap_remove(picked));
+        }
+        rng.shuffle(&mut rest);
+
+        // Our draw comes only from the non-kept remainder; the kept tiles
+        // open the opponent's rack region right after it.
+        let cut = draw_count.min(rest.len());
+        let mut dealt = Vec::with_capacity(pool.len());
+        dealt.extend_from_slice(&rest[..cut]);
+        dealt.append(&mut kept);
+        dealt.extend_from_slice(&rest[cut..]);
+        dealt
+    }
+}
+
 fn rack_from(tiles: &[Tile]) -> Rack {
     let mut rack = Rack::new();
     for t in tiles {
@@ -229,6 +350,9 @@ struct Playout<'a> {
     rng: Rng,
     /// Whether each player's first move in this playout was a bingo.
     first_move_bingo: [Option<bool>; 2],
+    /// Softmax spread of the opponent's greedy-phase move choice, in
+    /// equity points; 0 (the default) plays the best move every turn.
+    opp_temperature: f32,
     /// Move-by-move history, kept only when requested (self-play studies).
     trace: Option<Vec<TracePoint>>,
 }
@@ -250,6 +374,7 @@ impl<'a> Playout<'a> {
             final_turn_owner: None,
             rng: Rng::with_seed(seed),
             first_move_bingo: [None, None],
+            opp_temperature: 0.0,
             trace: None,
         }
     }
@@ -365,6 +490,51 @@ impl<'a> Playout<'a> {
         }
     }
 
+    /// Move choice in the greedy phase: exact best for us, and for the
+    /// opponent a softmax sample over near-best moves when the model says
+    /// they err (`opp_temperature` > 0). The final two turns after the bag
+    /// empties stay exact for both players regardless.
+    fn policy_move(&mut self, p: Player) -> Option<Move> {
+        if p != Player::Opp || self.opp_temperature <= 0.0 {
+            return self.best_by_equity(p);
+        }
+        let tau = self.opp_temperature;
+        let mut moves = {
+            let solver = Solver::new(&self.board, self.dict);
+            let rack = rack_from(self.rack(p));
+            let mut moves = solver.find_moves(&rack);
+            if self.bag.len() >= EXCHANGE_MIN_BAG {
+                let unseen = self.unseen_for_phase();
+                moves.extend(exchange_moves(self.rack(p), self.dict, Some(unseen)));
+                moves.sort_by(|a, b| {
+                    b.equity
+                        .partial_cmp(&a.equity)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            moves
+        };
+        let best_equity = moves.first()?.equity;
+        // Errors far below the best are not plausible even for a weak
+        // player; without the window the long tail of junk moves would
+        // dominate the sample by sheer count.
+        moves.retain(|m| m.equity >= best_equity - 3.0 * tau);
+        moves.truncate(16);
+        let weights: Vec<f32> = moves
+            .iter()
+            .map(|m| ((m.equity - best_equity) / tau).exp())
+            .collect();
+        let total: f32 = weights.iter().sum();
+        let mut roll = self.rng.f32() * total;
+        for (i, w) in weights.iter().enumerate() {
+            roll -= w;
+            if roll <= 0.0 {
+                return Some(moves.swap_remove(i));
+            }
+        }
+        moves.pop()
+    }
+
     /// `p`'s last turn with `p.other()` holding the final move: choose the
     /// play maximising score minus the other's best reply, or pass.
     fn best_last_turn(&self, p: Player) -> (Option<Move>, i32) {
@@ -471,7 +641,7 @@ impl<'a> Playout<'a> {
             }
 
             observe(self, to_move);
-            if let Some(mv) = self.best_by_equity(to_move) {
+            if let Some(mv) = self.policy_move(to_move) {
                 self.commit(to_move, &mv);
             } else if self.bag.is_empty() {
                 // No bag, no move: treat as the game ending here.
@@ -503,6 +673,7 @@ struct CandidateSim<'a> {
     bag_size: usize,
     draw_count: usize,
     score_diff: i32,
+    model: Option<&'a OpponentModel>,
     rng: Rng,
     total: f32,
     wins: f32,
@@ -516,7 +687,12 @@ struct CandidateSim<'a> {
 }
 
 impl<'a> CandidateSim<'a> {
-    fn new(state: &SolverState, mv: &'a Move, score_diff: i32) -> Self {
+    fn new(
+        state: &SolverState,
+        mv: &'a Move,
+        score_diff: i32,
+        model: Option<&'a OpponentModel>,
+    ) -> Self {
         let mut base_state = state.clone();
         base_state.apply_move(mv);
         let our_leave: Vec<Tile> = base_state.rack.tiles();
@@ -538,6 +714,7 @@ impl<'a> CandidateSim<'a> {
             bag_size,
             draw_count,
             score_diff,
+            model,
             // The unseen pool is the same for every candidate (it does not
             // depend on which move we play), so seeding every candidate
             // identically makes them face the same draw sequences: common
@@ -604,7 +781,10 @@ impl<'a> CandidateSim<'a> {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 return;
             }
-            let shuffled = self.pool.shuffled(&mut self.rng);
+            let shuffled = match self.model {
+                Some(m) if m.has_marginals() => m.dealt(&self.pool, self.draw_count, &mut self.rng),
+                _ => self.pool.shuffled(&mut self.rng),
+            };
             let (drawn, rest) = shuffled.split_at(self.draw_count);
             let (opp_rack, bag) = rest.split_at(rest.len().min(RACK_SIZE));
 
@@ -627,6 +807,7 @@ impl<'a> CandidateSim<'a> {
                 seed,
             );
             playout.spread = self.mv.score as i32;
+            playout.opp_temperature = self.model.map(|m| m.temperature).unwrap_or(0.0);
             // If our move emptied the bag, we own the final turn: the
             // opponent gets one last turn and then we play the final move.
             if playout.bag.is_empty() && self.bag_size > 0 {
@@ -747,16 +928,29 @@ impl MctsEvaluator {
     /// can still finish first. Results list the fully simulated candidates
     /// first (by expected spread), then the pruned ones, so a stale
     /// short-run estimate never outranks a complete one.
+    #[cfg_attr(not(test), allow(dead_code))] // the model-free API, kept for tests and callers
     pub fn evaluate(
         &self,
         state: &SolverState,
         candidates: &[Move],
         dictionary: &Dictionary,
     ) -> Vec<MctsResult> {
+        self.evaluate_with_model(state, candidates, dictionary, None)
+    }
+
+    /// As [`Self::evaluate`], with an opponent model biasing how their
+    /// rack is dealt and how strongly they play in the playouts.
+    pub fn evaluate_with_model(
+        &self,
+        state: &SolverState,
+        candidates: &[Move],
+        dictionary: &Dictionary,
+        model: Option<&OpponentModel>,
+    ) -> Vec<MctsResult> {
         let num_to_evaluate = candidates.len().min(self.config.num_candidates);
         let mut sims: Vec<CandidateSim> = candidates[..num_to_evaluate]
             .iter()
-            .map(|mv| CandidateSim::new(state, mv, self.config.score_diff))
+            .map(|mv| CandidateSim::new(state, mv, self.config.score_diff, model))
             .collect();
 
         // Quarter, quarter, half: two pruning points.
@@ -842,6 +1036,128 @@ mod tests {
         assert!(!pool.is_empty());
         let mut rng = Rng::with_seed(1);
         assert_eq!(pool.shuffled(&mut rng).len(), 6);
+    }
+
+    /// A marginal saying the opponent kept Z more often than a uniform
+    /// deal would must raise Z's frequency in their dealt rack, without
+    /// changing which tiles are dealt overall.
+    #[test]
+    fn opponent_model_biases_the_deal() {
+        let mut remaining = std::collections::HashMap::new();
+        remaining.insert('A', 5);
+        remaining.insert('E', 5);
+        remaining.insert('B', 8);
+        remaining.insert('Z', 2);
+        let pool = TilePool::from_remaining(&remaining);
+        assert_eq!(pool.len(), 20);
+
+        let kept_size = 6;
+        let draw_count = 3;
+        // Uniform expectation of Z among 6 kept tiles is 6 * 2/20 = 0.6;
+        // the marginal says 1.5.
+        let model = OpponentModel::new(0.0).with_marginals(&[('Z', 1.5)], kept_size, &pool);
+        assert!(model.has_marginals());
+
+        let mut rng = Rng::with_seed(7);
+        let deals = 2000;
+        let mut z_in_opp = 0usize;
+        for i in 0..deals {
+            let dealt = model.dealt(&pool, draw_count, &mut rng);
+            assert_eq!(dealt.len(), pool.len());
+            if i == 0 {
+                let mut sorted: Vec<char> = dealt.iter().map(|t| t.letter).collect();
+                sorted.sort_unstable();
+                let mut expected: Vec<char> = pool.tiles.iter().map(|t| t.letter).collect();
+                expected.sort_unstable();
+                assert_eq!(sorted, expected, "a deal must be a permutation of the pool");
+            }
+            z_in_opp += dealt[draw_count..draw_count + RACK_SIZE]
+                .iter()
+                .filter(|t| t.letter == 'Z')
+                .count();
+        }
+        // A uniform deal puts 7 * 2/20 = 0.7 Z's in their rack on average;
+        // the tilt should push it well above that.
+        let mean = z_in_opp as f32 / deals as f32;
+        assert!(mean > 0.95, "expected biased Z mean above 0.95, got {mean}");
+    }
+
+    /// With a temperature the simulated opponent errs sometimes but still
+    /// prefers better moves; our own side stays exact.
+    #[test]
+    fn opponent_policy_errs_at_temperature() {
+        let dict = load_default_dictionary().unwrap();
+        let mut playout = Playout::new_game(&dict, 42);
+
+        let best = playout.best_by_equity(Player::Opp).unwrap();
+        let pick = playout.policy_move(Player::Opp).unwrap();
+        assert_eq!(
+            (pick.word.clone(), pick.score),
+            (best.word.clone(), best.score),
+            "zero temperature must play the greedy move"
+        );
+
+        playout.opp_temperature = 8.0;
+        let samples = 300;
+        let mut erred = 0usize;
+        let mut best_picked = 0usize;
+        let mut total_gap = 0.0f32;
+        for _ in 0..samples {
+            let mv = playout.policy_move(Player::Opp).unwrap();
+            let gap = best.equity - mv.equity;
+            assert!(gap >= -1e-4, "sampled move cannot beat the best");
+            assert!(gap <= 3.0 * 8.0 + 1e-4, "window bounds the error");
+            total_gap += gap.max(0.0);
+            if gap > 1e-6 {
+                erred += 1;
+            } else {
+                best_picked += 1;
+            }
+        }
+        assert!(erred > 0, "a warm opponent must err sometimes");
+        assert!(
+            best_picked > samples / 16,
+            "the best move should stay the most likely pick"
+        );
+        assert!(
+            total_gap / samples as f32 <= 2.0 * 8.0,
+            "mean error should be on the order of the temperature"
+        );
+
+        let our_best = playout.best_by_equity(Player::Us).unwrap();
+        let our_pick = playout.policy_move(Player::Us).unwrap();
+        assert_eq!(
+            (our_pick.word, our_pick.score),
+            (our_best.word, our_best.score),
+            "our own playout policy stays exact"
+        );
+    }
+
+    /// `evaluate` and `evaluate_with_model(None)` are the same computation.
+    #[test]
+    fn evaluate_without_model_is_unchanged() {
+        let dict = load_default_dictionary().unwrap();
+        let mut state = SolverState::new();
+        for ch in ['C', 'A', 'T', 'S', 'E', 'R', 'N'] {
+            state.add_to_rack(ch);
+        }
+        let suggestions = state.get_suggestions(&dict);
+        let config = MctsConfig {
+            num_candidates: 3,
+            iterations_per_candidate: 6,
+            max_plies: 2,
+            parallel: false,
+            score_diff: 0,
+            time_budget: None,
+        };
+        let evaluator = MctsEvaluator::new(config);
+        let plain = evaluator.evaluate(&state, &suggestions, &dict);
+        let with_none = evaluator.evaluate_with_model(&state, &suggestions, &dict, None);
+        let key = |r: &MctsResult| (r.mv.word.clone(), r.mcts_equity, r.win_rate);
+        assert_eq!(
+            plain.iter().map(key).collect::<Vec<_>>(),
+            with_none.iter().map(key).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1601,7 +1917,7 @@ mod tests {
             .iter()
             .find(|m| matches!(m.kind, MoveKind::Exchange(_)))
             .unwrap();
-        let sim = CandidateSim::new(&state, ex, 0);
+        let sim = CandidateSim::new(&state, ex, 0, None);
         let MoveKind::Exchange(exchanged) = &ex.kind else {
             unreachable!()
         };

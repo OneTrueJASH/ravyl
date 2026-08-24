@@ -176,6 +176,12 @@ fn draw_ui(frame: &mut Frame, app: &App) {
 
     // Rack + stats.
     if let Some(rack_area) = layout.rack_area {
+        let opp_skill = (app.opp_moves_measured > 0).then(|| {
+            (
+                app.opp_loss_total / app.opp_moves_measured as f32,
+                app.opp_moves_measured,
+            )
+        });
         ui::stats_view::render_rack_stats(
             frame,
             rack_area,
@@ -184,6 +190,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             app.inferred_opponent_rack.as_ref(),
             (app.our_score, app.opp_score),
             (app.final_turn, app.final_turn_known),
+            opp_skill,
         );
     }
 
