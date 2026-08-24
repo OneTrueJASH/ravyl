@@ -11,7 +11,7 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 - **Crossplay-rules Monte Carlo playouts** for every phase of the game, including exchanges, with expected final spread, win probability and bingo rates per candidate (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
 - **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
 - **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
-- **Opponent rack inference** via FFI to the RefEngine C engine
+- **Opponent modeling**: rack inference via FFI to the RefEngine C engine biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
 - **Mouse support** with clickable board squares, suggestions, and UI elements
 - **Fluid layout** that adapts to any terminal size, down to a borderless grid on small terminals
 - **Preferences persisted to TOML** (sort mode, sidebar visibility)
@@ -31,7 +31,7 @@ Crossplay differs from Scrabble in several important ways that affect optimal st
 
 The endgame difference is the most strategically significant. In Scrabble, emptying your rack is paramount. In Crossplay, the player who draws the last tile gets the last word: the other player takes one more turn, then the bag-emptier plays the final move, and the game ends even if both still hold tiles. So when the bag is empty on your turn, the opponent only gets a reply if *they* emptied the bag. The solver tracks this (`last:YOU`/`last:OPP` in the stats pane, Ctrl+E to override for positions entered by hand): with a reply coming it searches every play, and passing, against the opponent's best response; without one it ranks by score.
 
-With tiles still in the bag the app plays each candidate out many times under these rules (both sides may exchange while the bag holds 7 or more tiles), reports the expected final spread, and estimates the win probability from a variance model fitted on Crossplay self-play. RefEngine's own simulation is not used for ranking because it plays the ending under Scrabble rules; it only infers what the opponent probably kept.
+With tiles still in the bag the app plays each candidate out many times under these rules (both sides may exchange while the bag holds 7 or more tiles), reports the expected final spread, and estimates the win probability from a variance model fitted on Crossplay self-play. RefEngine's own simulation is not used for ranking because it plays the ending under Scrabble rules; it only infers what the opponent probably kept, and those per-letter probabilities (shown in the stats pane as `Opp kept:`) tilt the deal of the opponent's hidden rack inside the playouts. The app also grades every opponent move it auto-scores against the best plays available from sampled completions of their rack; the running error rate (shown as `Opp err:`, calibrated on self-play so a perfect opponent reads zero) makes the simulated opponent in playouts err at the same rate instead of always punishing maximally.
 
 ## Building
 
