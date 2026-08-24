@@ -210,12 +210,20 @@ impl OpponentModel {
     /// `kept_size` tiles the opponent kept ('?' for the blank). Weights
     /// are clamped so a noisy or stale inference can only tilt the deal,
     /// never make a holding impossible or certain.
+    ///
+    /// Sequential weighted sampling without replacement undershoots the
+    /// target marginals (achieved expectations land between uniform and
+    /// inferred); the tilt direction is what matters, exact fidelity would
+    /// need a conditional-Poisson weight solve.
     pub fn with_marginals(
         mut self,
         marginals: &[(char, f32)],
         kept_size: usize,
         pool: &TilePool,
     ) -> Self {
+        // Kept tiles beyond a rack would spill past the opponent's region
+        // of the deal; no real caller keeps more than 6.
+        let kept_size = kept_size.min(RACK_SIZE - 1);
         if marginals.is_empty() || kept_size == 0 || pool.is_empty() {
             return self;
         }

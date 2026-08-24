@@ -227,7 +227,9 @@ pub struct App {
     /// Evaluation results for the current suggestions (playouts or endgame).
     pub sim_results: Option<Vec<SimResult>>,
     playout_receiver: Option<Receiver<Vec<MctsResult>>>,
-    inference_receiver: Option<Receiver<Option<InferenceResult>>>,
+    /// The in-flight inference, tagged with the opponent-move stamp it was
+    /// started for so a late result for an old move is dropped.
+    inference_receiver: Option<(u64, Receiver<Option<InferenceResult>>)>,
     endgame_receiver: Option<Receiver<Vec<EndgameMove>>>,
     pub mcts_progress: Option<MctsProgress>,
     refengine_simulator: Option<Arc<RefSimulator>>,
@@ -257,6 +259,10 @@ pub struct App {
     /// playouts' simulated opponent plays.
     pub opp_loss_total: f32,
     pub opp_moves_measured: u32,
+    /// Bumped whenever a new opponent move is auto-scored; inference
+    /// results carry the stamp they were started under, so a result that
+    /// arrives after the opponent moved again is recognisably stale.
+    opp_move_stamp: u64,
 }
 
 /// Cap on the playout opponent's softmax temperature: beyond roughly the
@@ -264,7 +270,11 @@ pub struct App {
 const MAX_OPP_TEMPERATURE: f32 = 12.0;
 
 /// How many rack completions each observed opponent move is measured
-/// against; more samples cost more movegen calls during Ctrl+S.
+/// against. The measurement runs synchronously in Ctrl+S: typically some
+/// tens of milliseconds, with a rare slow tail when sampled completions
+/// hold blanks. Kept on this thread because the running total feeds undo
+/// (snapshotted in the same push as the auto-score); moving it to a
+/// background thread would need its own staleness accounting.
 const OPP_LOSS_SAMPLES: usize = 10;
 
 /// Fitted by `study_loss_calibration` (mcts.rs, 120 games per point): the
@@ -332,6 +342,7 @@ impl App {
             final_turn_known: false,
             opp_loss_total: 0.0,
             opp_moves_measured: 0,
+            opp_move_stamp: 0,
         }
     }
 
@@ -712,11 +723,15 @@ impl App {
     /// Poll background channels and incorporate results. Returns true if new results arrived.
     pub fn poll_mcts(&mut self) -> bool {
         // Opponent-rack inference (RefEngine) finishes independently of ranking.
-        if let Some(ref receiver) = self.inference_receiver {
+        // A result is only kept if the opponent has not moved again since it
+        // was started: a late result describes a rack they no longer hold.
+        if let Some((stamp, ref receiver)) = self.inference_receiver {
             match receiver.try_recv() {
                 Ok(result) => {
-                    if result.is_some() {
+                    if result.is_some() && stamp == self.opp_move_stamp {
                         self.inferred_opponent_rack = result;
+                    } else if result.is_some() {
+                        log("Dropped a stale inference result (opponent moved since)");
                     }
                     self.inference_receiver = None;
                 }
@@ -1201,6 +1216,10 @@ impl App {
             self.opp_score += score;
             // Snapshot the board now so we don't re-score the same tiles next time
             self.last_applied_board = Some(self.state.board.clone());
+            // This move changed their rack: the stored inference describes
+            // tiles they have now partly played, so it must not bias deals.
+            self.opp_move_stamp += 1;
+            self.inferred_opponent_rack = None;
             let diff = self.our_score as i32 - self.opp_score as i32;
             let diff_str = if diff >= 0 {
                 format!("+{}", diff)
@@ -1542,8 +1561,12 @@ impl App {
 
         // Opponent model for the playouts: their measured strength, plus
         // rack marginals from inference. A fresh inference for the move
-        // just detected is worth a short wait; otherwise the last result
-        // still describes the same rack (they have not moved since).
+        // just detected is worth a short wait. The stored result is used
+        // otherwise; it is cleared whenever a new opponent move is scored
+        // and stale arrivals are dropped by stamp, so whatever it holds
+        // describes the rack they hold right now (an M re-run, or a fresh
+        // result that landed earlier). If the wait times out the deals are
+        // uniform this evaluation and the result still reaches the pane.
         let fresh_inference = self.start_inference();
         let stored_inference = self.inferred_opponent_rack.clone();
         let temperature = self.opp_temperature();
@@ -1625,7 +1648,7 @@ impl App {
 
         let (tx, rx) = mpsc::channel();
         let (tx_eval, rx_eval) = mpsc::channel();
-        self.inference_receiver = Some(rx);
+        self.inference_receiver = Some((self.opp_move_stamp, rx));
         thread::spawn(move || {
             let result = refengine.infer_opponent_rack(
                 &state,
@@ -1978,19 +2001,31 @@ mod tests {
         assert_eq!(app.opp_moves_measured, 0);
 
         // The opponent's tiles appear on the board; the next Ctrl+S
-        // auto-scores and measures them.
+        // auto-scores and measures them. A 3-tile word for a handful of
+        // points is far below the best completions can do, so the measured
+        // loss is reliably positive.
         app.state.place_tile(0, 0, 'C', false);
         app.state.place_tile(0, 1, 'A', false);
         app.state.place_tile(0, 2, 'T', false);
+        app.clear_rack();
         for ch in ['R', 'E', 'T', 'I', 'N', 'A', 'S'] {
             app.state.add_to_rack(ch);
         }
         let score_before = app.opp_score;
+        let stamp_before = app.opp_move_stamp;
         app.find_moves();
         assert!(app.opp_score > score_before, "opponent move was scored");
         assert_eq!(app.opp_moves_measured, 1);
-        assert!(app.opp_loss_total >= 0.0);
-        assert!(app.opp_temperature() >= 0.0);
+        assert!(app.opp_loss_total > 0.0, "a weak move measures a real loss");
+        assert_eq!(
+            app.opp_move_stamp,
+            stamp_before + 1,
+            "a scored opponent move bumps the inference stamp"
+        );
+        assert!(
+            app.inferred_opponent_rack.is_none(),
+            "a scored opponent move invalidates the stored inference"
+        );
 
         // Undo the auto-score: the measurement goes with it.
         app.undo();
