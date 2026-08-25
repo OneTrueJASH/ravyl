@@ -120,7 +120,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
     // Clear hit map for this frame.
     clear_hits();
 
-    let layout = AppLayout::compute(size);
+    let layout = AppLayout::compute(size, app.sidebar_visible);
 
     // Title bar.
     ui::status_bar::render_title(frame, layout.title_bar);

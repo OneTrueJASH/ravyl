@@ -1014,6 +1014,11 @@ impl App {
     /// Toggle sidebar (rack + suggestions) visibility and persist.
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
+        self.message = Some(if self.sidebar_visible {
+            "Sidebar shown".to_string()
+        } else {
+            "Sidebar hidden (\\ restores it)".to_string()
+        });
         self.save_settings();
     }
 

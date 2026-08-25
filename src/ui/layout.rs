@@ -1,7 +1,8 @@
 //! Fluid responsive layout — no hard breakpoints.
 //!
 //! Board always gets priority (sized from terminal height).
-//! Sidebar fills remaining width. Suggestions hide if sidebar < 30 cols.
+//! Sidebar fills remaining width — unless hidden with the `\` toggle.
+//! Suggestions hide if sidebar < 30 cols.
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
@@ -52,8 +53,10 @@ impl AppLayout {
         geometry.grid_size().0 + 2
     }
 
-    /// Compute layout from terminal size.
-    pub fn compute(area: Rect) -> Self {
+    /// Compute layout from terminal size. `sidebar_visible` is the `\`
+    /// toggle: when false the board pane takes the full width even on
+    /// terminals wide enough for both.
+    pub fn compute(area: Rect, sidebar_visible: bool) -> Self {
         // Vertical: title(1) | content | status(1)
         let vert = Layout::default()
             .direction(Direction::Vertical)
@@ -82,8 +85,10 @@ impl AppLayout {
             };
         }
 
-        // The board comes first: the sidebar only appears once both fit.
-        let has_sidebar = area.width >= BOARD_MIN_WIDTH + GAP + MIN_SIDEBAR_WIDTH;
+        // The board comes first: the sidebar only appears once both fit,
+        // and never while the user has toggled it away.
+        let has_sidebar =
+            sidebar_visible && area.width >= BOARD_MIN_WIDTH + GAP + MIN_SIDEBAR_WIDTH;
         let (board_section, sidebar) = if has_sidebar {
             // Board width: ideal from height, clamped to leave room for sidebar.
             let ideal_bw = Self::ideal_board_width(area.height)
@@ -162,5 +167,29 @@ impl AppLayout {
             suggestions_area,
             status_bar,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `\` toggle must actually remove the sidebar: on a terminal wide
+    /// enough for both panes, hiding it hands the full width to the board.
+    #[test]
+    fn sidebar_toggle_changes_the_layout() {
+        let area = Rect::new(0, 0, 160, 45);
+
+        let shown = AppLayout::compute(area, true);
+        assert!(shown.rack_area.is_some());
+        assert!(shown.suggestions_area.is_some());
+
+        let hidden = AppLayout::compute(area, false);
+        assert!(hidden.rack_area.is_none());
+        assert!(hidden.suggestions_area.is_none());
+        assert!(
+            hidden.board_area.width > shown.board_area.width,
+            "the board should absorb the freed width"
+        );
     }
 }
