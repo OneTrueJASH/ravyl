@@ -116,12 +116,14 @@ impl MctsConfig {
         }
     }
 
+    #[allow(dead_code)] // library API; the app drives `sim` instead
     pub fn with_score_diff(mut self, score_diff: i32) -> Self {
         self.score_diff = score_diff;
         self
     }
 
     /// Stop early once `cancel` is set.
+    #[allow(dead_code)] // library API; the app drives `sim` instead
     pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
         self.cancel = Some(cancel);
         self
@@ -136,6 +138,7 @@ impl MctsConfig {
 
 /// Result of Monte Carlo evaluation for a single move
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
 pub struct MctsResult {
     /// The evaluated move
     pub mv: Move,
@@ -284,13 +287,15 @@ impl OpponentModel {
         }
     }
 
-    /// Deal the pool for one playout, laid out as `[our draw | opponent
-    /// rack | bag]` just like a uniform shuffle. The opponent's kept tiles
-    /// are sampled first, by weight and without replacement, and placed at
-    /// the start of their rack region, so they can never appear in our
-    /// draw or the bag; everything else is dealt uniformly (their fresh
-    /// draws are exchangeable with ours).
-    fn dealt(&self, pool: &TilePool, draw_count: usize, rng: &mut Rng) -> Vec<Tile> {
+    /// Deal the pool for one playout, laid out as `[opponent rack | bag]`
+    /// like a uniform shuffle; our draw comes off the top (the end) of the
+    /// bag. The opponent's kept tiles are sampled first, by weight and
+    /// without replacement, and open their rack, so they can never appear
+    /// in our draw or the bag; everything else is dealt uniformly (their
+    /// fresh draws are exchangeable with ours). The layout does not depend
+    /// on the candidate, so every candidate in an iteration faces the same
+    /// opponent rack.
+    fn dealt(&self, pool: &TilePool, rng: &mut Rng) -> Vec<Tile> {
         let Some(weights) = &self.kept_weights else {
             return pool.shuffled(rng);
         };
@@ -315,16 +320,70 @@ impl OpponentModel {
             kept.push(rest.swap_remove(picked));
         }
         rng.shuffle(&mut rest);
-
-        // Our draw comes only from the non-kept remainder; the kept tiles
-        // open the opponent's rack region right after it.
-        let cut = draw_count.min(rest.len());
-        let mut dealt = Vec::with_capacity(pool.len());
-        dealt.extend_from_slice(&rest[..cut]);
-        dealt.append(&mut kept);
-        dealt.extend_from_slice(&rest[cut..]);
-        dealt
+        kept.append(&mut rest);
+        kept
     }
+
+    /// Hash of the model's parameters, for keying cached simulations.
+    pub fn fingerprint(&self) -> u64 {
+        let mut h = Fnv::new();
+        h.write_u64(self.temperature.to_bits() as u64);
+        h.write_u64(self.kept_size as u64);
+        if let Some(w) = &self.kept_weights {
+            for x in w {
+                h.write_u64(x.to_bits() as u64);
+            }
+        }
+        h.finish()
+    }
+}
+
+/// FNV-1a, for small deterministic fingerprints (position and model keys,
+/// playout seeds). Not for hash tables.
+pub(crate) struct Fnv(u64);
+
+impl Fnv {
+    pub(crate) fn new() -> Self {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+
+    pub(crate) fn write_u64(&mut self, x: u64) {
+        for b in x.to_le_bytes() {
+            self.0 ^= b as u64;
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    pub(crate) fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// Fingerprint of a position: board tiles (with blank flags) and our rack.
+/// Playout seeds derive from it, so a position replays the same deals in
+/// every run, which lets a stopped simulation resume where it left off.
+pub fn position_fingerprint(state: &SolverState) -> u64 {
+    let mut h = Fnv::new();
+    for r in 0..crate::board::BOARD_SIZE {
+        for c in 0..crate::board::BOARD_SIZE {
+            let code = match state.board.get_tile(r, c) {
+                Some(t) => (t.letter as u64) << 1 | t.is_blank as u64,
+                None => 0,
+            };
+            h.write_u64(code);
+        }
+    }
+    let mut rack: Vec<(bool, char)> = state
+        .rack
+        .tiles()
+        .iter()
+        .map(|t| (t.is_blank, t.letter))
+        .collect();
+    rack.sort_unstable();
+    for (b, l) in rack {
+        h.write_u64((l as u64) << 1 | b as u64);
+    }
+    h.finish()
 }
 
 #[cfg(test)]
@@ -690,7 +749,7 @@ impl<'a> Playout<'a> {
 }
 
 /// Per-candidate simulation state, kept across pruning rounds.
-struct CandidateSim<'a> {
+pub(crate) struct CandidateSim<'a> {
     mv: &'a Move,
     board: Board,
     our_leave: Vec<Tile>,
@@ -699,6 +758,8 @@ struct CandidateSim<'a> {
     draw_count: usize,
     score_diff: i32,
     model: Option<&'a OpponentModel>,
+    /// Base seed of this evaluation's playouts (see `run_batch`).
+    seed: u64,
     total: f32,
     wins: f32,
     iterations: usize,
@@ -711,7 +772,7 @@ struct CandidateSim<'a> {
 }
 
 impl<'a> CandidateSim<'a> {
-    fn new(
+    pub(crate) fn new(
         state: &SolverState,
         mv: &'a Move,
         score_diff: i32,
@@ -739,6 +800,7 @@ impl<'a> CandidateSim<'a> {
             draw_count,
             score_diff,
             model,
+            seed: iteration_seed(PLAYOUT_SEED, position_fingerprint(state)),
             total: 0.0,
             wins: 0.0,
             iterations: 0,
@@ -763,16 +825,7 @@ impl<'a> CandidateSim<'a> {
     fn record(&mut self, outcome: PlayoutOutcome) {
         self.values.push(outcome.value);
         self.total += outcome.value;
-        let final_diff = self.score_diff as f32 + outcome.value;
-        self.wins += if outcome.finished {
-            match final_diff.partial_cmp(&0.0) {
-                Some(std::cmp::Ordering::Greater) => 1.0,
-                Some(std::cmp::Ordering::Less) => 0.0,
-                _ => 0.5,
-            }
-        } else {
-            normal_cdf(final_diff / remaining_spread_sd(outcome.bag))
-        };
+        self.wins += win_value(self.score_diff, &outcome);
         self.iterations += 1;
     }
 
@@ -786,7 +839,7 @@ impl<'a> CandidateSim<'a> {
     /// faces the same deal whichever candidate is played, which tightens
     /// comparisons between candidates, makes runs reproducible, and does
     /// not depend on how the work is split between threads.
-    fn run_batch(
+    pub(crate) fn run_batch(
         &self,
         dict: &Dictionary,
         start: usize,
@@ -819,32 +872,36 @@ impl<'a> CandidateSim<'a> {
             {
                 break;
             }
-            let mut rng = Rng::with_seed(iteration_seed(PLAYOUT_SEED, i as u64));
-            let shuffled = match self.model {
-                Some(m) if m.has_marginals() => m.dealt(&self.pool, self.draw_count, &mut rng),
+            // Common random numbers: everything random in iteration i comes
+            // from this generator, and it is consumed the same way for
+            // every candidate (the deal, then two seeds), so all candidates
+            // face the same opponent rack and the same bag order.
+            let mut rng = Rng::with_seed(iteration_seed(self.seed, i as u64));
+            let dealt = match self.model {
+                Some(m) if m.has_marginals() => m.dealt(&self.pool, &mut rng),
                 _ => self.pool.shuffled(&mut rng),
             };
-            let (drawn, rest) = shuffled.split_at(self.draw_count);
-            let (opp_rack, bag) = rest.split_at(rest.len().min(RACK_SIZE));
+            let playout_seed = rng.u64(..);
+            let mut exchange_rng = Rng::with_seed(rng.u64(..));
 
+            let split = dealt.len().min(RACK_SIZE);
+            let opp_rack = dealt[..split].to_vec();
+            let mut bag = dealt[split..].to_vec();
+            // Our draw comes off the top of the bag, where every later
+            // draw comes from too.
+            let drawn = bag.split_off(bag.len() - self.draw_count.min(bag.len()));
             let mut our_rack = self.our_leave.clone();
-            our_rack.extend_from_slice(drawn);
-            let mut bag = bag.to_vec();
+            our_rack.extend_from_slice(&drawn);
             if let MoveKind::Exchange(returned) = &self.mv.kind {
-                // Exchanged tiles go back after we draw; the bag is shuffled
-                // so the position does not matter.
+                // Exchanged tiles go back after we draw and the bag is
+                // reshuffled, with the iteration's own generator.
                 bag.extend_from_slice(returned);
-                rng.shuffle(&mut bag);
+                exchange_rng.shuffle(&mut bag);
             }
 
-            let seed = rng.u64(..);
-            let mut playout = Playout::new(
-                dict,
-                self.board.clone(),
-                [our_rack, opp_rack.to_vec()],
-                bag,
-                seed,
-            );
+            let seed = playout_seed;
+            let mut playout =
+                Playout::new(dict, self.board.clone(), [our_rack, opp_rack], bag, seed);
             playout.spread = self.mv.score as i32;
             playout.opp_temperature = self.model.map(|m| m.temperature).unwrap_or(0.0);
             // If our move emptied the bag, we own the final turn: the
@@ -924,10 +981,27 @@ fn normal_cdf(x: f32) -> f32 {
 
 /// What one playout reports back to its candidate.
 #[derive(Debug, Clone, Copy)]
-struct PlayoutRecord {
-    outcome: PlayoutOutcome,
-    opp_bingo: bool,
-    our_bingo: bool,
+pub(crate) struct PlayoutRecord {
+    pub(crate) outcome: PlayoutOutcome,
+    pub(crate) opp_bingo: bool,
+    pub(crate) our_bingo: bool,
+}
+
+/// A playout's contribution to the win rate: 1, 0 or 1/2 for a finished
+/// game (counting the score difference before the move), and for a game
+/// cut off mid-way the probability that the remaining spread swing leaves
+/// us ahead.
+pub(crate) fn win_value(score_diff: i32, outcome: &PlayoutOutcome) -> f32 {
+    let final_diff = score_diff as f32 + outcome.value;
+    if outcome.finished {
+        match final_diff.partial_cmp(&0.0) {
+            Some(std::cmp::Ordering::Greater) => 1.0,
+            Some(std::cmp::Ordering::Less) => 0.0,
+            _ => 0.5,
+        }
+    } else {
+        normal_cdf(final_diff / remaining_spread_sd(outcome.bag))
+    }
 }
 
 /// Base seed of the playout generators (see [`CandidateSim::run_batch`]).
@@ -947,14 +1021,14 @@ fn iteration_seed(base: u64, i: u64) -> u64 {
 
 /// Result of one playout.
 #[derive(Debug, Clone, Copy)]
-struct PlayoutOutcome {
+pub(crate) struct PlayoutOutcome {
     /// Spread change from our point of view (exact if `finished`, otherwise
     /// spread so far plus leave values plus the tempo of the side to move).
-    value: f32,
+    pub(crate) value: f32,
     /// The game reached its end inside the ply limit.
-    finished: bool,
+    pub(crate) finished: bool,
     /// Tiles left in the bag where the playout stopped.
-    bag: usize,
+    pub(crate) bag: usize,
 }
 
 /// Candidates trailing the leader by more than this many points after a
@@ -987,6 +1061,7 @@ pub struct MctsEvaluator {
 }
 
 impl MctsEvaluator {
+    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn new(config: MctsConfig) -> Self {
         MctsEvaluator { config }
     }
@@ -1155,7 +1230,6 @@ mod tests {
         assert_eq!(pool.len(), 20);
 
         let kept_size = 6;
-        let draw_count = 3;
         // Uniform expectation of Z among 6 kept tiles is 6 * 2/20 = 0.6;
         // the marginal says 1.5.
         let model = OpponentModel::new(0.0).with_marginals(&[('Z', 1.5)], kept_size, &pool);
@@ -1165,7 +1239,7 @@ mod tests {
         let deals = 2000;
         let mut z_in_opp = 0usize;
         for i in 0..deals {
-            let dealt = model.dealt(&pool, draw_count, &mut rng);
+            let dealt = model.dealt(&pool, &mut rng);
             assert_eq!(dealt.len(), pool.len());
             if i == 0 {
                 let mut sorted: Vec<char> = dealt.iter().map(|t| t.letter).collect();
@@ -1174,7 +1248,7 @@ mod tests {
                 expected.sort_unstable();
                 assert_eq!(sorted, expected, "a deal must be a permutation of the pool");
             }
-            z_in_opp += dealt[draw_count..draw_count + RACK_SIZE]
+            z_in_opp += dealt[..RACK_SIZE]
                 .iter()
                 .filter(|t| t.letter == 'Z')
                 .count();

@@ -12,5 +12,6 @@ pub mod game;
 pub mod leaves;
 pub mod logging;
 pub mod mcts;
+pub mod sim;
 pub mod solver;
 pub mod tile;
