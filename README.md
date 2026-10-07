@@ -12,7 +12,7 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 - **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
 - **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
 - **Opponent modeling**: rack inference via FFI to the RefEngine C engine biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
-- **Mouse support** with clickable board squares, suggestions, and UI elements
+- **Mouse support** with clickable board squares, suggestions (double-click applies), dialog buttons and menu options
 - **Fluid layout** that adapts to any terminal size, down to a borderless grid on small terminals
 - **Preferences persisted to TOML** (sort mode, sidebar visibility)
 
@@ -98,7 +98,7 @@ cargo build --release --no-default-features
 2. **Set your rack**: Tab to the rack, type your tile letters (`?` for blanks).
 3. **Solve**: Press `Ctrl+S` (or Enter from rack) to generate all legal moves, ranked by static equity.
 4. **Simulate**: Press `M`. With tiles in the bag this plays the candidates out under Crossplay rules (deeper as the bag empties); with the bag empty it runs the endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag. Exchanges appear as `EXCH` rows; applying one clears those tiles so you can type the replacements.
-5. **Apply**: Select a move with arrow keys and press Enter to apply it to the board.
+5. **Apply**: Select a move with arrow keys and press Enter (or double-click it) to apply it to the board. Changing the position while an evaluation runs cancels it, so results never land on a different position.
 6. **Repeat**: After your opponent plays, update the board with their tiles and solve again.
 
 ## Architecture
@@ -113,10 +113,16 @@ Key architectural choices:
 
 ## Configuration
 
-Preferences are automatically saved to `~/.config/cpsolver2/settings.toml`:
+Preferences are automatically saved to `~/.config/cpsolver2/settings.toml` (written atomically):
 
-- **Default sort** — persisted when you cycle sort mode with `S` in the suggestions pane
+- **Default sort** — persisted when you cycle sort mode with `S` in the suggestions pane or click a sort tab
 - **Sidebar visibility** — persisted when you toggle with `\`
+
+Missing keys take their defaults. If the file cannot be parsed, it is moved aside to `settings.toml.bak`, the defaults are used, and the message bar says so.
+
+### Logs
+
+Each run logs to `cpsolver2-<pid>.log` in `~/.local/state/cpsolver2/` on Linux, or `~/Library/Caches/cpsolver2/` on macOS. The file is created with mode 0600. Logs older than a week are pruned at startup, and at most 20 are kept. The Logs tab (`` ` ``) shows the current solve's lines from memory.
 
 ## License
 
