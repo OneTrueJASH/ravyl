@@ -57,7 +57,17 @@ cargo build --release
 cargo run --release
 ```
 
-RefEngine is linked statically, so the binary has no runtime library dependency. Run it from the repository root (it looks for `data/` and `external/refengine/data/` next to the executable or in the working directory).
+RefEngine is linked statically, so the binary has no runtime library dependency. It needs the data files at run time and looks for a directory holding `data/words.fst` and `external/refengine/data/` in this order:
+
+1. `$CPSOLVER_DATA_DIR`
+2. `--data-dir <DIR>`
+3. the user data directory: `~/.local/share/cpsolver2` on Linux, `~/Library/Application Support/cpsolver2` on macOS
+4. `<exe>/../share/cpsolver2`
+5. the working directory (running from a checkout)
+
+```text
+cpsolver2 [--data-dir <DIR>]   cpsolver2 --help   cpsolver2 --version
+```
 
 ### Benchmarks
 
@@ -145,6 +155,10 @@ The position, rack, scores and who has the final turn are saved after every solv
 4. **Simulate**: Press `M`. With tiles in the bag this simulates every candidate (plays, exchanges and pass) under Crossplay rules, deeper as the bag empties: each gets a floor of playouts, then racing keeps sampling only the candidates that could still be best on spread or on win%. The table updates live and the header shows coverage (`simulated 1,840/12,300 plays · 48,200 playouts · 12.4s`). Esc stops; M continues. With the bag empty it runs the exact endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag. Exchanges appear as `EXCH` rows; applying one clears those tiles so you can type the replacements.
 5. **Apply**: Select a move with arrow keys and press Enter (or double-click it) to apply it to the board. Changing the position while an evaluation runs cancels it, so results never land on a different position.
 6. **Repeat**: After your opponent plays, put their tiles on the board (typing only the new tiles, or `:` with the full play) and solve again; their move is scored automatically.
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks to run before pushing, the tests and studies, benchmarks and fuzzing, and [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Architecture
 
