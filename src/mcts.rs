@@ -114,15 +114,12 @@ impl MctsConfig {
             Self::default()
         }
     }
-
-    #[allow(dead_code)] // library API; the app drives `sim` instead
     pub fn with_score_diff(mut self, score_diff: i32) -> Self {
         self.score_diff = score_diff;
         self
     }
 
     /// Stop early once `cancel` is set.
-    #[allow(dead_code)] // library API; the app drives `sim` instead
     pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
         self.cancel = Some(cancel);
         self
@@ -137,7 +134,6 @@ impl MctsConfig {
 
 /// Result of Monte Carlo evaluation for a single move
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
 pub struct MctsResult {
     /// The evaluated move
     pub mv: Move,
@@ -417,7 +413,6 @@ impl Player {
 /// One point of a playout's history: after `mover`'s move, the spread from
 /// our point of view and the tiles left in the bag.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(not(test), allow(dead_code))] // read by the self-play studies
 pub struct TracePoint {
     pub mover_is_us: bool,
     pub spread: i32,
@@ -762,7 +757,6 @@ impl<'a> Playout<'a> {
     }
 
     /// A fresh game: empty board, shuffled full bag, both racks drawn.
-    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     fn new_game(dict: &'a Dictionary, seed: u64) -> Self {
         let mut rng = Rng::with_seed(seed);
         let mut bag = full_tile_set();
@@ -774,7 +768,6 @@ impl<'a> Playout<'a> {
 
     /// Play the game out from `to_move`'s turn. Returns the final spread
     /// (plus leave and tempo adjustments if the ply limit cut the game short).
-    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     fn run(&mut self, to_move: Player, max_plies: usize) -> f32 {
         self.run_with(to_move, max_plies, &mut |_, _| {}).value
     }
@@ -854,7 +847,6 @@ impl<'a> Playout<'a> {
 /// the bag is too small to exchange, and whether it picks moves by static
 /// equity or by simulating the top candidates. Both sides play the exact
 /// two-ply ending.
-#[allow(dead_code)] // library API (self-play harness); the binary does not use it
 #[derive(Clone, Copy)]
 pub struct MatchEngine<'a> {
     pub name: &'a str,
@@ -865,7 +857,6 @@ pub struct MatchEngine<'a> {
 }
 
 /// Outcome of [`self_play_match`], from engine A's point of view.
-#[allow(dead_code)] // library API (self-play harness); the binary does not use it
 #[derive(Debug, Clone, Copy)]
 pub struct MatchResult {
     /// Games played (two per seed).
@@ -884,7 +875,6 @@ pub struct MatchResult {
 /// it, so both engines see the same tile stream; who moves first
 /// alternates between pairs. Pairs are the unit of the confidence
 /// intervals, which removes most of the luck of the draw.
-#[allow(dead_code)] // library API (self-play harness); the binary does not use it
 pub fn self_play_match(a: &MatchEngine, b: &MatchEngine, pairs: usize, seed: u64) -> MatchResult {
     let outcome = |spread: i32| match spread.cmp(&0) {
         std::cmp::Ordering::Greater => 1.0,
@@ -1242,7 +1232,6 @@ pub struct MctsEvaluator {
 }
 
 impl MctsEvaluator {
-    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn new(config: MctsConfig) -> Self {
         MctsEvaluator { config }
     }
@@ -1256,7 +1245,6 @@ impl MctsEvaluator {
     /// can still finish first. Results list the fully simulated candidates
     /// first (by expected spread), then the pruned ones, so a stale
     /// short-run estimate never outranks a complete one.
-    #[cfg_attr(not(test), allow(dead_code))] // the model-free API, kept for tests and callers
     pub fn evaluate(
         &self,
         state: &SolverState,

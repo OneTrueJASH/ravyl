@@ -138,7 +138,6 @@ pub struct Dictionary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PhaseScaling {
     /// 1.0 above 14 unseen tiles, 0.6 at 8-14, 0.25 at 7 or fewer.
-    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     Stepped,
     /// The same anchor values joined linearly: 1.0 from 21 unseen down to
     /// 0.6 at 14 and 0.25 at 7, flat below. The default: in 4,000 paired
@@ -207,21 +206,18 @@ impl Dictionary {
     }
 
     /// Use `phase` to weight leave values by game phase.
-    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     pub fn with_phase_scaling(mut self, phase: PhaseScaling) -> Self {
         self.phase = phase;
         self
     }
 
     /// The phase weighting in use.
-    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     pub fn phase_scaling(&self) -> PhaseScaling {
         self.phase
     }
 
     /// True when leave values come from a fitted table rather than the
     /// per-letter heuristic.
-    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn has_leave_table(&self) -> bool {
         self.leaves.is_some()
     }
@@ -303,14 +299,12 @@ impl Dictionary {
     }
 
     /// Check if a word is valid
-    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn is_valid(&self, word: &str) -> bool {
         let upper = word.to_ascii_uppercase();
         self.fst.contains(upper.as_bytes())
     }
 
     /// Check if a prefix could lead to a valid word
-    #[cfg_attr(not(test), allow(dead_code))] // used by tests and library consumers
     pub fn has_prefix(&self, prefix: &str) -> bool {
         if prefix.is_empty() {
             return true;
@@ -363,7 +357,6 @@ impl Dictionary {
     }
 
     /// Returns true if the dictionary contains no words
-    #[allow(dead_code)] // Required by public API (clippy::len_without_is_empty)
     pub fn is_empty(&self) -> bool {
         self.word_count == 0
     }

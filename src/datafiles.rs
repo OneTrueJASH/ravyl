@@ -126,7 +126,6 @@ pub fn lfs_warning() -> Option<String> {
 /// `None` (after printing why) when the files are missing or are LFS
 /// pointer stubs, so the calling test can skip instead of failing.
 #[cfg(test)]
-#[allow(dead_code)] // shared by the lib and bin test builds; each uses a subset
 pub(crate) mod test_data {
     use super::*;
     use crate::dictionary::Dictionary;
@@ -182,6 +181,7 @@ pub(crate) mod test_data {
     }
 
     /// RefEngine's data directory as a string, when the lexicon is real data.
+    #[cfg_attr(not(feature = "refengine"), allow(dead_code))]
     pub fn refengine_data() -> Option<String> {
         file(LEXICON_KWG)?;
         file(LEAVES_KLV2)?;

@@ -1,5 +1,5 @@
 ---
-source: src/main.rs
+source: src/ui/frame.rs
 expression: text
 ---
  Crossplay Solver
