@@ -3,9 +3,11 @@
 //! Contains the [`App`] struct which owns all game state, dialog state,
 //! and coordinates between the solver, MCTS engine, and UI.
 
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -136,6 +138,16 @@ impl Focus {
             Focus::Suggestions => Focus::Board,
         }
     }
+
+    /// The next pane after this one that `visible` accepts. The board is
+    /// always visible, so this terminates.
+    pub fn next_visible(&self, visible: impl Fn(Focus) -> bool) -> Focus {
+        let mut f = self.next();
+        while f != Focus::Board && !visible(f) {
+            f = f.next();
+        }
+        f
+    }
 }
 
 /// Sort mode for suggestions
@@ -197,8 +209,39 @@ struct UndoState {
     final_turn_known: bool,
     opp_loss_total: f32,
     opp_moves_measured: u32,
+    awaiting_opp_reply: bool,
     message: String,
 }
+
+/// A background evaluation: its result channel, the position stamp it was
+/// started for, and the flag that stops it.
+struct Job<T> {
+    stamp: u64,
+    rx: Receiver<T>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<T> Job<T> {
+    fn cancel(&self) {
+        self.cancel.store(true, AtomicOrdering::Relaxed);
+    }
+}
+
+/// Run `f` on a new thread, catching a panic so it cannot take the app
+/// down. A panicking worker sends nothing: its receiver reports
+/// `Disconnected`, which the poller turns into a failure message (the
+/// panic itself goes to the log through the panic hook).
+fn spawn_worker<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    thread::spawn(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    });
+}
+
+/// Two clicks on the same suggestion row within this window apply it.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// MCTS progress state
 pub struct MctsProgress {
@@ -228,11 +271,15 @@ pub struct App {
     undo_stack: Vec<UndoState>,
     /// Evaluation results for the current suggestions (playouts or endgame).
     pub sim_results: Option<Vec<SimResult>>,
-    playout_receiver: Option<Receiver<Vec<MctsResult>>>,
+    playout_job: Option<Job<Vec<MctsResult>>>,
     /// The in-flight inference, tagged with the opponent-move stamp it was
     /// started for so a late result for an old move is dropped.
     inference_receiver: Option<(u64, Receiver<Option<InferenceResult>>)>,
-    endgame_receiver: Option<Receiver<Vec<EndgameMove>>>,
+    endgame_job: Option<Job<Vec<EndgameMove>>>,
+    /// Bumped on every change to the position (board, rack, scores, final
+    /// turn, apply, undo, reset, re-solve). Evaluation results carry the
+    /// stamp they were started under and are dropped if it moved on.
+    position_stamp: u64,
     pub mcts_progress: Option<MctsProgress>,
     refengine_simulator: Option<Arc<RefSimulator>>,
     /// Why RefEngine could not be started, when it could not.
@@ -249,6 +296,16 @@ pub struct App {
     pending_opponent_tiles: Option<String>,
     /// Board state before the opponent played, saved alongside pending_opponent_tiles.
     pre_opponent_board: Option<Board>,
+    /// Score of the detected opponent move, for inference.
+    pending_opponent_score: u32,
+    /// True after we apply a move until the next solve: if that solve finds
+    /// no new tiles, the opponent passed or exchanged.
+    awaiting_opp_reply: bool,
+    /// Last click on a suggestion row, for double-click detection.
+    last_row_click: Option<(usize, Instant)>,
+    /// Terminal size from the last frame, so focus cycling can skip panes
+    /// the layout does not show. `None` until the first frame.
+    pub terminal_size: Option<(u16, u16)>,
     pub settings: Settings,
     pub our_score: u32,
     pub opp_score: u32,
@@ -326,9 +383,10 @@ impl App {
             message: Some("Loading dictionary...".to_string()),
             undo_stack: Vec::new(),
             sim_results: None,
-            playout_receiver: None,
+            playout_job: None,
             inference_receiver: None,
-            endgame_receiver: None,
+            endgame_job: None,
+            position_stamp: 0,
             mcts_progress: None,
             refengine_simulator,
             refengine_unavailable,
@@ -336,6 +394,10 @@ impl App {
             last_applied_board: None,
             pending_opponent_tiles: None,
             pre_opponent_board: None,
+            pending_opponent_score: 0,
+            awaiting_opp_reply: false,
+            last_row_click: None,
+            terminal_size: None,
             dialog: DialogState::None,
             should_quit: false,
             board_tab: BoardTab::default(),
@@ -437,6 +499,9 @@ impl App {
 
     /// Handle a mouse event and return the action for the main loop.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> AppAction {
+        if self.has_dialog() {
+            return self.handle_dialog_mouse(mouse);
+        }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(target) = resolve_click(mouse.column, mouse.row) {
@@ -469,6 +534,46 @@ impl App {
         }
     }
 
+    /// Mouse input while a dialog is open: only the dialog reacts. A click
+    /// on a button acts on it, a click elsewhere inside the dialog does
+    /// nothing, and a click outside it cancels the dialog.
+    fn handle_dialog_mouse(&mut self, mouse: MouseEvent) -> AppAction {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return AppAction::Nothing;
+        }
+        match resolve_click(mouse.column, mouse.row) {
+            Some(HitTarget::DialogYes) => match self.dialog {
+                DialogState::ConfirmQuit(_) => {
+                    self.close_dialog();
+                    return AppAction::Quit;
+                }
+                DialogState::ConfirmReset(_) => {
+                    self.close_dialog();
+                    self.reset();
+                }
+                _ => {}
+            },
+            Some(HitTarget::DialogNo) => self.close_dialog(),
+            Some(HitTarget::MenuItem(option)) => {
+                if matches!(self.dialog, DialogState::EscapeMenu(_)) {
+                    self.choose_menu_option(option);
+                }
+            }
+            Some(HitTarget::DialogArea) => {}
+            _ => self.close_dialog(),
+        }
+        AppAction::Redraw
+    }
+
+    /// Act on an escape-menu choice (Enter or a click).
+    fn choose_menu_option(&mut self, option: EscapeMenuOption) {
+        match option {
+            EscapeMenuOption::Quit => self.dialog = DialogState::ConfirmQuit(false),
+            EscapeMenuOption::Reset => self.dialog = DialogState::ConfirmReset(false),
+            EscapeMenuOption::Cancel => self.close_dialog(),
+        }
+    }
+
     /// Handle a resolved click target.
     fn handle_click(&mut self, target: HitTarget) -> AppAction {
         match target {
@@ -481,12 +586,20 @@ impl App {
                 self.focus = Focus::Rack;
             }
             HitTarget::SuggestionRow(idx) => {
-                if self.focus == Focus::Suggestions && self.selected_suggestion == idx {
-                    // Double-click on same row: apply the move.
+                let now = Instant::now();
+                let double = self.focus == Focus::Suggestions
+                    && self.selected_suggestion == idx
+                    && self
+                        .last_row_click
+                        .is_some_and(|(row, at)| row == idx && now - at <= DOUBLE_CLICK);
+                if double {
+                    // A real double-click: apply the move.
+                    self.last_row_click = None;
                     self.apply_suggestion_and_focus();
                 } else {
                     self.focus = Focus::Suggestions;
                     self.selected_suggestion = idx.min(self.suggestions.len().saturating_sub(1));
+                    self.last_row_click = Some((idx, now));
                 }
             }
             HitTarget::TabHeader(tab) => {
@@ -499,11 +612,15 @@ impl App {
             HitTarget::SortTab(mode) => {
                 self.focus = Focus::Suggestions;
                 self.set_sort_mode(mode);
+                self.save_settings();
             }
             HitTarget::FocusPane(focus) => {
                 self.focus = focus;
             }
-            HitTarget::StatusBar => {}
+            HitTarget::DialogYes
+            | HitTarget::DialogNo
+            | HitTarget::DialogArea
+            | HitTarget::MenuItem(_) => {}
         }
         AppAction::Redraw
     }
@@ -622,17 +739,7 @@ impl App {
                 KeyCode::Esc => {
                     self.close_dialog();
                 }
-                KeyCode::Enter => match selected {
-                    EscapeMenuOption::Quit => {
-                        self.dialog = DialogState::ConfirmQuit(false);
-                    }
-                    EscapeMenuOption::Reset => {
-                        self.dialog = DialogState::ConfirmReset(false);
-                    }
-                    EscapeMenuOption::Cancel => {
-                        self.close_dialog();
-                    }
-                },
+                KeyCode::Enter => self.choose_menu_option(selected),
                 _ => {}
             },
 
@@ -707,7 +814,31 @@ impl App {
 
     /// Returns true if any background evaluation is in progress.
     pub fn is_mcts_running(&self) -> bool {
-        self.playout_receiver.is_some() || self.endgame_receiver.is_some()
+        self.playout_job.is_some() || self.endgame_job.is_some()
+    }
+
+    /// Stop any running evaluation and forget its result. Returns true if
+    /// one was running.
+    pub fn cancel_evaluation(&mut self) -> bool {
+        let mut cancelled = false;
+        if let Some(job) = self.playout_job.take() {
+            job.cancel();
+            cancelled = true;
+        }
+        if let Some(job) = self.endgame_job.take() {
+            job.cancel();
+            cancelled = true;
+        }
+        self.mcts_progress = None;
+        cancelled
+    }
+
+    /// The position changed: results computed for the old one are stale.
+    fn position_changed(&mut self) {
+        self.position_stamp += 1;
+        if self.cancel_evaluation() {
+            log("Evaluation cancelled: the position changed");
+        }
     }
 
     /// Returns true if anything at all is still running in the background,
@@ -742,6 +873,12 @@ impl App {
             match receiver.try_recv() {
                 Ok(result) => {
                     if result.is_some() && stamp == self.opp_move_stamp {
+                        if let Some(n) = result.as_ref().and_then(|r| r.total_racks) {
+                            log(&format!(
+                                "Inference: {} racks consistent with their play",
+                                n
+                            ));
+                        }
                         self.inferred_opponent_rack = result;
                     } else if result.is_some() {
                         log("Dropped a stale inference result (opponent moved since)");
@@ -756,8 +893,13 @@ impl App {
         }
 
         // Crossplay endgame solver results.
-        if let Some(ref receiver) = self.endgame_receiver {
-            match receiver.try_recv() {
+        if let Some(ref job) = self.endgame_job {
+            match job.rx.try_recv() {
+                Ok(_) if job.stamp != self.position_stamp => {
+                    log("Dropped a stale endgame result (the position changed)");
+                    self.endgame_job = None;
+                    self.mcts_progress = None;
+                }
                 Ok(endgame_results) => {
                     let count = endgame_results.len();
 
@@ -800,11 +942,10 @@ impl App {
                     self.suggestions = new_suggestions;
 
                     self.sim_results = Some(sim_results);
-                    self.last_applied_board = Some(self.state.board.clone());
                     self.sort_mode = SortMode::MctsEquity;
                     self.apply_sort();
                     self.selected_suggestion = 0;
-                    self.endgame_receiver = None;
+                    self.endgame_job = None;
                     self.mcts_progress = None;
 
                     // Log PV for best move
@@ -829,17 +970,22 @@ impl App {
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.endgame_receiver = None;
+                    self.endgame_job = None;
                     self.mcts_progress = None;
-                    self.message = Some("Endgame solver failed".to_string());
+                    self.message = Some("Endgame evaluation failed (see the log)".to_string());
                     return true;
                 }
             }
         }
 
         // Playout results.
-        if let Some(ref receiver) = self.playout_receiver {
-            match receiver.try_recv() {
+        if let Some(ref job) = self.playout_job {
+            match job.rx.try_recv() {
+                Ok(_) if job.stamp != self.position_stamp => {
+                    log("Dropped a stale playout result (the position changed)");
+                    self.playout_job = None;
+                    self.mcts_progress = None;
+                }
                 Ok(results) => {
                     let mut new_suggestions = Vec::with_capacity(results.len());
                     for result in &results {
@@ -873,14 +1019,14 @@ impl App {
                     self.suggestions = new_suggestions;
                     self.sim_results =
                         Some(results.iter().map(Self::sim_result_from_playout).collect());
-                    self.last_applied_board = Some(self.state.board.clone());
                     self.selected_suggestion = 0;
                     self.sort_mode = SortMode::MctsEquity;
                     self.apply_sort();
-                    self.playout_receiver = None;
+                    self.playout_job = None;
                     self.mcts_progress = None;
 
-                    let shortened = results.iter().any(|r| r.iterations < results[0].iterations);
+                    let full = results.iter().map(|r| r.iterations).max().unwrap_or(0);
+                    let shortened = results.iter().any(|r| r.iterations < full);
                     let count = results.len();
                     self.message = Some(if shortened {
                         format!(
@@ -898,9 +1044,9 @@ impl App {
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.playout_receiver = None;
+                    self.playout_job = None;
                     self.mcts_progress = None;
-                    self.message = Some("Playout evaluation failed".to_string());
+                    self.message = Some("Playout evaluation failed (see the log)".to_string());
                     return true;
                 }
             }
@@ -966,17 +1112,11 @@ impl App {
     /// Commit a score from the input dialog.
     fn commit_score_input(&mut self, target: ScoreTarget, value: u32) {
         // Push undo so the score change is reversible
-        self.undo_stack.push(UndoState {
-            state: self.state.clone(),
-            our_score: self.our_score,
-            opp_score: self.opp_score,
-            last_applied_board: self.last_applied_board.clone(),
-            final_turn: self.final_turn,
-            final_turn_known: self.final_turn_known,
-            opp_loss_total: self.opp_loss_total,
-            opp_moves_measured: self.opp_moves_measured,
-            message: format!("Score: {}-{}", self.our_score, self.opp_score),
-        });
+        let snapshot = self.undo_snapshot(format!("Score: {}-{}", self.our_score, self.opp_score));
+        self.undo_stack.push(snapshot);
+        // Win estimates depend on the score difference.
+        self.position_changed();
+        self.sim_results = None;
 
         let label = match target {
             ScoreTarget::Player => {
@@ -1027,6 +1167,7 @@ impl App {
     /// Toggle sidebar (rack + suggestions) visibility and persist.
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
+        self.ensure_focus_visible();
         self.message = Some(if self.sidebar_visible {
             "Sidebar shown".to_string()
         } else {
@@ -1162,6 +1303,7 @@ impl App {
     }
 
     fn clear_suggestions(&mut self) {
+        self.position_changed();
         self.suggestions.clear();
         self.sim_results = None;
         // Intentionally preserve inferred_opponent_rack: inference results
@@ -1212,25 +1354,34 @@ impl App {
             return;
         }
 
+        // A re-solve replaces whatever was being evaluated.
+        self.position_changed();
+        // One log section per solve keeps the log viewer readable.
+        crate::logging::start_section();
+
         // Auto-score the opponent's move if new tiles appeared since our last play.
         // Save the opponent tiles and pre-opponent board BEFORE updating the
         // snapshot, so RefEngine inference can still detect them later.
         self.pending_opponent_tiles = self.detect_opponent_tiles();
         self.pre_opponent_board = self.last_applied_board.clone();
 
-        if let Some((word, score, placed)) = self.score_opponent_move() {
+        let opponent_move = self.score_opponent_move();
+        if opponent_move.is_none() && self.awaiting_opp_reply {
+            // We moved, and the opponent's turn put nothing on the board:
+            // they passed or exchanged. Whatever inference said about the
+            // tiles they kept no longer describes their rack.
+            self.opp_move_stamp += 1;
+            if self.inferred_opponent_rack.take().is_some() {
+                log("Opponent passed or exchanged: cleared the rack inference");
+            }
+        }
+        self.awaiting_opp_reply = false;
+
+        if let Some((word, score, placed)) = opponent_move {
             // Push undo state so the auto-score is reversible
-            self.undo_stack.push(UndoState {
-                state: self.state.clone(),
-                our_score: self.our_score,
-                opp_score: self.opp_score,
-                last_applied_board: self.last_applied_board.clone(),
-                final_turn: self.final_turn,
-                final_turn_known: self.final_turn_known,
-                opp_loss_total: self.opp_loss_total,
-                opp_moves_measured: self.opp_moves_measured,
-                message: format!("Before opp: {}", word),
-            });
+            let snapshot = self.undo_snapshot(format!("Before opp: {}", word));
+            self.undo_stack.push(snapshot);
+            self.pending_opponent_score = score;
             self.opp_score += score;
             // Snapshot the board now so we don't re-score the same tiles next time
             self.last_applied_board = Some(self.state.board.clone());
@@ -1342,11 +1493,10 @@ impl App {
             for col in 0..BOARD_SIZE {
                 if prev.get_tile(row, col).is_none() {
                     if let Some(tile) = self.state.board.get_tile(row, col) {
-                        if tile.is_blank {
-                            tiles.push(tile.letter.to_ascii_lowercase());
-                        } else {
-                            tiles.push(tile.letter);
-                        }
+                        // RefEngine's `infer` reads played tiles as a rack:
+                        // a lowercase letter would be un-blanked into the
+                        // natural letter, so a played blank must be '?'.
+                        tiles.push(if tile.is_blank { '?' } else { tile.letter });
                     }
                 }
             }
@@ -1477,11 +1627,8 @@ impl App {
     /// thread. Every phase is judged under Crossplay rules by the native
     /// engines; RefEngine only infers the opponent's likely rack.
     pub fn run_mcts_evaluation(&mut self) {
-        if self.is_mcts_running() {
-            return;
-        }
-        // One log per evaluation keeps the log viewer readable.
-        crate::logging::clear_log();
+        // A new request replaces a running evaluation.
+        self.cancel_evaluation();
 
         if self.suggestions.is_empty() {
             self.message = Some("Generate suggestions first (Ctrl+S)".to_string());
@@ -1513,6 +1660,9 @@ impl App {
         // passing included; no leftover-tile penalties).
         if self.state.is_endgame() {
             let state = self.state.clone();
+            // The board as it stands when we evaluate is the reference for
+            // detecting the opponent's next move.
+            self.last_applied_board = Some(self.state.board.clone());
 
             // The solver regenerates every play itself (the list on
             // screen is capped), so no count is known up front.
@@ -1531,9 +1681,14 @@ impl App {
             ));
 
             let (tx, rx) = mpsc::channel();
-            self.endgame_receiver = Some(rx);
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.endgame_job = Some(Job {
+                stamp: self.position_stamp,
+                rx,
+                cancel: Arc::clone(&cancel),
+            });
 
-            thread::spawn(move || {
+            spawn_worker(move || {
                 let solver = EndgameSolver::new(&dict);
 
                 // Build opponent rack from unseen tiles
@@ -1550,8 +1705,15 @@ impl App {
                 }
 
                 let our_rack: Vec<_> = state.rack.tiles();
-                let results = solver.solve(&state.board, &our_rack, &opp_rack, true);
-                let _ = tx.send(results);
+                if let Some(results) = solver.solve_cancellable(
+                    &state.board,
+                    &our_rack,
+                    &opp_rack,
+                    true,
+                    Some(&cancel),
+                ) {
+                    let _ = tx.send(results);
+                }
             });
             return;
         }
@@ -1588,10 +1750,19 @@ impl App {
         let fresh_inference = self.start_inference();
         let stored_inference = self.inferred_opponent_rack.clone();
         let temperature = self.opp_temperature();
+        // Snapshot after inference has taken the opponent's tiles: this
+        // board is the reference for detecting their next move.
+        self.last_applied_board = Some(self.state.board.clone());
 
         let (tx, rx) = mpsc::channel();
-        self.playout_receiver = Some(rx);
-        thread::spawn(move || {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let config = config.with_cancel(Arc::clone(&cancel));
+        self.playout_job = Some(Job {
+            stamp: self.position_stamp,
+            rx,
+            cancel: Arc::clone(&cancel),
+        });
+        spawn_worker(move || {
             let inference = fresh_inference
                 .and_then(|rx| rx.recv_timeout(std::time::Duration::from_secs(3)).ok())
                 .flatten()
@@ -1610,7 +1781,9 @@ impl App {
             }
             let evaluator = MctsEvaluator::new(config);
             let results = evaluator.evaluate_with_model(&state, &candidates, &dict, model.as_ref());
-            let _ = tx.send(results);
+            if !cancel.load(AtomicOrdering::Relaxed) {
+                let _ = tx.send(results);
+            }
         });
     }
 
@@ -1660,17 +1833,20 @@ impl App {
             .pre_opponent_board
             .take()
             .or_else(|| self.last_applied_board.clone());
-        let scores = (self.our_score, self.opp_score);
+        // RefEngine wants the scores before the opponent's move.
+        let move_score = self.pending_opponent_score;
+        let scores = (self.our_score, self.opp_score.saturating_sub(move_score));
         let state = self.state.clone();
         let refengine = Arc::clone(refengine);
 
         let (tx, rx) = mpsc::channel();
         let (tx_eval, rx_eval) = mpsc::channel();
         self.inference_receiver = Some((self.opp_move_stamp, rx));
-        thread::spawn(move || {
+        spawn_worker(move || {
             let result = refengine.infer_opponent_rack(
                 &state,
                 &opponent_tiles,
+                move_score,
                 pre_opponent_board.as_ref(),
                 scores,
             );
@@ -1695,20 +1871,11 @@ impl App {
             return;
         }
 
-        self.undo_stack.push(UndoState {
-            state: self.state.clone(),
-            our_score: self.our_score,
-            opp_score: self.opp_score,
-            last_applied_board: self.last_applied_board.clone(),
-            final_turn: self.final_turn,
-            final_turn_known: self.final_turn_known,
-            opp_loss_total: self.opp_loss_total,
-            opp_moves_measured: self.opp_moves_measured,
-            message: format!(
-                "Before: {}",
-                self.suggestions[self.selected_suggestion].word
-            ),
-        });
+        let snapshot = self.undo_snapshot(format!(
+            "Before: {}",
+            self.suggestions[self.selected_suggestion].word
+        ));
+        self.undo_stack.push(snapshot);
 
         let mv = self.suggestions[self.selected_suggestion].clone();
 
@@ -1733,6 +1900,7 @@ impl App {
         self.state.apply_move(&mv);
         self.our_score += mv.score;
         self.last_applied_board = Some(self.state.board.clone());
+        self.awaiting_opp_reply = true;
         let diff = self.our_score as i32 - self.opp_score as i32;
         let diff_str = if diff >= 0 {
             format!("+{}", diff)
@@ -1770,10 +1938,27 @@ impl App {
             self.final_turn_known = undo_state.final_turn_known;
             self.opp_loss_total = undo_state.opp_loss_total;
             self.opp_moves_measured = undo_state.opp_moves_measured;
+            self.awaiting_opp_reply = undo_state.awaiting_opp_reply;
             self.clear_suggestions();
             self.message = Some(format!("Undone: {}", undo_state.message));
         } else {
             self.message = Some("Nothing to undo".to_string());
+        }
+    }
+
+    /// The undo record for the current state.
+    fn undo_snapshot(&self, message: String) -> UndoState {
+        UndoState {
+            state: self.state.clone(),
+            our_score: self.our_score,
+            opp_score: self.opp_score,
+            last_applied_board: self.last_applied_board.clone(),
+            final_turn: self.final_turn,
+            final_turn_known: self.final_turn_known,
+            opp_loss_total: self.opp_loss_total,
+            opp_moves_measured: self.opp_moves_measured,
+            awaiting_opp_reply: self.awaiting_opp_reply,
+            message,
         }
     }
 
@@ -1803,6 +1988,8 @@ impl App {
         self.last_applied_board = None;
         self.pending_opponent_tiles = None;
         self.pre_opponent_board = None;
+        self.pending_opponent_score = 0;
+        self.awaiting_opp_reply = false;
         self.our_score = 0;
         self.opp_score = 0;
         self.final_turn = FinalTurn::default();
@@ -1814,7 +2001,31 @@ impl App {
 
     /// Cycle input focus to the next pane.
     pub fn next_focus(&mut self) {
-        self.focus = self.focus.next();
+        self.focus = self.focus.next_visible(|f| self.pane_visible(f));
+    }
+
+    /// Whether the current layout shows the pane for `focus` (always true
+    /// before the first frame, when the terminal size is unknown).
+    pub fn pane_visible(&self, focus: Focus) -> bool {
+        let Some((w, h)) = self.terminal_size else {
+            return true;
+        };
+        let layout = crate::ui::layout::AppLayout::compute(
+            ratatui::layout::Rect::new(0, 0, w, h),
+            self.sidebar_visible,
+        );
+        match focus {
+            Focus::Board => true,
+            Focus::Rack => layout.rack_area.is_some(),
+            Focus::Suggestions => layout.suggestions_area.is_some(),
+        }
+    }
+
+    /// Move focus to the board if the focused pane is no longer shown.
+    pub fn ensure_focus_visible(&mut self) {
+        if !self.pane_visible(self.focus) {
+            self.focus = Focus::Board;
+        }
     }
 
     /// Advance to the next sort mode, re-sort suggestions, and persist.
@@ -1847,13 +2058,20 @@ impl App {
                 let by_win = self.sort_mode == SortMode::WinPct;
                 if let Some(ref results) = self.sim_results {
                     // Candidates pruned early carry a short-run estimate;
-                    // rank them after those that received the full budget.
+                    // rank them after those that received the full budget,
+                    // and any that never got a playout after both.
                     let full = results.iter().map(|r| r.iterations).max().unwrap_or(0);
                     let sim_map: std::collections::HashMap<_, _> = results
                         .iter()
                         .map(|r| {
                             let key = (r.word.to_uppercase(), r.row, r.col, r.direction);
-                            let tier = if r.iterations == full { 1.0 } else { 0.0 };
+                            let tier = if r.is_endgame || r.iterations == full {
+                                2.0
+                            } else if r.iterations > 0 {
+                                1.0
+                            } else {
+                                0.0
+                            };
                             (key, (tier, if by_win { r.win_pct } else { r.sim_equity }))
                         })
                         .collect();
@@ -2106,5 +2324,312 @@ mod tests {
         assert_eq!(app.state.unseen_tile_count(), 0);
         app.final_turn = FinalTurn::Opponent;
         assert!(app.our_move_ends_game());
+    }
+
+    // ── Keystroke-script and regression tests ──────────────────────────
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    fn type_keys(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+    }
+
+    /// An app with the dictionary and a midgame position, solved.
+    fn solved_app() -> Option<App> {
+        let dict = crate::datafiles::test_data::dictionary()?;
+        let mut app = test_app();
+        app.set_dictionary(dict);
+        app.state =
+            SolverState::from_cgp("15/15/15/15/15/15/15/3BEECH7/7I7/7K7/7E7/7r7/15/15/15 AEINRST")
+                .unwrap();
+        app.find_moves();
+        assert!(!app.suggestions.is_empty());
+        Some(app)
+    }
+
+    /// Wait for the running evaluation (if any) to finish and be polled.
+    fn finish_evaluation(app: &mut App) {
+        let started = Instant::now();
+        while app.is_mcts_running() && started.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(10));
+            app.poll_mcts();
+        }
+    }
+
+    /// Editing the position while an evaluation runs cancels it: its flag
+    /// is set and the job is gone, so no result can land on the new
+    /// position.
+    #[test]
+    fn edits_cancel_a_running_evaluation() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.run_mcts_evaluation();
+        let flag = Arc::clone(&app.playout_job.as_ref().expect("job started").cancel);
+        let stamp = app.position_stamp;
+
+        app.focus = Focus::Rack;
+        app.handle_key(key(KeyCode::Backspace));
+
+        assert!(
+            flag.load(AtomicOrdering::Relaxed),
+            "the worker was told to stop"
+        );
+        assert!(!app.is_mcts_running());
+        assert!(app.mcts_progress.is_none());
+        assert!(app.position_stamp > stamp);
+    }
+
+    /// A result stamped for an older position is dropped on receipt.
+    #[test]
+    fn stale_results_are_dropped() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        app.suggestions = vec![fake_move(2)];
+        let before = app.suggestions.clone();
+        let (tx, rx) = mpsc::channel();
+        app.playout_job = Some(Job {
+            stamp: app.position_stamp,
+            rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        // The position moves on without going through the usual paths
+        // (which would also cancel the job), then the old result arrives.
+        app.position_stamp += 1;
+        tx.send(vec![MctsResult {
+            mv: fake_move(3),
+            mcts_equity: 99.0,
+            win_rate: 1.0,
+            iterations: 10,
+            opp_bingo_rate: 0.0,
+            our_bingo_rate: 0.0,
+        }])
+        .unwrap();
+        app.poll_mcts();
+        assert!(app.playout_job.is_none());
+        assert!(app.sim_results.is_none(), "stale result was applied");
+        assert_eq!(app.suggestions.len(), before.len());
+        assert_eq!(app.suggestions[0].word, before[0].word);
+    }
+
+    /// The bug behind stale results: an evaluation that finished after the
+    /// opponent's tiles were typed used to snapshot the live board, which
+    /// swallowed the opponent's move. Now the snapshot is the board when
+    /// the evaluation started and the late result is dropped, so the next
+    /// solve still scores their move.
+    #[test]
+    fn opponent_tiles_typed_during_evaluation_are_scored() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        let board_at_start = app.state.board.clone();
+        app.run_mcts_evaluation();
+        assert_eq!(
+            app.last_applied_board
+                .as_ref()
+                .map(|b| b.get_tile(7, 3).is_some()),
+            Some(true),
+            "snapshot taken when the evaluation starts"
+        );
+
+        // The opponent plays AT through the B of BEECH while we evaluate.
+        app.focus = Focus::Board;
+        app.cursor = (6, 3);
+        app.typing_direction = Direction::Vertical;
+        type_keys(&mut app, "A");
+        app.cursor = (8, 3);
+        type_keys(&mut app, "T");
+        finish_evaluation(&mut app);
+        assert!(app.sim_results.is_none());
+        for r in 0..BOARD_SIZE {
+            for c in 0..BOARD_SIZE {
+                assert_eq!(
+                    app.last_applied_board
+                        .as_ref()
+                        .unwrap()
+                        .get_tile(r, c)
+                        .is_some(),
+                    board_at_start.get_tile(r, c).is_some(),
+                    "snapshot changed at ({r},{c})"
+                );
+            }
+        }
+
+        let opp_before = app.opp_score;
+        app.handle_key(ctrl('s'));
+        assert!(app.opp_score > opp_before, "the opponent's move was scored");
+        app.cancel_evaluation();
+    }
+
+    /// M while an evaluation runs restarts it instead of being ignored.
+    #[test]
+    fn rerunning_restarts_the_evaluation() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.run_mcts_evaluation();
+        let first = Arc::clone(&app.playout_job.as_ref().unwrap().cancel);
+        app.focus = Focus::Suggestions;
+        app.handle_key(key(KeyCode::Char('m')));
+        assert!(first.load(AtomicOrdering::Relaxed), "first run cancelled");
+        let second = &app.playout_job.as_ref().expect("a new run started").cancel;
+        assert!(!second.load(AtomicOrdering::Relaxed));
+        app.cancel_evaluation();
+    }
+
+    /// Candidates that never got a playout show no numbers and sort after
+    /// every simulated one, whatever their placeholder values say.
+    #[test]
+    fn unsimulated_candidates_sort_last() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        let mut moves: Vec<Move> = (1..=3).map(fake_move).collect();
+        for (i, m) in moves.iter_mut().enumerate() {
+            m.row = i;
+        }
+        app.suggestions = moves.clone();
+        let sim = |m: &Move, eq: f32, n: usize| SimResult {
+            word: m.word.clone(),
+            row: m.row,
+            col: m.col,
+            direction: m.direction,
+            win_pct: 50.0,
+            sim_equity: eq,
+            ply1_bingo_pct: 0.0,
+            ply2_bingo_pct: 0.0,
+            is_endgame: false,
+            iterations: n,
+        };
+        app.sim_results = Some(vec![
+            sim(&moves[0], 5.0, 100),
+            sim(&moves[1], 50.0, 0),
+            sim(&moves[2], 10.0, 40),
+        ]);
+        app.set_sort_mode(SortMode::MctsEquity);
+        let order: Vec<usize> = app.suggestions.iter().map(|m| m.row).collect();
+        assert_eq!(order, vec![0, 2, 1]);
+    }
+
+    /// One click on the selected row only selects; a second click on the
+    /// same row within the double-click window applies it.
+    #[test]
+    fn applying_from_the_list_needs_a_real_double_click() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        app.suggestions = vec![fake_move(2), fake_move(3)];
+        app.focus = Focus::Suggestions;
+        app.selected_suggestion = 0;
+
+        // A single click on the already-selected row does nothing more.
+        app.handle_click(HitTarget::SuggestionRow(0));
+        assert!(app.undo_stack.is_empty());
+        // A slow second click is still a single click.
+        app.last_row_click = Some((0, Instant::now() - Duration::from_secs(1)));
+        app.handle_click(HitTarget::SuggestionRow(0));
+        assert!(app.undo_stack.is_empty());
+        // A click on another row selects it.
+        app.handle_click(HitTarget::SuggestionRow(1));
+        assert_eq!(app.selected_suggestion, 1);
+        assert!(app.undo_stack.is_empty());
+        // A quick second click on it applies.
+        app.handle_click(HitTarget::SuggestionRow(1));
+        assert_eq!(app.undo_stack.len(), 1, "double-click applied the move");
+    }
+
+    /// Tab skips panes the layout does not show, and hiding the sidebar
+    /// takes focus back to the board.
+    #[test]
+    fn focus_skips_hidden_panes() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        app.terminal_size = Some((200, 50));
+        assert!(app.sidebar_visible);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Rack);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Suggestions);
+
+        app.handle_key(key(KeyCode::Char('\\')));
+        assert!(!app.sidebar_visible);
+        assert_eq!(app.focus, Focus::Board, "focus left the hidden pane");
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Board, "nothing else is visible");
+
+        // Too narrow for a sidebar at all.
+        app.sidebar_visible = true;
+        app.terminal_size = Some((80, 24));
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Board);
+    }
+
+    /// When the opponent's turn adds no tiles (a pass or an exchange), the
+    /// stored rack inference no longer applies and is cleared.
+    #[test]
+    fn opponent_pass_or_exchange_clears_inference() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.apply_suggestion();
+        app.inferred_opponent_rack = Some(InferenceResult {
+            played_tiles: "QI".to_string(),
+            top_leaves: vec![],
+            letter_marginals: vec![],
+            total_racks: None,
+        });
+        let stamp = app.opp_move_stamp;
+        // Our new rack, and no new tiles on the board.
+        app.focus = Focus::Rack;
+        type_keys(&mut app, "DEGILOU");
+        app.find_moves();
+        assert!(app.inferred_opponent_rack.is_none());
+        assert_eq!(app.opp_move_stamp, stamp + 1);
+
+        // A second solve with nothing new in between is not another turn.
+        app.inferred_opponent_rack = Some(InferenceResult {
+            played_tiles: "QI".to_string(),
+            top_leaves: vec![],
+            letter_marginals: vec![],
+            total_racks: None,
+        });
+        app.find_moves();
+        assert!(app.inferred_opponent_rack.is_some());
+        app.cancel_evaluation();
+    }
+
+    /// A worker that panics is reported as a failed evaluation instead of
+    /// taking the app down.
+    #[test]
+    fn panicking_worker_reports_failure() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        let (tx, rx) = mpsc::channel::<Vec<MctsResult>>();
+        app.playout_job = Some(Job {
+            stamp: app.position_stamp,
+            rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        spawn_worker(move || {
+            let _keep = tx;
+            panic!("simulated worker failure");
+        });
+        let started = Instant::now();
+        while app.is_mcts_running() && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+            app.poll_mcts();
+        }
+        assert!(!app.is_mcts_running());
+        assert!(app.message.as_deref().unwrap_or("").contains("failed"));
     }
 }

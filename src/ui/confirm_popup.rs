@@ -9,8 +9,13 @@ use ratatui::{
 };
 
 use crate::ui::hit::{register_hit, HitTarget};
-use crate::ui::popup_frame::{centered_rect, render_popup_frame};
+use crate::ui::popup_frame::{centered_rect, centered_x, render_popup_frame};
 use crate::ui::theme;
+
+const YES_LABEL: &str = " Yes ";
+const NO_LABEL: &str = " No ";
+/// Columns between the two buttons.
+const BUTTON_GAP: u16 = 5;
 
 /// Yes/No confirmation dialog widget.
 pub struct ConfirmPopup<'a> {
@@ -31,15 +36,25 @@ impl<'a> ConfirmPopup<'a> {
     pub fn area(terminal_area: Rect) -> Rect {
         centered_rect(terminal_area, 40, 7)
     }
+
+    /// Screen rectangles of the Yes and No buttons for a dialog whose
+    /// inner (bordered-off) area is `inner`.
+    pub fn button_rects(inner: Rect) -> (Rect, Rect) {
+        let yes_w = YES_LABEL.len() as u16;
+        let no_w = NO_LABEL.len() as u16;
+        let x0 = centered_x(inner, yes_w + BUTTON_GAP + no_w);
+        let y = inner.y + 3;
+        (
+            Rect::new(x0, y, yes_w, 1),
+            Rect::new(x0 + yes_w + BUTTON_GAP, y, no_w, 1),
+        )
+    }
 }
 
 impl Widget for ConfirmPopup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let inner = render_popup_frame(area, buf, self.title, theme::POPUP_WARN_BORDER);
-
-        // Register hit targets — not wired to specific actions yet, but the
-        // main loop can use FocusPane or StatusBar as needed.
-        let _ = inner; // suppress unused if needed
+        register_hit(area, HitTarget::DialogArea);
 
         let message_line = Line::from(Span::styled(
             self.message,
@@ -64,13 +79,6 @@ impl Widget for ConfirmPopup<'_> {
             Style::default().fg(theme::BTN_NO_FG)
         };
 
-        let buttons_line = Line::from(vec![
-            Span::raw("        "),
-            Span::styled(" Yes ", yes_style),
-            Span::raw("     "),
-            Span::styled(" No ", no_style),
-        ]);
-
         let hint_line = Line::from(Span::styled(
             "←/→ to select, Enter to confirm",
             Style::default().fg(theme::TEXT_DIM),
@@ -80,25 +88,20 @@ impl Widget for ConfirmPopup<'_> {
             Line::from(""),
             message_line,
             Line::from(""),
-            buttons_line,
+            Line::from(""),
             hint_line,
         ];
-
-        // Register clickable button regions for mouse support.
-        // "Yes" is at ~col 8..12 within the inner area, row 3.
-        let btn_y = inner.y + 3;
-        if btn_y < inner.y + inner.height {
-            register_hit(
-                Rect::new(inner.x + 8, btn_y, 5, 1),
-                HitTarget::StatusBar, // Repurposed as "confirm yes"
-            );
-            register_hit(
-                Rect::new(inner.x + 18, btn_y, 4, 1),
-                HitTarget::StatusBar, // Repurposed as "confirm no"
-            );
-        }
-
         let paragraph = Paragraph::new(content).centered();
         paragraph.render(inner, buf);
+
+        // The buttons are drawn at the same rectangles that are registered
+        // for clicks.
+        let (yes, no) = Self::button_rects(inner);
+        if yes.y < inner.y + inner.height {
+            buf.set_span(yes.x, yes.y, &Span::styled(YES_LABEL, yes_style), yes.width);
+            buf.set_span(no.x, no.y, &Span::styled(NO_LABEL, no_style), no.width);
+            register_hit(yes, HitTarget::DialogYes);
+            register_hit(no, HitTarget::DialogNo);
+        }
     }
 }

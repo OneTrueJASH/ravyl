@@ -31,6 +31,13 @@ pub fn render_popup_frame(
     inner
 }
 
+/// X coordinate that centers `width` columns inside `inner`. Widgets that
+/// register click targets draw at this position so the targets match what
+/// is on screen.
+pub fn centered_x(inner: Rect, width: u16) -> u16 {
+    inner.x + inner.width.saturating_sub(width) / 2
+}
+
 /// Calculate a centered popup rectangle.
 pub fn centered_rect(terminal: Rect, width: u16, height: u16) -> Rect {
     let w = width.min(terminal.width.saturating_sub(4));

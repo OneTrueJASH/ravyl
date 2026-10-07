@@ -24,6 +24,8 @@
 //! already empty: who owns the final turn is then outside its knowledge,
 //! and [`crate::endgame::EndgameSolver`] handles those exactly.
 
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fastrand::Rng;
@@ -58,6 +60,9 @@ pub struct MctsConfig {
     /// runs out and every candidate reports the estimate it has; move
     /// generation with several unseen blanks can make playouts slow.
     pub time_budget: Option<Duration>,
+    /// Set from another thread to stop the evaluation early (checked before
+    /// every playout); the results then hold whatever was simulated.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for MctsConfig {
@@ -69,6 +74,7 @@ impl Default for MctsConfig {
             parallel: true,
             score_diff: 0,
             time_budget: Some(Duration::from_secs(8)),
+            cancel: None,
         }
     }
 }
@@ -84,6 +90,7 @@ impl MctsConfig {
             parallel: true,
             score_diff: 0,
             time_budget: Some(Duration::from_secs(8)),
+            cancel: None,
         }
     }
 
@@ -110,6 +117,18 @@ impl MctsConfig {
     pub fn with_score_diff(mut self, score_diff: i32) -> Self {
         self.score_diff = score_diff;
         self
+    }
+
+    /// Stop early once `cancel` is set.
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(AtomicOrdering::Relaxed))
     }
 }
 
@@ -772,6 +791,7 @@ impl<'a> CandidateSim<'a> {
         playouts: usize,
         max_plies: usize,
         deadline: Option<Instant>,
+        cancel: Option<&AtomicBool>,
     ) {
         if self.pool.is_empty() {
             // Opponent has nothing: our move ends the game.
@@ -786,7 +806,9 @@ impl<'a> CandidateSim<'a> {
         }
 
         for _ in 0..playouts {
-            if deadline.is_some_and(|d| Instant::now() >= d) {
+            if deadline.is_some_and(|d| Instant::now() >= d)
+                || cancel.is_some_and(|c| c.load(AtomicOrdering::Relaxed))
+            {
                 return;
             }
             let shuffled = match self.model {
@@ -967,6 +989,7 @@ impl MctsEvaluator {
         let mut active: Vec<usize> = (0..sims.len()).collect();
         let max_plies = self.config.max_plies;
         let deadline = self.config.time_budget.map(|b| Instant::now() + b);
+        let cancel = self.config.cancel.as_deref();
 
         for (round, &playouts) in rounds.iter().enumerate() {
             if playouts == 0 {
@@ -977,13 +1000,15 @@ impl MctsEvaluator {
                 sims.par_iter_mut()
                     .enumerate()
                     .filter(|(i, _)| active_set.contains(i))
-                    .for_each(|(_, sim)| sim.run(dictionary, playouts, max_plies, deadline));
+                    .for_each(|(_, sim)| {
+                        sim.run(dictionary, playouts, max_plies, deadline, cancel)
+                    });
             } else {
                 for &i in &active {
-                    sims[i].run(dictionary, playouts, max_plies, deadline);
+                    sims[i].run(dictionary, playouts, max_plies, deadline, cancel);
                 }
             }
-            if deadline.is_some_and(|d| Instant::now() >= d) {
+            if deadline.is_some_and(|d| Instant::now() >= d) || self.config.is_cancelled() {
                 break;
             }
 
@@ -1014,10 +1039,15 @@ impl MctsEvaluator {
 
         let full = sims.iter().map(|s| s.iterations).max().unwrap_or(0);
         let mut results: Vec<MctsResult> = sims.iter().map(|s| s.result()).collect();
+        // Fully simulated first, then candidates cut short, then any that
+        // never got a playout (their numbers are placeholders).
+        let tier = |r: &MctsResult| match r.iterations {
+            0 => 0,
+            n if n == full => 2,
+            _ => 1,
+        };
         results.sort_by(|a, b| {
-            let a_full = a.iterations == full;
-            let b_full = b.iterations == full;
-            b_full.cmp(&a_full).then(
+            tier(b).cmp(&tier(a)).then(
                 b.mcts_equity
                     .partial_cmp(&a.mcts_equity)
                     .unwrap_or(std::cmp::Ordering::Equal),
@@ -1160,6 +1190,7 @@ mod tests {
             parallel: false,
             score_diff: 0,
             time_budget: None,
+            cancel: None,
         };
         let evaluator = MctsEvaluator::new(config);
         let plain = evaluator.evaluate(&state, &suggestions, &dict);
@@ -1193,6 +1224,7 @@ mod tests {
             parallel: false,
             score_diff: 0,
             time_budget: None,
+            cancel: None,
         };
 
         let evaluator = MctsEvaluator::new(config);
@@ -1290,6 +1322,7 @@ mod tests {
             parallel: false,
             score_diff: 0,
             time_budget: None,
+            cancel: None,
         });
         let results = evaluator.evaluate(&state, &suggestions, &dict);
         assert_eq!(results.len(), 4.min(suggestions.len()));
@@ -1345,6 +1378,7 @@ mod tests {
             parallel: true,
             score_diff: 0,
             time_budget: None,
+            cancel: None,
         })
         .evaluate(&state, &suggestions, &dict);
         let full = results.iter().map(|r| r.iterations).max().unwrap();
@@ -1379,6 +1413,7 @@ mod tests {
             parallel: true,
             score_diff: 0,
             time_budget: Some(Duration::from_millis(150)),
+            cancel: None,
         })
         .evaluate(&state, &suggestions, &dict);
         // One playout may overrun the deadline per thread; allow slack.
@@ -2071,6 +2106,7 @@ mod tests {
             parallel: false,
             score_diff: 0,
             time_budget: None,
+            cancel: None,
         })
         .evaluate(&state, &candidates, &dict);
         assert!(results

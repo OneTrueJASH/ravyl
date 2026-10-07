@@ -8,8 +8,16 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::ui::popup_frame::{centered_rect, render_popup_frame};
+use crate::ui::hit::{register_hit, HitTarget};
+use crate::ui::popup_frame::{centered_rect, centered_x, render_popup_frame};
 use crate::ui::theme;
+
+/// Menu options in display order.
+const OPTIONS: [EscapeMenuOption; 3] = [
+    EscapeMenuOption::Quit,
+    EscapeMenuOption::Reset,
+    EscapeMenuOption::Cancel,
+];
 
 /// Menu options for the escape menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +67,22 @@ impl EscapeMenuPopup {
         centered_rect(terminal_area, 30, 9)
     }
 
+    /// The clickable row of each option, for a menu whose inner area is
+    /// `inner` (the whole row inside the border, so the target is wide).
+    pub fn option_rects(inner: Rect) -> Vec<(EscapeMenuOption, Rect)> {
+        OPTIONS
+            .iter()
+            .enumerate()
+            .map(|(i, &o)| {
+                (
+                    o,
+                    Rect::new(inner.x, inner.y + 1 + i as u16, inner.width, 1),
+                )
+            })
+            .filter(|(_, r)| r.y < inner.y + inner.height)
+            .collect()
+    }
+
     fn render_option(&self, option: EscapeMenuOption) -> Line<'static> {
         let is_selected = self.selected == option;
         let style = if is_selected {
@@ -84,20 +108,28 @@ impl EscapeMenuPopup {
 impl Widget for EscapeMenuPopup {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let inner = render_popup_frame(area, buf, "Menu", theme::POPUP_BORDER);
+        register_hit(area, HitTarget::DialogArea);
 
         let content = vec![
             Line::from(""),
-            self.render_option(EscapeMenuOption::Quit),
-            self.render_option(EscapeMenuOption::Reset),
-            self.render_option(EscapeMenuOption::Cancel),
+            Line::from(""),
+            Line::from(""),
+            Line::from(""),
             Line::from(""),
             Line::from(Span::styled(
                 "↑/↓ select, Enter confirm",
                 Style::default().fg(theme::TEXT_DIM),
             )),
         ];
-
         let paragraph = Paragraph::new(content).centered();
         paragraph.render(inner, buf);
+
+        // Options are drawn on the same rows that are registered for clicks.
+        for (option, row) in Self::option_rects(inner) {
+            let line = self.render_option(option);
+            let x = centered_x(row, line.width() as u16);
+            buf.set_line(x, row.y, &line, row.width);
+            register_hit(row, HitTarget::MenuItem(option));
+        }
     }
 }

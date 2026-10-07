@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use ratatui::layout::Rect;
 
 use crate::app::{BoardTab, Focus, SortMode};
+use crate::ui::menu_popup::EscapeMenuOption;
 
 /// Clickable target identified by the hit map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,10 +24,17 @@ pub enum HitTarget {
     TabHeader(BoardTab),
     /// A sort-mode tab above the suggestions pane.
     SortTab(SortMode),
-    /// The status bar area.
-    StatusBar,
     /// Click anywhere inside a focus pane to focus it.
     FocusPane(Focus),
+    /// The open dialog's body: a click here does nothing (outside it, a
+    /// click cancels the dialog).
+    DialogArea,
+    /// The "Yes" button of a confirmation dialog.
+    DialogYes,
+    /// The "No" button of a confirmation dialog.
+    DialogNo,
+    /// An option in the escape menu.
+    MenuItem(EscapeMenuOption),
 }
 
 struct HitEntry {

@@ -1,7 +1,6 @@
 //! Suggestions table with simulation equity lookup.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use ratatui::{
     layout::{Alignment, Constraint, Rect},
@@ -14,29 +13,11 @@ use ratatui::{
 use crate::app::SimResult;
 use crate::app::SortMode;
 use crate::board::Direction;
-use crate::logging::log;
 use crate::solver::Move;
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
 
-fn log_suggestions(moves: &[Move], lookup: &SimEquityLookup, results_len: usize) {
-    static LAST_LOGGED: AtomicU64 = AtomicU64::new(0);
-    let hash = (results_len as u64) << 32 | (moves.len() as u64);
-    if LAST_LOGGED.swap(hash, Ordering::SeqCst) == hash {
-        return;
-    }
-
-    log(&format!("\n=== SOLVER SUGGESTIONS ({}) ===", moves.len()));
-    for mv in moves {
-        let sim = lookup.get_equity(&mv.word, mv.row, mv.col, mv.direction);
-        log(&format!(
-            "  {} at ({},{}) {:?} -> {:?}",
-            mv.word, mv.row, mv.col, mv.direction, sim
-        ));
-    }
-}
-
-/// Simulation results for a single move from the RefEngine engine.
+/// Evaluation results for a single move (playouts or the endgame solver).
 #[derive(Clone)]
 pub struct SimData {
     pub sim_equity: f32,
@@ -44,6 +25,16 @@ pub struct SimData {
     pub ply1_bingo_pct: f32,
     pub ply2_bingo_pct: f32,
     pub is_endgame: bool,
+    /// Playouts behind the numbers; 0 means none ran and the numbers are
+    /// placeholders.
+    pub iterations: usize,
+}
+
+impl SimData {
+    /// True when there is a real estimate to show.
+    pub fn is_simulated(&self) -> bool {
+        self.is_endgame || self.iterations > 0
+    }
 }
 
 /// Maps moves to their evaluation results (playouts or endgame search).
@@ -67,6 +58,7 @@ impl SimEquityLookup {
                                 ply1_bingo_pct: r.ply1_bingo_pct,
                                 ply2_bingo_pct: r.ply2_bingo_pct,
                                 is_endgame: r.is_endgame,
+                                iterations: r.iterations,
                             },
                         )
                     })
@@ -75,17 +67,6 @@ impl SimEquityLookup {
             .unwrap_or_default();
 
         SimEquityLookup { map }
-    }
-
-    pub fn get_equity(
-        &self,
-        word: &str,
-        row: usize,
-        col: usize,
-        direction: Direction,
-    ) -> Option<f32> {
-        let key = (word.to_string(), row, col, direction);
-        self.map.get(&key).map(|d| d.sim_equity)
     }
 
     pub fn get_full(
@@ -120,12 +101,6 @@ pub fn render_suggestions(
     };
 
     let sim_lookup = SimEquityLookup::new(sim_results);
-
-    if let Some(results) = sim_results {
-        if !moves.is_empty() {
-            log_suggestions(moves, &sim_lookup, results.len());
-        }
-    }
     let has_sim = sim_lookup.has_data();
 
     let title = if moves.is_empty() {
@@ -228,7 +203,10 @@ pub fn render_suggestions(
             let tiles_cell = Cell::from(leave_text).style(Style::new().fg(leave_color));
 
             if has_sim {
-                if let Some(sim) = sim_lookup.get_full(&mv.word, mv.row, mv.col, mv.direction) {
+                let sim = sim_lookup
+                    .get_full(&mv.word, mv.row, mv.col, mv.direction)
+                    .filter(|sim| sim.is_simulated());
+                if let Some(sim) = sim {
                     let sim_cell = right(
                         &format!("{:+.0}", sim.sim_equity),
                         Style::new().fg(theme::SIM_EQUITY_FG),
@@ -261,9 +239,9 @@ pub fn render_suggestions(
                         pos_cell,
                         word_cell,
                         pts_cell,
-                        Cell::from("-").style(Style::new().fg(theme::TEXT_DIM)),
-                        Cell::from("-").style(Style::new().fg(theme::TEXT_DIM)),
-                        Cell::from("-").style(Style::new().fg(theme::TEXT_DIM)),
+                        right("\u{2013}", Style::new().fg(theme::TEXT_DIM)),
+                        right("\u{2013}", Style::new().fg(theme::TEXT_DIM)),
+                        right("\u{2013}", Style::new().fg(theme::TEXT_DIM)),
                         tiles_cell,
                     ])
                 }

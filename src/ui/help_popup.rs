@@ -191,6 +191,7 @@ impl Default for HelpPopup {
 impl Widget for HelpPopup {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let inner = render_popup_frame(area, buf, "Help", theme::POPUP_BORDER);
+        crate::ui::hit::register_hit(area, crate::ui::hit::HitTarget::DialogArea);
         let content = Self::build_content();
         let paragraph = Paragraph::new(content).wrap(Wrap { trim: false });
         paragraph.render(inner, buf);

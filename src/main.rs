@@ -21,10 +21,12 @@ mod tile;
 mod ui;
 
 use std::io;
+use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::Result;
 use ratatui::crossterm::{
+    cursor::Show,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -39,45 +41,93 @@ use ui::layout::AppLayout;
 /// Put the terminal back the way we found it. Safe to call more than once.
 fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+    let _ = execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Show
+    );
 }
 
-fn main() -> Result<()> {
-    // A panic anywhere on the main thread would otherwise leave the user's
-    // terminal in raw mode on the alternate screen with mouse capture on,
-    // and the panic message would be unreadable. Restore first, then let
-    // the default hook print.
+/// Restores the terminal when dropped, so every exit path from the TUI
+/// (including an error from `Terminal::new` or the event loop) leaves the
+/// user's terminal usable.
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+        // From here on the guard owns the cleanup, even if the next call
+        // fails half-way.
+        let guard = TerminalGuard;
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        Ok(guard)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        restore_terminal();
+    }
+}
+
+/// Panics on the main thread restore the terminal before the message is
+/// printed, or it would be unreadable on the alternate screen. Panics on
+/// worker threads go to the log instead: the TUI is still running, the
+/// worker's caller reports the failure, and printing to stderr would
+/// scribble over the screen.
+fn install_panic_hook() {
+    let main_thread = std::thread::current().id();
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        restore_terminal();
-        default_hook(info);
-    }));
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new();
-
-    match dictionary::load_default_dictionary() {
-        Ok(dict) => app.set_dictionary(dict),
-        Err(e) => {
-            app.message = Some(format!("Failed to load dictionary: {}", e));
+        if std::thread::current().id() == main_thread {
+            restore_terminal();
+            default_hook(info);
+        } else {
+            logging::log(&format!(
+                "Worker thread '{}' panicked: {}",
+                std::thread::current().name().unwrap_or("unnamed"),
+                info
+            ));
         }
+    }));
+}
+
+fn main() -> ExitCode {
+    install_panic_hook();
+
+    // Data is loaded before the terminal is taken over, so a missing file
+    // is reported plainly on stderr with a non-zero exit code.
+    let dict = match dictionary::load_default_dictionary() {
+        Ok(dict) => dict,
+        Err(e) => {
+            eprintln!("cpsolver2: failed to load the dictionary: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (settings, settings_warning) = settings::Settings::load_or_recover();
+    let mut app = App::with_settings(settings);
+    app.set_dictionary(dict);
+    if let Some(warning) = datafiles::lfs_warning() {
+        app.message = Some(warning);
+    }
+    if let Some(warning) = settings_warning {
+        app.message = Some(warning);
     }
 
-    let res = run_app(&mut terminal, &mut app);
-
-    restore_terminal();
-    terminal.show_cursor()?;
-
+    let res = run_tui(&mut app);
     if let Err(err) = res {
-        eprintln!("Error: {:?}", err);
+        eprintln!("cpsolver2: {err:#}");
+        return ExitCode::FAILURE;
     }
+    ExitCode::SUCCESS
+}
 
-    Ok(())
+fn run_tui(app: &mut App) -> Result<()> {
+    let _guard = TerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut terminal = Terminal::new(backend)?;
+    run_app(&mut terminal, app)
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
@@ -85,6 +135,9 @@ where
     B::Error: Send + Sync + 'static,
 {
     loop {
+        if let Ok(size) = terminal.size() {
+            app.terminal_size = Some((size.width, size.height));
+        }
         terminal.draw(|f| draw_ui(f, app))?;
 
         // Poll for evaluation and inference results.
@@ -277,6 +330,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
                 app::ScoreTarget::Opponent => "Set Opponent Score",
             };
             let popup_area = ui::popup_frame::centered_rect(size, 36, 6);
+            ui::hit::register_hit(popup_area, ui::hit::HitTarget::DialogArea);
             let inner = ui::popup_frame::render_popup_frame(
                 popup_area,
                 frame.buffer_mut(),
@@ -408,6 +462,82 @@ mod ui_tests {
                 text
             );
         }
+    }
+
+    fn click(app: &mut App, column: u16, row: u16) -> AppAction {
+        use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    /// Screen position of the first occurrence of `needle`.
+    fn find_text(lines: &[String], needle: &str) -> (u16, u16) {
+        for (y, line) in lines.iter().enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let pat: Vec<char> = needle.chars().collect();
+            if let Some(x) = chars.windows(pat.len()).position(|w| w == pat.as_slice()) {
+                return (x as u16, y as u16);
+            }
+        }
+        panic!("{needle:?} not on screen:\n{}", lines.join("\n"));
+    }
+
+    /// Clicks on a confirmation dialog's buttons land on the buttons drawn
+    /// on screen; a click outside cancels; nothing reaches the panes below.
+    #[test]
+    fn dialog_buttons_take_clicks() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = App::with_settings(settings::Settings::default());
+        let (w, h) = (120, 40);
+
+        // "No" closes the quit dialog without quitting.
+        app.dialog = DialogState::ConfirmQuit(false);
+        let lines = render_at(&app, w, h);
+        let (x, y) = find_text(&lines, " No ");
+        assert!(matches!(click(&mut app, x + 1, y), AppAction::Redraw));
+        assert_eq!(app.dialog, DialogState::None);
+
+        // "Yes" quits.
+        app.dialog = DialogState::ConfirmQuit(false);
+        let lines = render_at(&app, w, h);
+        let (x, y) = find_text(&lines, " Yes ");
+        assert!(matches!(click(&mut app, x + 2, y), AppAction::Quit));
+
+        // Inside the dialog but off the buttons: nothing happens.
+        app.dialog = DialogState::ConfirmReset(false);
+        let lines = render_at(&app, w, h);
+        let (x, y) = find_text(&lines, "Reset the board");
+        click(&mut app, x, y);
+        assert_eq!(app.dialog, DialogState::ConfirmReset(false));
+
+        // Outside: the dialog is cancelled and the board cursor below the
+        // click does not move.
+        let cursor = app.cursor;
+        click(&mut app, 2, h - 3);
+        assert_eq!(app.dialog, DialogState::None);
+        assert_eq!(app.cursor, cursor);
+    }
+
+    /// Escape-menu options are clickable rows.
+    #[test]
+    fn menu_options_take_clicks() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = App::with_settings(settings::Settings::default());
+        app.dialog = DialogState::EscapeMenu(ui::menu_popup::EscapeMenuOption::Cancel);
+        let lines = render_at(&app, 100, 30);
+        let (x, y) = find_text(&lines, "Reset Board");
+        click(&mut app, x, y);
+        assert_eq!(app.dialog, DialogState::ConfirmReset(false));
+
+        app.dialog = DialogState::EscapeMenu(ui::menu_popup::EscapeMenuOption::Quit);
+        let lines = render_at(&app, 100, 30);
+        let (x, y) = find_text(&lines, "Quit Game");
+        click(&mut app, x, y);
+        assert_eq!(app.dialog, DialogState::ConfirmQuit(false));
     }
 
     /// Dump renders for eyeballing. Run with
