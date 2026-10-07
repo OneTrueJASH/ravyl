@@ -15,7 +15,8 @@ Complete TUI redesign of `crossplay-solver`.
 | `stats` | `GameStats`, `GamePhase`, `TileLocation`, power tile tracking, rack analysis |
 | `settings` | `Settings` with `DisplaySettings` (`default_sort`, `sidebar_visible`), TOML persistence at `~/.config/cpsolver2/settings.toml`; constant: `LEXICON = "NWL23"` |
 | `logging` | Instance-specific logging to `/tmp/crossplay-<pid>.log` |
-| `refengine_ffi` | FFI bindings to RefEngine C library (`librefengine.dylib`), `RefEngine` safe wrapper |
+| `datafiles` | Data-file locations (`data/words.fst`, `external/refengine/data`), data-root search, Git LFS pointer-stub detection (`is_lfs_pointer`, `file_status`), and the test helpers (`test_data`) that make data-dependent tests skip cleanly and run from any working directory |
+| `refengine_ffi` | FFI bindings to the RefEngine C library (compiled statically from `external/refengine-src` by `build.rs`; only with the `refengine` feature), `RefEngine` safe wrapper |
 | `refengine_mcts` | `RefSimulator` (RefEngine handle configured with `-bb 40`), `InferenceResult` (played tiles, top leaves, `LetterMarginal` per-letter expected counts), `infer_opponent_rack()`, CGP conversion. RefEngine is used only to infer the opponent's likely leave and as the reference move generator in tests; its simulation and endgame search (Scrabble ending rules) are not used |
 | `mcts` | `MctsEvaluator`, `MctsResult`, `MctsConfig` (`for_bag`), `TilePool`, `TracePoint` — Monte Carlo playouts under Crossplay rules for every phase with the bag non-empty: greedy static-equity play (including exchanges) until the bag empties, then exact 2-ply last turn and score-only final move; cut-off positions valued as spread + leaves + tempo (±21); win probability from a normal model with sd² = 159 + 80 × bag; common random numbers across candidates, paired-difference pruning, wall-clock budget, Rayon parallelism. `OpponentModel` biases the opponent's dealt rack with inference marginals and weakens their simulated play to a measured softmax temperature (see key behavior 12). Also hosts the self-play studies (`study_spread_variance`, `study_bingo_probability`, `study_loss_calibration`, ignored tests) that produced those constants |
 | `endgame` | `EndgameSolver`, `EndgameMove`, `PvMove`, `PASS_WORD` — Crossplay-native endgame solver: exact 2-ply (including passing) when the opponent replies, score-only when our move ends the game |
@@ -70,8 +71,9 @@ The `Settings` struct contains only `DisplaySettings`:
 
 ## Data
 
-- `external/refengine/` — RefEngine C library + lexicon/strategy data files
-- `data/` — symlink to reference project's FST dictionary files
+- `external/refengine-src/` — RefEngine C source (git submodule, pinned to the commit whose API matches `refengine_ffi.rs`), compiled into a static library by `build.rs` when the `refengine` feature is on (the default). `--no-default-features` builds without it; opponent inference then reports itself unavailable
+- `external/refengine/data/` — RefEngine data files: the NWL23 lexicon and leave table (Git LFS; `git lfs pull` if they are pointer stubs), plus the Crossplay-modified layout and letter distribution (see `external/refengine/NOTICE`)
+- `data/words.fst` — FST dictionary used by the native move generator
 
 ## Crossplay-Specific Rules
 

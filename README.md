@@ -37,10 +37,18 @@ With tiles still in the bag the app plays each candidate out many times under th
 
 ### Prerequisites
 
-- Rust 1.82+
-- The RefEngine C library (`librefengine.dylib`) in `external/refengine/`
-- RefEngine data files (lexicon, letter distributions, strategy) in `external/refengine/data/`; `NWL23.klv2` also supplies the leave values (a per-letter heuristic is used if it is missing)
+- Rust 1.88+ and a C compiler (RefEngine is compiled from source by `build.rs`)
+- Git LFS: the lexicon files in `external/refengine/data/lexica/` are stored in LFS
+- The RefEngine source submodule in `external/refengine-src/`
 - FST dictionary file at `data/words.fst`
+
+```bash
+git clone --recurse-submodules https://github.com/OneTrueJASH/cpsolver2
+cd cpsolver2
+git lfs install && git lfs pull   # if the NWL23.* files are ~130-byte pointer stubs
+```
+
+`NWL23.klv2` also supplies the leave values; a per-letter heuristic is used if it is missing or still an LFS pointer.
 
 ### Build and run
 
@@ -49,7 +57,15 @@ cargo build --release
 cargo run --release
 ```
 
-On macOS, the `build.rs` script sets the rpath so the binary can find `librefengine.dylib` relative to the project directory. If you move the binary elsewhere, set `DYLD_LIBRARY_PATH` to point at the directory containing the dylib.
+RefEngine is linked statically, so the binary has no runtime library dependency. Run it from the repository root (it looks for `data/` and `external/refengine/data/` next to the executable or in the working directory).
+
+### Building without RefEngine
+
+RefEngine sits behind the `refengine` cargo feature (on by default). Without it the pure-Rust solver, playouts and endgame solver work as usual; only opponent-rack inference is unavailable (the stats pane says so):
+
+```bash
+cargo build --release --no-default-features
+```
 
 ## Usage
 
