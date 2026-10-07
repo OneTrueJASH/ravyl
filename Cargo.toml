@@ -43,3 +43,10 @@ cc = { version = "1.2", optional = true }
 lto = "fat"
 codegen-units = 1
 strip = true
+
+[profile.dist]
+inherits = "release"
+
+[package.metadata.dist]
+# publish = false hides the binary from dist by default.
+dist = true
