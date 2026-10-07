@@ -9,8 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use std::cell::Cell;
+
 use ratatui::crossterm::event::{
-    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
 use crate::board::{Board, Direction, BOARD_SIZE};
@@ -33,6 +35,16 @@ use crate::ui::menu_popup::EscapeMenuOption;
 pub enum ScoreTarget {
     Player,
     Opponent,
+}
+
+/// What a message-bar message is, which decides its color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MessageKind {
+    #[default]
+    Info,
+    Success,
+    Error,
+    Progress,
 }
 
 /// Where a suggestion stands in an evaluation.
@@ -182,6 +194,10 @@ pub enum DialogState {
         target: ScoreTarget,
         buffer: String,
     },
+    /// Coordinate entry of a play: `8D QUIXOTIC` (lowercase = blank).
+    QuickEntry {
+        buffer: String,
+    },
 }
 
 /// Board pane tab
@@ -216,6 +232,23 @@ impl Focus {
             Focus::Rack => Focus::Suggestions,
             Focus::Suggestions => Focus::Board,
         }
+    }
+
+    pub fn prev(&self) -> Focus {
+        match self {
+            Focus::Board => Focus::Suggestions,
+            Focus::Rack => Focus::Board,
+            Focus::Suggestions => Focus::Rack,
+        }
+    }
+
+    /// The previous pane before this one that `visible` accepts.
+    pub fn prev_visible(&self, visible: impl Fn(Focus) -> bool) -> Focus {
+        let mut f = self.prev();
+        while f != Focus::Board && !visible(f) {
+            f = f.prev();
+        }
+        f
     }
 
     /// The next pane after this one that `visible` accepts. The board is
@@ -346,8 +379,8 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// MCTS progress state
 pub struct MctsProgress {
-    pub total_candidates: usize,
-    pub spinner_frame: usize,
+    /// When the evaluation started; drives the spinner.
+    pub started: Instant,
     /// Live progress of a simulation (playout path only).
     pub sim: Option<SimProgress>,
 }
@@ -356,7 +389,8 @@ impl MctsProgress {
     /// Returns the spinner character for the current animation frame.
     pub fn spinner_char(&self) -> char {
         const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
-        SPINNER[self.spinner_frame % SPINNER.len()]
+        let frame = (self.started.elapsed().as_millis() / 120) as usize;
+        SPINNER[frame % SPINNER.len()]
     }
 }
 
@@ -371,7 +405,24 @@ pub struct App {
     pub selected_suggestion: usize,
     pub sort_mode: SortMode,
     pub message: Option<String>,
+    /// How the message bar colors `message`.
+    pub message_kind: MessageKind,
     undo_stack: Vec<UndoState>,
+    /// States undone, newest last; cleared by any new undoable change.
+    redo_stack: Vec<UndoState>,
+    /// Text filter on the suggestions list (`/`), and whether it is being
+    /// typed.
+    pub filter: Option<String>,
+    pub filter_editing: bool,
+    /// First suggestions row shown, kept between frames (the list scrolls
+    /// only as far as needed to keep the selection in view).
+    pub list_offset: Cell<usize>,
+    /// Rows the suggestions table showed last frame (for paging).
+    pub list_height: Cell<usize>,
+    /// Text for the system clipboard (OSC 52), written by the main loop.
+    pub pending_clipboard: Option<String>,
+    /// First line shown of the one-column help.
+    pub help_scroll: u16,
     /// Evaluation results for the current suggestions (playouts or endgame).
     pub sim_results: Option<Vec<SimResult>>,
     sim_job: Option<SimJob>,
@@ -490,7 +541,15 @@ impl App {
             selected_suggestion: 0,
             sort_mode,
             message: Some("Loading dictionary...".to_string()),
+            message_kind: MessageKind::Progress,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            filter: None,
+            filter_editing: false,
+            list_offset: Cell::new(0),
+            list_height: Cell::new(10),
+            pending_clipboard: None,
+            help_scroll: 0,
             sim_results: None,
             sim_job: None,
             sim_cache: Arc::new(Mutex::new(None)),
@@ -540,6 +599,12 @@ impl App {
         (temperature * shrink).clamp(0.0, MAX_OPP_TEMPERATURE)
     }
 
+    /// Show `text` in the message bar.
+    pub fn set_message(&mut self, kind: MessageKind, text: impl Into<String>) {
+        self.message = Some(text.into());
+        self.message_kind = kind;
+    }
+
     /// Note for the stats pane when opponent inference cannot run.
     pub fn inference_note(&self) -> Option<&'static str> {
         self.refengine_unavailable
@@ -563,36 +628,30 @@ impl App {
 
     /// Handle a keyboard event and return the action for the main loop.
     pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
-        // Ctrl+C always quits.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return AppAction::Quit;
+        // Terminals that report releases send every key twice.
+        if key.kind == KeyEventKind::Release {
+            return AppAction::Nothing;
         }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // F1 toggles help (unless another dialog is open).
-        if key.code == KeyCode::F(1) && !self.has_dialog() {
-            self.toggle_help();
+        // Ctrl+C asks first; a second Ctrl+C (or y) confirms.
+        if key.code == KeyCode::Char('c') && ctrl {
+            if matches!(self.dialog, DialogState::ConfirmQuit(_)) {
+                return AppAction::Quit;
+            }
+            self.dialog = DialogState::ConfirmQuit(false);
             return AppAction::Redraw;
         }
 
-        // Backslash toggles sidebar.
-        if key.code == KeyCode::Char('\\') && !self.has_dialog() {
-            self.toggle_sidebar();
-            return AppAction::Redraw;
-        }
-
-        // Ctrl+E toggles who has the final turn of the game.
-        if key.code == KeyCode::Char('e')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-            && !self.has_dialog()
-        {
-            self.toggle_final_turn();
-            return AppAction::Redraw;
-        }
-
-        // Esc first stops a running evaluation (M resumes a simulation).
-        if key.code == KeyCode::Esc && self.is_mcts_running() && !self.has_dialog() {
+        // Esc: stop a running evaluation first (M resumes a simulation),
+        // then close a dialog, then leave the filter, then return to the
+        // board, then open the menu.
+        if key.code == KeyCode::Esc && self.is_mcts_running() {
             self.cancel_evaluation();
-            self.message = Some("Simulation stopped \u{2014} M continues it".to_string());
+            self.set_message(
+                MessageKind::Info,
+                "Simulation stopped \u{2014} M continues it",
+            );
             return AppAction::Redraw;
         }
 
@@ -605,13 +664,43 @@ impl App {
             return AppAction::Redraw;
         }
 
-        // Focus-specific input.
-        match self.focus {
-            Focus::Board => self.handle_board_key(key),
-            Focus::Rack => self.handle_rack_key(key),
-            Focus::Suggestions => self.handle_suggestions_key(key),
+        // Typing a suggestions filter.
+        if self.filter_editing {
+            self.handle_filter_key(key);
+            return AppAction::Redraw;
         }
 
+        // Keys that work in every pane.
+        match key.code {
+            KeyCode::F(1) => self.toggle_help(),
+            KeyCode::Char('\\') => self.toggle_sidebar(),
+            KeyCode::Char('e') if ctrl => self.toggle_final_turn(),
+            KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
+            KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
+            KeyCode::Char('z') if ctrl => self.undo(),
+            KeyCode::Char('y') if ctrl => self.redo(),
+            KeyCode::Char('=') => self.open_score_input(ScoreTarget::Opponent),
+            KeyCode::Char('+') => self.open_score_input(ScoreTarget::Player),
+            KeyCode::Char(':') => {
+                self.dialog = DialogState::QuickEntry {
+                    buffer: String::new(),
+                }
+            }
+            KeyCode::Char('`') => self.toggle_board_tab(),
+            KeyCode::Tab => self.next_focus(),
+            KeyCode::BackTab => self.prev_focus(),
+            KeyCode::Esc if self.focus != Focus::Board => {
+                if self.filter.take().is_none() || self.focus != Focus::Suggestions {
+                    self.focus = Focus::Board;
+                }
+            }
+            KeyCode::Esc => self.show_escape_menu(),
+            _ => match self.focus {
+                Focus::Board => self.handle_board_key(key),
+                Focus::Rack => self.handle_rack_key(key),
+                Focus::Suggestions => self.handle_suggestions_key(key),
+            },
+        }
         AppAction::Redraw
     }
 
@@ -628,26 +717,30 @@ impl App {
                     AppAction::Nothing
                 }
             }
-            MouseEventKind::ScrollUp => {
-                match self.focus {
-                    Focus::Suggestions => self.move_suggestion_selection(-3),
-                    Focus::Board if self.board_tab == BoardTab::Logs => {
-                        self.scroll_log_up(3);
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // The wheel scrolls the pane under the pointer, and stops
+                // at the ends instead of wrapping.
+                let down = mouse.kind == MouseEventKind::ScrollDown;
+                match resolve_click(mouse.column, mouse.row) {
+                    Some(
+                        HitTarget::SuggestionRow(_)
+                        | HitTarget::SortTab(_)
+                        | HitTarget::FocusPane(Focus::Suggestions),
+                    ) => self.step_selection(if down { 3 } else { -3 }),
+                    Some(HitTarget::BoardCell(..) | HitTarget::FocusPane(Focus::Board))
+                        if self.board_tab == BoardTab::Logs =>
+                    {
+                        if down {
+                            self.scroll_log_down(3)
+                        } else {
+                            self.scroll_log_up(3)
+                        }
                     }
-                    _ => {}
+                    _ => return AppAction::Nothing,
                 }
                 AppAction::Redraw
             }
-            MouseEventKind::ScrollDown => {
-                match self.focus {
-                    Focus::Suggestions => self.move_suggestion_selection(3),
-                    Focus::Board if self.board_tab == BoardTab::Logs => {
-                        self.scroll_log_down(3);
-                    }
-                    _ => {}
-                }
-                AppAction::Redraw
-            }
+            // Pointer movement changes nothing on screen.
             _ => AppAction::Nothing,
         }
     }
@@ -746,61 +839,41 @@ impl App {
     // ── Focus-specific key handlers ─────────────────────────────────
 
     fn handle_board_key(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        if key.code == KeyCode::Char('`') {
-            self.toggle_board_tab();
-            return;
-        }
-
-        match self.board_tab {
-            BoardTab::Logs => match key.code {
+        if self.board_tab == BoardTab::Logs {
+            match key.code {
                 KeyCode::Up => self.scroll_log_up(1),
                 KeyCode::Down => self.scroll_log_down(1),
                 KeyCode::PageUp => self.scroll_log_up(20),
                 KeyCode::PageDown => self.scroll_log_down(20),
                 KeyCode::Home => self.scroll_log_up(10000),
                 KeyCode::End => self.scroll_log_to_bottom(),
-                KeyCode::Tab => self.next_focus(),
-                KeyCode::Esc => self.show_escape_menu(),
-                KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
-                KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
-                KeyCode::Char('z') if ctrl => self.undo(),
                 _ => {}
-            },
-            BoardTab::Board => match key.code {
-                KeyCode::Up => self.move_cursor(-1, 0),
-                KeyCode::Down => self.move_cursor(1, 0),
-                KeyCode::Left => self.move_cursor(0, -1),
-                KeyCode::Right => self.move_cursor(0, 1),
-                KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
-                KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
-                KeyCode::Char('z') if ctrl => self.undo(),
-                KeyCode::Char('=') if !ctrl => self.open_score_input(ScoreTarget::Opponent),
-                KeyCode::Char('+') if !ctrl => self.open_score_input(ScoreTarget::Player),
-                KeyCode::Char(c) if c.is_ascii_alphabetic() => {
-                    self.place_on_board(c.to_ascii_uppercase());
-                }
-                KeyCode::Char('?') => self.place_on_board('?'),
-                KeyCode::Backspace => self.backspace_on_board(),
-                KeyCode::Delete => self.remove_from_board(),
-                KeyCode::Tab => self.next_focus(),
-                KeyCode::Esc => self.show_escape_menu(),
-                KeyCode::Char(' ') => self.toggle_direction(),
-                KeyCode::Enter if !self.suggestions.is_empty() => {
-                    self.apply_suggestion();
-                }
-                _ => {}
-            },
+            }
+            return;
+        }
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Up => self.move_cursor(-1, 0),
+            KeyCode::Down => self.move_cursor(1, 0),
+            KeyCode::Left => self.move_cursor(0, -1),
+            KeyCode::Right => self.move_cursor(0, 1),
+            // Shift+letter (an uppercase letter) places a blank.
+            KeyCode::Char(c) if c.is_ascii_alphabetic() => {
+                let blank = shift || c.is_ascii_uppercase();
+                self.place_on_board(c.to_ascii_uppercase(), blank);
+            }
+            KeyCode::Char('?') => self.place_on_board('?', true),
+            KeyCode::Backspace => self.backspace_on_board(),
+            KeyCode::Delete => self.remove_from_board(),
+            KeyCode::Char(' ') => self.toggle_direction(),
+            // Enter solves; moves are applied only from the list.
+            KeyCode::Enter => self.find_moves_and_focus(),
+            _ => {}
         }
     }
 
     fn handle_rack_key(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
-            KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
-            KeyCode::Char('z') if ctrl => self.undo(),
             KeyCode::Enter => self.find_moves_and_focus(),
             KeyCode::Char(c) if c.is_ascii_alphabetic() => {
                 self.add_to_rack(c.to_ascii_uppercase());
@@ -810,29 +883,64 @@ impl App {
             }
             KeyCode::Backspace => self.pop_from_rack(),
             KeyCode::Delete => self.clear_rack(),
-            KeyCode::Tab => self.next_focus(),
-            KeyCode::Esc => {
-                self.focus = Focus::Board;
-            }
             _ => {}
         }
     }
 
     fn handle_suggestions_key(&mut self, key: KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let page = self.list_height.get().saturating_sub(1).max(1) as i32;
         match key.code {
-            KeyCode::Up => self.move_suggestion_selection(-1),
-            KeyCode::Down => self.move_suggestion_selection(1),
-            KeyCode::Enter => self.apply_suggestion_and_focus(),
-            KeyCode::Tab => self.next_focus(),
-            KeyCode::Esc => {
-                self.focus = Focus::Board;
+            KeyCode::Up | KeyCode::Char('k') => self.move_suggestion_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_suggestion_selection(1),
+            KeyCode::PageUp => self.step_selection(-page),
+            KeyCode::PageDown => self.step_selection(page),
+            KeyCode::Home => self.step_selection(i32::MIN / 2),
+            KeyCode::End => self.step_selection(i32::MAX / 2),
+            KeyCode::Char(d @ '1'..='9') => {
+                let row = self.list_offset.get() + (d as usize - '1' as usize);
+                if let Some(&idx) = self.visible_suggestions().get(row) {
+                    self.selected_suggestion = idx;
+                }
             }
-            KeyCode::Char('s') if !ctrl => self.cycle_sort_mode(),
-            KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
-            KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
-            KeyCode::Char('z') if ctrl => self.undo(),
-            KeyCode::Char('m') | KeyCode::Char('M') if !ctrl => self.run_mcts_evaluation(),
+            KeyCode::Char('/') => {
+                self.filter_editing = true;
+                self.filter.get_or_insert_with(String::new);
+            }
+            KeyCode::Char('n') => self.move_suggestion_selection(1),
+            KeyCode::Char('N') => self.move_suggestion_selection(-1),
+            KeyCode::Enter => self.apply_suggestion_and_focus(),
+            KeyCode::Char('s') | KeyCode::Char('S') => self.cycle_sort_mode(),
+            KeyCode::Char('m') | KeyCode::Char('M') => self.run_mcts_evaluation(),
+            KeyCode::Char('y') => self.copy_selected_move(),
+            KeyCode::Char('Y') => self.copy_position(),
+            _ => {}
+        }
+    }
+
+    /// Keys while typing a suggestions filter: letters and digits narrow
+    /// the list as they are typed, Enter keeps the filter, Esc drops it.
+    fn handle_filter_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_alphanumeric() => {
+                self.filter.get_or_insert_with(String::new).push(c);
+                self.select_first_visible();
+            }
+            KeyCode::Backspace => {
+                if let Some(f) = self.filter.as_mut() {
+                    f.pop();
+                }
+                self.select_first_visible();
+            }
+            KeyCode::Enter => {
+                self.filter_editing = false;
+                if self.filter.as_deref() == Some("") {
+                    self.filter = None;
+                }
+            }
+            KeyCode::Esc => {
+                self.filter_editing = false;
+                self.filter = None;
+            }
             _ => {}
         }
     }
@@ -842,8 +950,19 @@ impl App {
             DialogState::None => {}
 
             DialogState::Help => {
-                if matches!(key.code, KeyCode::Esc | KeyCode::F(1)) {
-                    self.close_dialog();
+                let max = crate::ui::help_popup::HelpPopup::line_count();
+                match key.code {
+                    KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') => self.close_dialog(),
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.help_scroll = self.help_scroll.saturating_sub(1)
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.help_scroll = (self.help_scroll + 1).min(max)
+                    }
+                    KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                    KeyCode::PageDown => self.help_scroll = (self.help_scroll + 10).min(max),
+                    KeyCode::Home => self.help_scroll = 0,
+                    _ => {}
                 }
             }
 
@@ -900,6 +1019,23 @@ impl App {
                         self.close_dialog();
                     }
                 }
+                _ => {}
+            },
+
+            DialogState::QuickEntry { ref mut buffer } => match key.code {
+                KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ' ' || c == '?' => {
+                    if buffer.len() < 24 {
+                        buffer.push(c);
+                    }
+                }
+                KeyCode::Backspace => {
+                    buffer.pop();
+                }
+                KeyCode::Enter => {
+                    let text = buffer.clone();
+                    self.commit_quick_entry(&text);
+                }
+                KeyCode::Esc => self.close_dialog(),
                 _ => {}
             },
 
@@ -1014,6 +1150,7 @@ impl App {
         // Opponent-rack inference (RefEngine) finishes independently of ranking.
         // A result is only kept if the opponent has not moved again since it
         // was started: a late result describes a rack they no longer hold.
+        let mut changed = false;
         if let Some((stamp, ref receiver)) = self.inference_receiver {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -1029,6 +1166,7 @@ impl App {
                         log("Dropped a stale inference result (opponent moved since)");
                     }
                     self.inference_receiver = None;
+                    changed = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -1111,21 +1249,23 @@ impl App {
                         log(&format!("Endgame PV: {}", pv_str.join(" → ")));
                     }
 
-                    self.message = Some(format!(
-                        "Endgame: {} moves ranked by score minus opponent's best reply",
-                        count
-                    ));
+                    self.set_message(
+                        MessageKind::Success,
+                        format!(
+                            "Endgame: {} moves ranked by score minus opponent's best reply",
+                            count
+                        ),
+                    );
                     return true;
                 }
-                Err(mpsc::TryRecvError::Empty) => {
-                    if let Some(ref mut progress) = self.mcts_progress {
-                        progress.spinner_frame += 1;
-                    }
-                }
+                Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.endgame_job = None;
                     self.mcts_progress = None;
-                    self.message = Some("Endgame evaluation failed (see the log)".to_string());
+                    self.set_message(
+                        MessageKind::Error,
+                        "Endgame evaluation failed (see the log)".to_string(),
+                    );
                     return true;
                 }
             }
@@ -1147,7 +1287,7 @@ impl App {
                     self.sim_job = None;
                     self.apply_sim_snapshot(&candidates, &snap, first);
                     self.mcts_progress = None;
-                    self.message = Some(Self::sim_summary(&snap));
+                    self.set_message(MessageKind::Success, Self::sim_summary(&snap));
                     log(&Self::sim_summary(&snap));
                     return true;
                 }
@@ -1164,12 +1304,15 @@ impl App {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.sim_job = None;
                     self.mcts_progress = None;
-                    self.message = Some("Simulation failed (see the log)".to_string());
+                    self.set_message(
+                        MessageKind::Error,
+                        "Simulation failed (see the log)".to_string(),
+                    );
                     return true;
                 }
             }
         }
-        false
+        changed
     }
 
     /// One-line summary of a finished (or stopped) simulation.
@@ -1183,13 +1326,6 @@ impl App {
         )
     }
 
-    /// Advance the spinner animation by one frame.
-    pub fn tick_spinner(&mut self) {
-        if let Some(ref mut progress) = self.mcts_progress {
-            progress.spinner_frame += 1;
-        }
-    }
-
     /// Toggle the board typing direction between horizontal and vertical.
     pub fn toggle_direction(&mut self) {
         self.typing_direction = match self.typing_direction {
@@ -1200,6 +1336,7 @@ impl App {
 
     /// Toggle the help dialog open or closed.
     pub fn toggle_help(&mut self) {
+        self.help_scroll = 0;
         self.dialog = match self.dialog {
             DialogState::Help => DialogState::None,
             DialogState::None => DialogState::Help,
@@ -1241,8 +1378,7 @@ impl App {
     /// Commit a score from the input dialog.
     fn commit_score_input(&mut self, target: ScoreTarget, value: u32) {
         // Push undo so the score change is reversible
-        let snapshot = self.undo_snapshot(format!("Score: {}-{}", self.our_score, self.opp_score));
-        self.undo_stack.push(snapshot);
+        self.push_undo(format!("Score: {}-{}", self.our_score, self.opp_score));
         // Win estimates depend on the score difference.
         self.position_changed();
         self.sim_results = None;
@@ -1263,10 +1399,13 @@ impl App {
         } else {
             format!("{}", diff)
         };
-        self.message = Some(format!(
-            "{} score set to {} \u{2014} {}-{} ({})",
-            label, value, self.our_score, self.opp_score, diff_str
-        ));
+        self.set_message(
+            MessageKind::Info,
+            format!(
+                "{} score set to {} \u{2014} {}-{} ({})",
+                label, value, self.our_score, self.opp_score, diff_str
+            ),
+        );
         self.close_dialog();
     }
 
@@ -1297,11 +1436,14 @@ impl App {
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
         self.ensure_focus_visible();
-        self.message = Some(if self.sidebar_visible {
-            "Sidebar shown".to_string()
-        } else {
-            "Sidebar hidden (\\ restores it)".to_string()
-        });
+        self.set_message(
+            MessageKind::Info,
+            if self.sidebar_visible {
+                "Sidebar shown".to_string()
+            } else {
+                "Sidebar hidden (\\ restores it)".to_string()
+            },
+        );
         self.save_settings();
     }
 
@@ -1324,10 +1466,13 @@ impl App {
     pub fn set_dictionary(&mut self, dict: Dictionary) {
         let count = dict.len();
         self.dictionary = Some(Arc::new(dict));
-        self.message = Some(format!(
-            "Loaded {} words. Place tiles on board, set rack, Ctrl+S to solve.",
-            count
-        ));
+        self.set_message(
+            MessageKind::Info,
+            format!(
+                "Loaded {} words. Place tiles on board, set rack, Ctrl+S to solve.",
+                count
+            ),
+        );
     }
 
     /// Move the board cursor by the given row/column delta.
@@ -1337,8 +1482,13 @@ impl App {
         self.cursor = (new_row, new_col);
     }
 
-    /// Place a letter on the board at the cursor and advance in the typing direction.
-    pub fn place_on_board(&mut self, letter: char) {
+    /// Place a letter on the board at the cursor and advance in the typing
+    /// direction. `blank` places it as a blank. Typing the letter a square
+    /// already holds keeps that tile (and its blank flag); the cursor then
+    /// skips over occupied squares, so typing only the new tiles of a word
+    /// fills the gaps, and it stops at the edge. `?` toggles the blank flag
+    /// of the tile under the cursor (or places a blank A).
+    pub fn place_on_board(&mut self, letter: char, blank: bool) {
         let (row, col) = self.cursor;
 
         if letter == '?' {
@@ -1350,23 +1500,31 @@ impl App {
             }
             self.state.place_tile(row, col, 'A', true);
         } else {
-            self.state.place_tile(row, col, letter, false);
+            match self.state.get_tile(row, col).copied() {
+                Some(existing) if existing.letter == letter && !blank => {}
+                Some(existing) if existing.letter == letter && existing.is_blank => {}
+                _ => self.state.place_tile(row, col, letter, blank),
+            }
         }
 
         self.clear_suggestions();
         self.message = None;
+        self.advance_cursor();
+    }
 
-        match self.typing_direction {
-            Direction::Horizontal => {
-                if self.cursor.1 < 14 {
-                    self.cursor.1 += 1;
-                }
-            }
-            Direction::Vertical => {
-                if self.cursor.0 < 14 {
-                    self.cursor.0 += 1;
-                }
-            }
+    /// Step the cursor in the typing direction past any occupied squares,
+    /// staying put at the edge of the board.
+    fn advance_cursor(&mut self) {
+        let (dr, dc) = self.typing_direction.delta();
+        let (mut r, mut c) = (self.cursor.0 as i32 + dr, self.cursor.1 as i32 + dc);
+        while Board::is_valid_position(r, c)
+            && self.state.get_tile(r as usize, c as usize).is_some()
+        {
+            r += dr;
+            c += dc;
+        }
+        if Board::is_valid_position(r, c) {
+            self.cursor = (r as usize, c as usize);
         }
     }
 
@@ -1412,7 +1570,7 @@ impl App {
             self.clear_suggestions();
             self.message = None;
         } else {
-            self.message = Some("Rack is full (max 7 tiles)".to_string());
+            self.set_message(MessageKind::Error, "Rack is full (max 7 tiles)".to_string());
         }
     }
 
@@ -1426,9 +1584,13 @@ impl App {
 
     /// Remove all tiles from the rack.
     pub fn clear_rack(&mut self) {
+        if self.state.rack.is_empty() {
+            return;
+        }
+        self.push_undo("Rack cleared".to_string());
         self.state.clear_rack();
         self.clear_suggestions();
-        self.message = Some("Rack cleared".to_string());
+        self.set_message(MessageKind::Info, "Rack cleared".to_string());
     }
 
     fn clear_suggestions(&mut self) {
@@ -1459,14 +1621,18 @@ impl App {
         self.final_turn = self.final_turn.toggle();
         self.final_turn_known = true;
         self.clear_suggestions();
-        self.message = Some(match self.final_turn {
-            FinalTurn::Opponent => {
-                "Final turn: opponent (they emptied the bag — they reply to your play)".to_string()
-            }
-            FinalTurn::Us => {
-                "Final turn: you (you emptied the bag — no reply after your play)".to_string()
-            }
-        });
+        self.set_message(
+            MessageKind::Info,
+            match self.final_turn {
+                FinalTurn::Opponent => {
+                    "Final turn: opponent (they emptied the bag — they reply to your play)"
+                        .to_string()
+                }
+                FinalTurn::Us => {
+                    "Final turn: you (you emptied the bag — no reply after your play)".to_string()
+                }
+            },
+        );
     }
 
     /// True when our next play is the last move of the game: either the
@@ -1480,7 +1646,10 @@ impl App {
     /// Run the solver to generate all legal moves for the current board and rack.
     pub fn find_moves(&mut self) {
         if self.state.rack.is_empty() {
-            self.message = Some("Set your rack first (Tab to rack, type letters)".to_string());
+            self.set_message(
+                MessageKind::Error,
+                "Set your rack first (Tab to rack, type letters)".to_string(),
+            );
             return;
         }
 
@@ -1509,8 +1678,7 @@ impl App {
 
         if let Some((word, score, placed)) = opponent_move {
             // Push undo state so the auto-score is reversible
-            let snapshot = self.undo_snapshot(format!("Before opp: {}", word));
-            self.undo_stack.push(snapshot);
+            self.push_undo(format!("Before opp: {}", word));
             self.pending_opponent_score = score;
             self.opp_score += score;
             // Snapshot the board now so we don't re-score the same tiles next time
@@ -1576,22 +1744,31 @@ impl App {
             self.selected_suggestion = 0;
             self.sim_results = None;
             self.sim_progress = None;
+            self.filter = None;
+            self.list_offset.set(0);
+            self.autosave();
 
             if total_count == 0 {
-                self.message = Some("No valid moves found".to_string());
+                self.set_message(MessageKind::Error, "No valid moves found".to_string());
             } else if is_last_move {
-                self.message = Some(format!(
-                    "Final move of the game: {} plays, sorted by score",
-                    total_count
-                ));
+                self.set_message(
+                    MessageKind::Info,
+                    format!(
+                        "Final move of the game: {} plays, sorted by score",
+                        total_count
+                    ),
+                );
             } else {
-                self.message = Some(format!(
-                    "Found {} moves",
-                    group_thousands(self.suggestions.len() as u64)
-                ));
+                self.set_message(
+                    MessageKind::Info,
+                    format!(
+                        "Found {} moves",
+                        group_thousands(self.suggestions.len() as u64)
+                    ),
+                );
             }
         } else {
-            self.message = Some("Dictionary not loaded".to_string());
+            self.set_message(MessageKind::Error, "Dictionary not loaded".to_string());
         }
     }
 
@@ -1764,12 +1941,15 @@ impl App {
         self.cancel_evaluation();
 
         if self.suggestions.is_empty() {
-            self.message = Some("Generate suggestions first (Ctrl+S)".to_string());
+            self.set_message(
+                MessageKind::Error,
+                "Generate suggestions first (Ctrl+S)".to_string(),
+            );
             return;
         }
 
         let Some(dict) = self.dictionary.clone() else {
-            self.message = Some("Dictionary not loaded".to_string());
+            self.set_message(MessageKind::Error, "Dictionary not loaded".to_string());
             return;
         };
 
@@ -1781,10 +1961,13 @@ impl App {
             self.sort_mode = SortMode::Score;
             self.apply_sort();
             self.selected_suggestion = 0;
-            self.message = Some(format!(
-                "Final move of the game: {} plays, sorted by score",
-                self.suggestions.len()
-            ));
+            self.set_message(
+                MessageKind::Info,
+                format!(
+                    "Final move of the game: {} plays, sorted by score",
+                    self.suggestions.len()
+                ),
+            );
             return;
         }
 
@@ -1800,8 +1983,7 @@ impl App {
             // The solver regenerates every play itself (the list on
             // screen is capped), so no count is known up front.
             self.mcts_progress = Some(MctsProgress {
-                total_candidates: 0,
-                spinner_frame: 0,
+                started: Instant::now(),
                 sim: None,
             });
             let caveat = if self.final_turn_known {
@@ -1809,10 +1991,13 @@ impl App {
             } else {
                 " — assuming they emptied the bag; Ctrl+E if you did"
             };
-            self.message = Some(format!(
-                "Endgame: searching the opponent's replies ({} tiles){}...",
-                unseen, caveat
-            ));
+            self.set_message(
+                MessageKind::Progress,
+                format!(
+                    "Endgame: searching the opponent's replies ({} tiles){}...",
+                    unseen, caveat
+                ),
+            );
 
             let (tx, rx) = mpsc::channel();
             let cancel = Arc::new(AtomicBool::new(false));
@@ -1867,17 +2052,19 @@ impl App {
         let candidates = Arc::new(self.candidates_by_static_equity());
         let count = candidates.len();
         self.mcts_progress = Some(MctsProgress {
-            total_candidates: count,
-            spinner_frame: 0,
+            started: Instant::now(),
             sim: None,
         });
-        self.message = Some(format!(
-            "{}: simulating {} candidates ({} in bag, {} plies)... Esc stops",
-            crate::stats::GamePhase::from_unseen_count(unseen as u32).label(),
-            group_thousands(count as u64),
-            bag,
-            settings.max_plies
-        ));
+        self.set_message(
+            MessageKind::Progress,
+            format!(
+                "{}: simulating {} candidates ({} in bag, {} plies)... Esc stops",
+                crate::stats::GamePhase::from_unseen_count(unseen as u32).label(),
+                group_thousands(count as u64),
+                bag,
+                settings.max_plies
+            ),
+        );
         let state = self.state.clone();
 
         // Opponent model for the playouts: their measured strength, plus
@@ -2030,11 +2217,10 @@ impl App {
             return;
         }
 
-        let snapshot = self.undo_snapshot(format!(
+        self.push_undo(format!(
             "Before: {}",
             self.suggestions[self.selected_suggestion].word
         ));
-        self.undo_stack.push(snapshot);
 
         let mv = self.suggestions[self.selected_suggestion].clone();
 
@@ -2066,42 +2252,77 @@ impl App {
         } else {
             format!("{}", diff)
         };
-        self.message = Some(match &mv.kind {
-            crate::solver::MoveKind::Play => format!(
-                "Applied: {} ({} pts) \u{2014} Score: {}-{} ({})",
-                mv.word, mv.score, self.our_score, self.opp_score, diff_str
-            ),
-            crate::solver::MoveKind::Exchange(tiles) => format!(
-                "Exchanged {} tiles \u{2014} type the new tiles into the rack",
-                tiles.len()
-            ),
-            crate::solver::MoveKind::Pass => {
-                format!(
-                    "Passed \u{2014} Score: {}-{} ({})",
-                    self.our_score, self.opp_score, diff_str
-                )
-            }
-        });
+        self.set_message(
+            MessageKind::Success,
+            match &mv.kind {
+                crate::solver::MoveKind::Play => format!(
+                    "Applied: {} ({} pts) \u{2014} Score: {}-{} ({})",
+                    mv.word, mv.score, self.our_score, self.opp_score, diff_str
+                ),
+                crate::solver::MoveKind::Exchange(tiles) => format!(
+                    "Exchanged {} tiles \u{2014} type the new tiles into the rack",
+                    tiles.len()
+                ),
+                crate::solver::MoveKind::Pass => {
+                    format!(
+                        "Passed \u{2014} Score: {}-{} ({})",
+                        self.our_score, self.opp_score, diff_str
+                    )
+                }
+            },
+        );
+        self.clear_suggestions();
+        self.autosave();
+    }
+
+    /// Record the current state for undo, before a change; any redo
+    /// history is dropped.
+    fn push_undo(&mut self, message: String) {
+        let snapshot = self.undo_snapshot(message);
+        self.undo_stack.push(snapshot);
+        self.redo_stack.clear();
+    }
+
+    /// Put a saved state back.
+    fn restore(&mut self, saved: UndoState) {
+        self.state = saved.state;
+        self.our_score = saved.our_score;
+        self.opp_score = saved.opp_score;
+        self.last_applied_board = saved.last_applied_board;
+        self.final_turn = saved.final_turn;
+        self.final_turn_known = saved.final_turn_known;
+        self.opp_loss_total = saved.opp_loss_total;
+        self.opp_moves_measured = saved.opp_moves_measured;
+        self.awaiting_opp_reply = saved.awaiting_opp_reply;
         self.clear_suggestions();
     }
 
-    /// Undo the last applied move, restoring the previous board, rack, scores,
-    /// and board snapshot (so opponent auto-scoring works against the correct state).
+    /// Undo the last change (applied move, auto-scored opponent move,
+    /// score edit, reset or rack clear), restoring the previous board,
+    /// rack, scores, and board snapshot (so opponent auto-scoring works
+    /// against the correct state).
     pub fn undo(&mut self) {
-        if let Some(undo_state) = self.undo_stack.pop() {
-            self.state = undo_state.state;
-            self.our_score = undo_state.our_score;
-            self.opp_score = undo_state.opp_score;
-            self.last_applied_board = undo_state.last_applied_board;
-            self.final_turn = undo_state.final_turn;
-            self.final_turn_known = undo_state.final_turn_known;
-            self.opp_loss_total = undo_state.opp_loss_total;
-            self.opp_moves_measured = undo_state.opp_moves_measured;
-            self.awaiting_opp_reply = undo_state.awaiting_opp_reply;
-            self.clear_suggestions();
-            self.message = Some(format!("Undone: {}", undo_state.message));
+        if let Some(saved) = self.undo_stack.pop() {
+            let message = saved.message.clone();
+            let current = self.undo_snapshot(message.clone());
+            self.redo_stack.push(current);
+            self.restore(saved);
+            self.set_message(MessageKind::Info, format!("Undone: {}", message));
         } else {
-            self.message = Some("Nothing to undo".to_string());
+            self.set_message(MessageKind::Error, "Nothing to undo");
+        }
+    }
+
+    /// Redo the last undone change.
+    pub fn redo(&mut self) {
+        if let Some(saved) = self.redo_stack.pop() {
+            let message = saved.message.clone();
+            let current = self.undo_snapshot(message.clone());
+            self.undo_stack.push(current);
+            self.restore(saved);
+            self.set_message(MessageKind::Info, format!("Redone: {}", message));
+        } else {
+            self.set_message(MessageKind::Error, "Nothing to redo");
         }
     }
 
@@ -2123,22 +2344,74 @@ impl App {
 
     /// Apply the selected suggestion and return focus to the board.
     pub fn apply_suggestion_and_focus(&mut self) {
+        let exchange = self
+            .suggestions
+            .get(self.selected_suggestion)
+            .is_some_and(|m| matches!(m.kind, crate::solver::MoveKind::Exchange(_)));
         self.apply_suggestion();
-        self.focus = Focus::Board;
+        // After an exchange the next thing to do is type the new tiles.
+        self.focus = if exchange { Focus::Rack } else { Focus::Board };
     }
 
-    /// Move the suggestion selection up or down by delta, wrapping around.
+    /// Indices of the suggestions the list shows (all of them, or those
+    /// matching the filter by word or by position).
+    pub fn visible_suggestions(&self) -> Vec<usize> {
+        let Some(filter) = self.filter.as_deref().filter(|f| !f.is_empty()) else {
+            return (0..self.suggestions.len()).collect();
+        };
+        let q = filter.to_ascii_uppercase();
+        self.suggestions
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                m.word.to_ascii_uppercase().contains(&q)
+                    || m.coords().to_ascii_uppercase().starts_with(&q)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Select the first suggestion the filter lets through.
+    fn select_first_visible(&mut self) {
+        if let Some(&first) = self.visible_suggestions().first() {
+            self.selected_suggestion = first;
+        }
+        self.list_offset.set(0);
+    }
+
+    /// Move the selection by `delta` rows of the visible list, wrapping
+    /// around (arrow keys, n/N).
     pub fn move_suggestion_selection(&mut self, delta: i32) {
-        if self.suggestions.is_empty() {
+        let visible = self.visible_suggestions();
+        if visible.is_empty() {
             return;
         }
-        let len = self.suggestions.len() as i32;
-        let new_idx = (self.selected_suggestion as i32 + delta).rem_euclid(len) as usize;
-        self.selected_suggestion = new_idx;
+        let pos = visible
+            .iter()
+            .position(|&i| i == self.selected_suggestion)
+            .unwrap_or(0) as i32;
+        let new = (pos + delta).rem_euclid(visible.len() as i32) as usize;
+        self.selected_suggestion = visible[new];
+    }
+
+    /// Move the selection by `delta` rows of the visible list, stopping at
+    /// the ends (paging, Home/End, the mouse wheel).
+    pub fn step_selection(&mut self, delta: i32) {
+        let visible = self.visible_suggestions();
+        if visible.is_empty() {
+            return;
+        }
+        let pos = visible
+            .iter()
+            .position(|&i| i == self.selected_suggestion)
+            .unwrap_or(0) as i64;
+        let new = (pos + delta as i64).clamp(0, visible.len() as i64 - 1) as usize;
+        self.selected_suggestion = visible[new];
     }
 
     /// Reset the board, rack, and all state to initial defaults.
     pub fn reset(&mut self) {
+        self.push_undo("Reset".to_string());
         self.state.reset();
         self.cursor = (7, 7);
         self.typing_direction = Direction::Horizontal;
@@ -2155,12 +2428,17 @@ impl App {
         self.final_turn_known = false;
         self.opp_loss_total = 0.0;
         self.opp_moves_measured = 0;
-        self.message = Some("Reset complete".to_string());
+        self.set_message(MessageKind::Info, "Reset complete".to_string());
     }
 
     /// Cycle input focus to the next pane.
     pub fn next_focus(&mut self) {
         self.focus = self.focus.next_visible(|f| self.pane_visible(f));
+    }
+
+    /// Cycle input focus to the previous pane (Shift+Tab).
+    pub fn prev_focus(&mut self) {
+        self.focus = self.focus.prev_visible(|f| self.pane_visible(f));
     }
 
     /// Whether the current layout shows the pane for `focus` (always true
@@ -2175,7 +2453,7 @@ impl App {
         );
         match focus {
             Focus::Board => true,
-            Focus::Rack => layout.rack_area.is_some(),
+            Focus::Rack => layout.shows_rack(),
             Focus::Suggestions => layout.suggestions_area.is_some(),
         }
     }
@@ -2193,7 +2471,10 @@ impl App {
         self.sort_mode = self.sort_mode.next(has_sim);
         self.apply_sort();
         self.selected_suggestion = 0;
-        self.message = Some(format!("Sort: {}", self.sort_mode.label()));
+        self.set_message(
+            MessageKind::Info,
+            format!("Sort: {}", self.sort_mode.label()),
+        );
         self.save_settings();
     }
 
@@ -2346,6 +2627,353 @@ pub fn group_thousands(n: u64) -> String {
         out.push(ch);
     }
     out
+}
+
+/// A play entered by coordinates (`:` then `8D QUIXOTIC`), checked against
+/// the board and the dictionary.
+#[derive(Debug, Clone)]
+pub struct QuickPlay {
+    /// The new tiles, in word order.
+    pub tiles: Vec<(usize, usize, Tile)>,
+    /// The main word as it reads on the board.
+    pub word: String,
+    pub score: u32,
+    /// Why the play is not legal, if it is not (words not in the
+    /// dictionary, or not connected).
+    pub problem: Option<String>,
+}
+
+/// Parse `8D` (row first: horizontal) or `D8` (column first: vertical)
+/// into (row, col, direction).
+pub fn parse_coords(text: &str) -> Option<(usize, usize, Direction)> {
+    let t = text.trim().to_ascii_uppercase();
+    let digits: String = t.chars().filter(|c| c.is_ascii_digit()).collect();
+    let letters: String = t.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    if digits.is_empty() || letters.len() != 1 || digits.len() + 1 != t.len() {
+        return None;
+    }
+    let row: usize = digits.parse().ok()?;
+    let col = (letters.as_bytes()[0] - b'A') as usize;
+    if row == 0 || row > BOARD_SIZE || col >= BOARD_SIZE {
+        return None;
+    }
+    let dir = if t.starts_with(|c: char| c.is_ascii_digit()) {
+        Direction::Horizontal
+    } else {
+        Direction::Vertical
+    };
+    Some((row - 1, col, dir))
+}
+
+/// Where the session is saved (`None` in tests, which must not touch the
+/// user's files).
+pub fn session_path() -> Option<std::path::PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    dirs::data_dir().map(|d| d.join("cpsolver2").join("session.cgp"))
+}
+
+/// Base64 (standard alphabet, padded), for OSC 52 clipboard writes.
+pub fn base64(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+impl App {
+    /// Check a coordinate entry against the board: placement, connection
+    /// and words. `Err` means it cannot even be placed.
+    pub fn parse_quick_entry(&self, text: &str) -> Result<QuickPlay, String> {
+        let mut parts = text.split_whitespace();
+        let coords = parts
+            .next()
+            .ok_or("type a square and a word, e.g. 8D QUIXOTIC")?;
+        let word = parts.next().ok_or("add the word after the square")?;
+        if parts.next().is_some() {
+            return Err("one square and one word".to_string());
+        }
+        let (row, col, dir) = parse_coords(coords).ok_or_else(|| {
+            format!(
+                "'{}' is not a square: row then column (8D) across, column then row (D8) down",
+                coords
+            )
+        })?;
+        let dict = self.dictionary.as_ref().ok_or("dictionary not loaded")?;
+        let (dr, dc) = dir.delta();
+        let board = &self.state.board;
+
+        let mut tiles = Vec::new();
+        for (i, ch) in word.chars().enumerate() {
+            let (r, c) = (row as i32 + dr * i as i32, col as i32 + dc * i as i32);
+            if !Board::is_valid_position(r, c) {
+                return Err("the word runs off the board".to_string());
+            }
+            let (r, c) = (r as usize, c as usize);
+            match board.get_tile(r, c) {
+                Some(existing) => {
+                    if ch != '.' && !ch.eq_ignore_ascii_case(&existing.letter) {
+                        return Err(format!(
+                            "{} already holds {}",
+                            crate::ui::board_view::square_name(r, c),
+                            existing.letter
+                        ));
+                    }
+                }
+                None => {
+                    if !ch.is_ascii_alphabetic() {
+                        return Err(format!("'{}' is not a letter", ch));
+                    }
+                    let tile = if ch.is_ascii_lowercase() {
+                        Tile::blank(ch)
+                    } else {
+                        Tile::new(ch)
+                    };
+                    tiles.push((r, c, tile));
+                }
+            }
+        }
+        if tiles.is_empty() {
+            return Err("no new tiles in that word".to_string());
+        }
+
+        // The words the play forms, read off a copy of the board.
+        let mut after = board.clone();
+        for &(r, c, t) in &tiles {
+            after.place_tile(r, c, t);
+        }
+        let read_word = |b: &Board, r: usize, c: usize, d: Direction| -> String {
+            let (dr, dc) = d.delta();
+            let (mut sr, mut sc) = (r as i32, c as i32);
+            while Board::is_valid_position(sr - dr, sc - dc)
+                && b.get_tile((sr - dr) as usize, (sc - dc) as usize).is_some()
+            {
+                sr -= dr;
+                sc -= dc;
+            }
+            let mut w = String::new();
+            while Board::is_valid_position(sr, sc) {
+                match b.get_tile(sr as usize, sc as usize) {
+                    Some(t) => w.push(t.letter),
+                    None => break,
+                }
+                sr += dr;
+                sc += dc;
+            }
+            w
+        };
+        let main = read_word(&after, tiles[0].0, tiles[0].1, dir);
+        let mut problems = Vec::new();
+        if main.len() < 2 {
+            problems.push("a single letter is not a word".to_string());
+        } else if !dict.is_valid(&main) {
+            problems.push(format!("{} is not a word", main));
+        }
+        let mut touches = false;
+        for &(r, c, _) in &tiles {
+            let cross = read_word(&after, r, c, dir.perpendicular());
+            if cross.len() >= 2 {
+                touches = true;
+                if !dict.is_valid(&cross) {
+                    problems.push(format!("{} is not a word", cross));
+                }
+            }
+        }
+        let board_empty =
+            (0..BOARD_SIZE).all(|r| (0..BOARD_SIZE).all(|c| board.get_tile(r, c).is_none()));
+        if board_empty {
+            if !tiles.iter().any(|&(r, c, _)| (r, c) == (7, 7)) {
+                problems.push("the first play must cover the centre square".to_string());
+            }
+        } else if !touches && main.len() == tiles.len() {
+            problems.push("the play does not touch the tiles on the board".to_string());
+        }
+
+        let score = Solver::new(board, dict).score_placed_tiles(&tiles, dir);
+        Ok(QuickPlay {
+            tiles,
+            word: main,
+            score,
+            problem: (!problems.is_empty()).then(|| problems.join("; ")),
+        })
+    }
+
+    /// Place a legal coordinate entry on the board (undoable). The next
+    /// solve scores it for the opponent like tiles typed on the board.
+    fn commit_quick_entry(&mut self, text: &str) {
+        match self.parse_quick_entry(text) {
+            Ok(play) if play.problem.is_none() => {
+                self.push_undo(format!("Entered {}", play.word));
+                for &(r, c, t) in &play.tiles {
+                    self.state.board.place_tile(r, c, t);
+                }
+                self.close_dialog();
+                self.clear_suggestions();
+                self.focus = Focus::Board;
+                self.set_message(
+                    MessageKind::Success,
+                    format!(
+                        "Placed {} ({} pts) \u{2014} Ctrl+S scores it for the opponent",
+                        play.word, play.score
+                    ),
+                );
+            }
+            Ok(play) => {
+                let problem = play.problem.unwrap_or_default();
+                self.set_message(MessageKind::Error, format!("Not placed: {}", problem));
+            }
+            Err(e) => self.set_message(MessageKind::Error, format!("Not placed: {}", e)),
+        }
+    }
+
+    /// Copy the selected move (`8D QUIXOTIC`, blanks lowercase) to the
+    /// clipboard.
+    fn copy_selected_move(&mut self) {
+        let Some(mv) = self.suggestions.get(self.selected_suggestion) else {
+            return;
+        };
+        let text = match mv.kind {
+            crate::solver::MoveKind::Play => {
+                format!(
+                    "{} {}",
+                    mv.coords(),
+                    crate::ui::suggestions::display_word(mv)
+                )
+            }
+            _ => mv.word.clone(),
+        };
+        self.set_message(MessageKind::Success, format!("Copied {}", text));
+        self.pending_clipboard = Some(text);
+    }
+
+    /// The position as a CGP line with this app's own opcodes for who has
+    /// the final turn (see [`Self::load_position`]).
+    pub fn position_cgp(&self) -> String {
+        format!(
+            "{} cpsolver.final {}; cpsolver.final_known {};",
+            self.state.to_cgp((self.our_score, self.opp_score)),
+            match self.final_turn {
+                FinalTurn::Us => "us",
+                FinalTurn::Opponent => "opp",
+            },
+            u8::from(self.final_turn_known)
+        )
+    }
+
+    /// Copy the position (CGP) to the clipboard.
+    fn copy_position(&mut self) {
+        self.pending_clipboard = Some(self.position_cgp());
+        self.set_message(MessageKind::Success, "Copied the position (CGP)");
+    }
+
+    /// Load a CGP position: board, our rack, scores (when given) and, from
+    /// a saved session, who has the final turn. The board becomes the
+    /// reference for detecting the opponent's next move.
+    pub fn load_position(&mut self, text: &str, undoable: bool) -> Result<(), String> {
+        let text = text.trim();
+        let state = SolverState::from_cgp(text)?;
+        let fields: Vec<&str> = text.split_whitespace().collect();
+        let scores = fields.get(2).and_then(|f| {
+            let (a, b) = f.split_once('/')?;
+            Some((a.parse().ok()?, b.parse().ok()?))
+        });
+        let opcode = |name: &str| -> Option<&str> {
+            let at = text.find(name)?;
+            text[at + name.len()..]
+                .trim_start()
+                .split([';', ' '])
+                .next()
+        };
+        if undoable {
+            self.push_undo("Loaded a position".to_string());
+        }
+        self.state = state;
+        if let Some((ours, theirs)) = scores {
+            self.our_score = ours;
+            self.opp_score = theirs;
+        }
+        match opcode("cpsolver.final ") {
+            Some("us") => self.final_turn = FinalTurn::Us,
+            Some("opp") => self.final_turn = FinalTurn::Opponent,
+            _ => {}
+        }
+        self.final_turn_known = opcode("cpsolver.final_known ") == Some("1");
+        self.last_applied_board = Some(self.state.board.clone());
+        self.awaiting_opp_reply = false;
+        self.clear_suggestions();
+        Ok(())
+    }
+
+    /// Save the session (position, scores, final turn) for the next start.
+    pub fn autosave(&self) {
+        let Some(path) = session_path() else {
+            return;
+        };
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let tmp = path.with_extension("cgp.tmp");
+            std::fs::write(&tmp, self.position_cgp() + "\n")?;
+            std::fs::rename(&tmp, &path)
+        };
+        if let Err(e) = write() {
+            log(&format!("Session autosave failed: {}", e));
+        }
+    }
+
+    /// Restore the saved session, if there is one. Returns true if a
+    /// position was loaded.
+    pub fn restore_session(&mut self) -> bool {
+        let Some(text) = session_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+            return false;
+        };
+        match self.load_position(&text, false) {
+            Ok(()) => {
+                self.set_message(
+                    MessageKind::Info,
+                    "Restored the last session (Ctrl+R to start over)",
+                );
+                true
+            }
+            Err(e) => {
+                log(&format!("Saved session unreadable: {}", e));
+                false
+            }
+        }
+    }
+
+    /// Pasted text (bracketed paste): into the coordinate prompt when it is
+    /// open, otherwise read as a CGP position.
+    pub fn handle_paste(&mut self, text: &str) -> AppAction {
+        if let DialogState::QuickEntry { buffer } = &mut self.dialog {
+            buffer.push_str(text.trim());
+            return AppAction::Redraw;
+        }
+        match self.load_position(text, true) {
+            Ok(()) => self.set_message(MessageKind::Success, "Loaded the pasted position"),
+            Err(e) => self.set_message(
+                MessageKind::Error,
+                format!("Pasted text is not a CGP position: {}", e),
+            ),
+        }
+        AppAction::Redraw
+    }
 }
 
 impl Default for App {
@@ -3003,5 +3631,353 @@ mod tests {
         assert_eq!(group_thousands(1000), "1,000");
         assert_eq!(group_thousands(48200), "48,200");
         assert_eq!(group_thousands(1234567), "1,234,567");
+    }
+
+    // ── Phase 5: navigation and input ───────────────────────────────
+
+    fn shift(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)
+    }
+
+    /// Typing skips squares that already hold tiles, a matching letter
+    /// keeps the tile (and its blank flag), Shift+letter places a blank,
+    /// and the cursor stops at the edge.
+    #[test]
+    fn board_typing_skips_tiles_and_places_blanks() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        app.state =
+            SolverState::from_cgp("15/15/15/15/15/15/15/3BeECH7/15/15/15/15/15/15/15").unwrap();
+        app.focus = Focus::Board;
+
+        // Typing the letter a tile already shows keeps the tile, blank
+        // flag included, and moves on.
+        app.cursor = (7, 4);
+        type_keys(&mut app, "e");
+        assert!(
+            app.state.get_tile(7, 4).unwrap().is_blank,
+            "blank flag kept"
+        );
+        assert_eq!(app.cursor, (7, 8), "jumped past the rest of the word");
+
+        // Typing only the new tiles of a word fills the gaps: the cursor
+        // jumps over the tiles already there.
+        app.cursor = (7, 1);
+        type_keys(&mut app, "a");
+        assert_eq!(app.state.get_tile(7, 1).unwrap().letter, 'A');
+        assert_eq!(app.cursor, (7, 2));
+        type_keys(&mut app, "s");
+        assert_eq!(app.cursor, (7, 8), "skipped the five tiles of BEECH");
+
+        // Shift+letter places a blank.
+        app.cursor = (0, 0);
+        app.handle_key(shift('Q'));
+        let q = app.state.get_tile(0, 0).unwrap();
+        assert!(q.is_blank && q.letter == 'Q');
+
+        // At the edge the cursor stays put.
+        app.cursor = (0, 14);
+        type_keys(&mut app, "z");
+        assert_eq!(app.cursor, (0, 14));
+        app.typing_direction = Direction::Vertical;
+        app.cursor = (14, 0);
+        type_keys(&mut app, "z");
+        assert_eq!(app.cursor, (14, 0));
+    }
+
+    /// Shift+Tab goes backward, Enter on the board solves, releases are
+    /// ignored, and score entry opens from any pane.
+    #[test]
+    fn keymap_consistency() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.terminal_size = Some((200, 50));
+        app.focus = Focus::Board;
+        app.handle_key(key(KeyCode::BackTab));
+        assert_eq!(app.focus, Focus::Suggestions);
+        app.handle_key(key(KeyCode::BackTab));
+        assert_eq!(app.focus, Focus::Rack);
+
+        let mut release = key(KeyCode::Tab);
+        release.kind = KeyEventKind::Release;
+        assert!(matches!(app.handle_key(release), AppAction::Nothing));
+        assert_eq!(app.focus, Focus::Rack);
+
+        for focus in [Focus::Board, Focus::Rack, Focus::Suggestions] {
+            app.focus = focus;
+            app.handle_key(key(KeyCode::Char('=')));
+            assert!(
+                matches!(app.dialog, DialogState::ScoreInput { .. }),
+                "{focus:?}"
+            );
+            app.handle_key(key(KeyCode::Esc));
+            assert_eq!(app.dialog, DialogState::None);
+        }
+
+        app.focus = Focus::Board;
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Suggestions, "Enter on the board solves");
+        assert!(!app.suggestions.is_empty());
+        assert!(app.undo_stack.is_empty(), "nothing was applied");
+        app.cancel_evaluation();
+
+        // S cycles the sort like s.
+        let before = app.sort_mode;
+        app.handle_key(key(KeyCode::Char('S')));
+        assert_ne!(app.sort_mode, before);
+    }
+
+    /// Esc first stops a simulation, then leaves a pane, then opens the
+    /// menu; Ctrl+C asks before quitting and a second Ctrl+C confirms.
+    #[test]
+    fn escape_order_and_quit_confirmation() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.focus = Focus::Suggestions;
+        app.run_mcts_evaluation();
+        assert!(app.is_mcts_running());
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.is_mcts_running());
+        assert_eq!(app.focus, Focus::Suggestions, "first Esc only stopped it");
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.focus, Focus::Board);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(matches!(app.dialog, DialogState::EscapeMenu(_)));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.dialog, DialogState::None);
+
+        assert!(matches!(app.handle_key(ctrl('c')), AppAction::Redraw));
+        assert!(matches!(app.dialog, DialogState::ConfirmQuit(_)));
+        assert!(matches!(app.handle_key(ctrl('c')), AppAction::Quit));
+    }
+
+    /// List navigation: paging, Home/End, j/k, digits, and the filter.
+    #[test]
+    fn suggestion_list_navigation_and_filter() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.focus = Focus::Suggestions;
+        app.list_height.set(10);
+        let n = app.suggestions.len();
+        assert!(n > 50);
+
+        app.handle_key(key(KeyCode::PageDown));
+        assert_eq!(app.selected_suggestion, 9);
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.selected_suggestion, 10);
+        app.handle_key(key(KeyCode::Char('k')));
+        app.handle_key(key(KeyCode::PageUp));
+        assert_eq!(app.selected_suggestion, 0);
+        app.handle_key(key(KeyCode::PageUp));
+        assert_eq!(app.selected_suggestion, 0, "paging stops at the top");
+        app.handle_key(key(KeyCode::End));
+        assert_eq!(app.selected_suggestion, n - 1);
+        app.handle_key(key(KeyCode::Home));
+        assert_eq!(app.selected_suggestion, 0);
+        app.list_offset.set(4);
+        app.handle_key(key(KeyCode::Char('3')));
+        assert_eq!(app.selected_suggestion, 6, "row 3 of the window");
+
+        // Filter by word: only matches are shown, n/N walk them.
+        let word = app.suggestions[20].word.clone();
+        app.list_offset.set(0);
+        app.handle_key(key(KeyCode::Char('/')));
+        assert!(app.filter_editing);
+        type_keys(&mut app, &word.to_lowercase());
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.filter_editing);
+        let shown = app.visible_suggestions();
+        assert!(!shown.is_empty() && shown.len() < n);
+        assert!(shown
+            .iter()
+            .all(|&i| app.suggestions[i].word.contains(&word)));
+        assert_eq!(app.selected_suggestion, shown[0]);
+        if shown.len() > 1 {
+            app.handle_key(key(KeyCode::Char('n')));
+            assert_eq!(app.selected_suggestion, shown[1]);
+            app.handle_key(key(KeyCode::Char('N')));
+            assert_eq!(app.selected_suggestion, shown[0]);
+        }
+        // Filter by square.
+        app.filter = Some("12".to_string());
+        assert!(app
+            .visible_suggestions()
+            .iter()
+            .all(|&i| app.suggestions[i].coords().starts_with("12")));
+        // Esc drops the filter (and stays in the list).
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.filter.is_none());
+        assert_eq!(app.focus, Focus::Suggestions);
+        assert_eq!(app.visible_suggestions().len(), n);
+    }
+
+    /// Undo and redo walk the history both ways; reset and clearing the
+    /// rack can be undone; a new change drops the redo history.
+    #[test]
+    fn undo_redo_reset_and_rack_clear() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        let board_before = app.state.board_cgp();
+        app.apply_suggestion();
+        let board_after = app.state.board_cgp();
+        assert_ne!(board_before, board_after);
+
+        app.handle_key(ctrl('z'));
+        assert_eq!(app.state.board_cgp(), board_before);
+        app.handle_key(ctrl('y'));
+        assert_eq!(app.state.board_cgp(), board_after);
+
+        app.reset();
+        assert!(app
+            .state
+            .board_cgp()
+            .starts_with("15/15/15/15/15/15/15/15/"));
+        app.undo();
+        assert_eq!(app.state.board_cgp(), board_after, "reset undone");
+
+        let rack = app.state.rack.tiles().len();
+        if rack > 0 {
+            app.clear_rack();
+            assert!(app.state.rack.is_empty());
+            app.undo();
+            assert_eq!(app.state.rack.tiles().len(), rack, "rack clear undone");
+        }
+
+        app.undo();
+        app.reset();
+        app.handle_key(ctrl('y'));
+        assert_eq!(
+            app.message.as_deref(),
+            Some("Nothing to redo"),
+            "a new change dropped the redo history"
+        );
+    }
+
+    /// After applying an exchange the rack has the focus, to type the
+    /// replacement tiles.
+    #[test]
+    fn exchange_focuses_the_rack() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        let i = app
+            .suggestions
+            .iter()
+            .position(|m| matches!(m.kind, crate::solver::MoveKind::Exchange(_)))
+            .expect("exchanges offered with a full bag");
+        app.selected_suggestion = i;
+        app.focus = Focus::Suggestions;
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::Rack);
+    }
+
+    /// `:` then a square and a word previews the play and places it.
+    #[test]
+    fn quick_entry_validates_previews_and_places() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
+        let mut app = test_app();
+        app.set_dictionary(dict);
+
+        let play = app.parse_quick_entry("8D QUIXOTIC").unwrap();
+        assert!(play.problem.is_none());
+        assert_eq!(play.tiles.len(), 8);
+        assert!(play.score > 0);
+        assert!(app
+            .parse_quick_entry("8D QUIXOTICX")
+            .unwrap()
+            .problem
+            .is_some());
+        assert!(app
+            .parse_quick_entry("1A QUIXOTIC")
+            .unwrap()
+            .problem
+            .unwrap()
+            .contains("centre"));
+        assert!(
+            app.parse_quick_entry("8M QUIXOTIC").is_err(),
+            "off the board"
+        );
+        assert!(app.parse_quick_entry("Z9 QI").is_err(), "not a square");
+
+        app.handle_key(key(KeyCode::Char(':')));
+        type_keys(&mut app, "8D QUIXOTIc");
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.dialog, DialogState::None);
+        assert_eq!(app.state.get_tile(7, 3).unwrap().letter, 'Q');
+        assert!(
+            app.state.get_tile(7, 10).unwrap().is_blank,
+            "lowercase = blank"
+        );
+
+        // Through existing tiles, down: G7 AX uses the X of QUIXOTIC.
+        let down = app.parse_quick_entry("G7 AX").unwrap();
+        assert_eq!(down.tiles.len(), 1);
+        assert!(down.problem.is_none(), "{:?}", down.problem);
+        assert!(app.parse_quick_entry("G7 AZ").is_err(), "G8 holds X");
+    }
+
+    /// Copying puts the move or the position on the clipboard; pasting a
+    /// CGP loads it (undoably); the session text round-trips.
+    #[test]
+    fn clipboard_paste_and_session_round_trip() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.focus = Focus::Suggestions;
+        app.handle_key(key(KeyCode::Char('y')));
+        let copied = app.pending_clipboard.take().unwrap();
+        let mv = &app.suggestions[app.selected_suggestion];
+        assert!(copied.starts_with(&mv.coords()), "{copied}");
+
+        app.our_score = 120;
+        app.opp_score = 95;
+        app.final_turn = FinalTurn::Us;
+        app.final_turn_known = true;
+        app.handle_key(key(KeyCode::Char('Y')));
+        let cgp = app.pending_clipboard.take().unwrap();
+        assert!(cgp.contains(" 120/95 0"), "{cgp}");
+
+        let mut other = test_app();
+        other.load_position(&cgp, false).unwrap();
+        assert_eq!(other.state.board_cgp(), app.state.board_cgp());
+        assert_eq!((other.our_score, other.opp_score), (120, 95));
+        assert_eq!(other.final_turn, FinalTurn::Us);
+        assert!(other.final_turn_known);
+
+        // A pasted plain CGP replaces the position and can be undone.
+        let before = app.state.board_cgp();
+        app.handle_paste("15/15/15/15/15/15/15/4CAT8/15/15/15/15/15/15/15 AEINRST/ 10/20 0");
+        assert!(app
+            .state
+            .board_cgp()
+            .starts_with("15/15/15/15/15/15/15/4CAT8"));
+        assert_eq!((app.our_score, app.opp_score), (10, 20));
+        app.undo();
+        assert_eq!(app.state.board_cgp(), before);
+        app.handle_paste("not a position");
+        assert_eq!(app.message_kind, MessageKind::Error);
+    }
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64(b"8D QUIXOTIC"), "OEQgUVVJWE9USUM=");
     }
 }
