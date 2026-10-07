@@ -455,9 +455,9 @@ impl App {
     /// Create a new App with the given settings.
     pub fn with_settings(settings: Settings) -> Self {
         let refengine = crate::datafiles::refengine_data_dir()
-            .and_then(|dir| RefSimulator::new(&dir.to_string_lossy(), settings::LEXICON));
+            .and_then(|dir| RefSimulator::shared(&dir.to_string_lossy(), settings::LEXICON));
         let (refengine_simulator, refengine_unavailable) = match refengine {
-            Ok(sim) => (Some(Arc::new(sim)), None),
+            Ok(sim) => (Some(sim), None),
             Err(e) => {
                 log(&format!("Opponent inference unavailable: {}", e));
                 (None, Some(e))

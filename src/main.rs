@@ -83,7 +83,63 @@ fn install_panic_hook() {
     }));
 }
 
+const USAGE: &str = "\
+cpsolver2 - NYT Crossplay solver (terminal UI)
+
+Usage: cpsolver2 [--data-dir <DIR>]
+
+Options:
+  --data-dir <DIR>  Directory holding data/words.fst and external/refengine/data/
+  -h, --help        Print this help
+  -V, --version     Print the version
+
+Data is looked for in $CPSOLVER_DATA_DIR, then --data-dir, then the user
+data directory (cpsolver2/), then <exe>/../share/cpsolver2, then the
+working directory.
+";
+
+/// What the command line asks for.
+enum Cli {
+    Run,
+    Exit(ExitCode),
+}
+
+/// Parse the (few) command-line options.
+fn parse_args(args: impl Iterator<Item = String>) -> Cli {
+    let mut args = args.peekable();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Cli::Exit(ExitCode::SUCCESS);
+            }
+            "-V" | "--version" => {
+                println!("cpsolver2 {}", env!("CARGO_PKG_VERSION"));
+                return Cli::Exit(ExitCode::SUCCESS);
+            }
+            "--data-dir" => match args.next() {
+                Some(dir) => datafiles::set_cli_data_dir(dir.into()),
+                None => {
+                    eprintln!("cpsolver2: --data-dir needs a directory\n\n{USAGE}");
+                    return Cli::Exit(ExitCode::from(2));
+                }
+            },
+            other if other.starts_with("--data-dir=") => {
+                datafiles::set_cli_data_dir(other["--data-dir=".len()..].into());
+            }
+            other => {
+                eprintln!("cpsolver2: unknown argument '{other}'\n\n{USAGE}");
+                return Cli::Exit(ExitCode::from(2));
+            }
+        }
+    }
+    Cli::Run
+}
+
 fn main() -> ExitCode {
+    if let Cli::Exit(code) = parse_args(std::env::args().skip(1)) {
+        return code;
+    }
     install_panic_hook();
 
     // Data is loaded before the terminal is taken over, so a missing file

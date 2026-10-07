@@ -58,18 +58,59 @@ pub fn file_status(path: &Path) -> FileStatus {
     }
 }
 
-/// Directories searched for data files, in order: next to the executable,
-/// one level up from it, and the working directory. Test builds search the
-/// crate root first so tests do not depend on the working directory.
+/// Environment variable naming the data directory.
+pub const DATA_DIR_ENV: &str = "CPSOLVER_DATA_DIR";
+
+/// The `--data-dir` command-line choice, set once at startup.
+static CLI_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Record the `--data-dir` argument (only the first call has an effect).
+pub fn set_cli_data_dir(dir: PathBuf) {
+    let _ = CLI_DATA_DIR.set(dir);
+}
+
+/// Directories searched for data files, in order:
+///
+/// 1. `$CPSOLVER_DATA_DIR`
+/// 2. `--data-dir`
+/// 3. the user data directory (`~/.local/share/cpsolver2`,
+///    `~/Library/Application Support/cpsolver2`)
+/// 4. `<exe>/../share/cpsolver2` (an installed layout)
+/// 5. the working directory (running from a checkout, for development)
+///
+/// Each holds `data/words.fst` and `external/refengine/data/`. Test builds
+/// search the crate root first so tests do not depend on the working
+/// directory.
 pub fn data_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     #[cfg(test)]
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    let exe_path = std::env::current_exe().ok();
-    if let Some(dir) = exe_path.as_ref().and_then(|p| p.parent()) {
-        roots.push(dir.to_path_buf());
-        roots.push(dir.join(".."));
-    }
+    roots.extend(ordered_roots(
+        std::env::var_os(DATA_DIR_ENV).map(PathBuf::from),
+        CLI_DATA_DIR.get().cloned(),
+        dirs::data_dir(),
+        std::env::current_exe().ok(),
+    ));
+    roots
+}
+
+/// [`data_roots`] from its inputs (the environment variable, the option,
+/// the user data directory and the executable's path).
+fn ordered_roots(
+    env: Option<PathBuf>,
+    cli: Option<PathBuf>,
+    user_data: Option<PathBuf>,
+    exe: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    roots.extend(env.filter(|p| !p.as_os_str().is_empty()));
+    roots.extend(cli);
+    roots.extend(user_data.map(|d| d.join("cpsolver2")));
+    roots.extend(
+        exe.as_deref()
+            .and_then(Path::parent)
+            .map(|d| d.join("..").join("share").join("cpsolver2")),
+    );
     roots.push(PathBuf::from("."));
     roots
 }
@@ -192,6 +233,27 @@ pub(crate) mod test_data {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_roots_are_searched_in_order() {
+        let roots = ordered_roots(
+            Some("/env".into()),
+            Some("/cli".into()),
+            Some("/home/u/.local/share".into()),
+            Some("/opt/cp/bin/cpsolver2".into()),
+        );
+        let expect: Vec<PathBuf> = vec![
+            "/env".into(),
+            "/cli".into(),
+            "/home/u/.local/share/cpsolver2".into(),
+            "/opt/cp/bin/../share/cpsolver2".into(),
+            ".".into(),
+        ];
+        assert_eq!(roots, expect);
+        // Unset or empty inputs are skipped.
+        let roots = ordered_roots(Some("".into()), None, None, None);
+        assert_eq!(roots, vec![PathBuf::from(".")]);
+    }
 
     #[test]
     fn detects_lfs_pointers() {
