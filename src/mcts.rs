@@ -33,7 +33,6 @@ use rayon::prelude::*;
 
 use crate::board::Board;
 use crate::dictionary::Dictionary;
-#[cfg(test)]
 use crate::game::full_tile_set;
 use crate::game::SolverState;
 use crate::game::{best_exchange, top_exchanges};
@@ -448,7 +447,31 @@ struct Playout<'a> {
     opp_temperature: f32,
     /// Move-by-move history, kept only when requested (self-play studies).
     trace: Option<Vec<TracePoint>>,
+    /// Dictionary (and so leave valuation) the opponent chooses moves
+    /// with; the same as `dict` except in engine-versus-engine matches.
+    opp_dict: &'a Dictionary,
+    /// Whether each player may pass in the greedy phase when exchanging is
+    /// not allowed and keeping the rack beats every play.
+    allow_pass: [bool; 2],
+    /// The previous move was a pass (two passes in a row are not allowed
+    /// in the greedy phase, so playouts cannot stall).
+    last_was_pass: bool,
+    /// Players that choose their greedy-phase moves by simulation instead
+    /// of static equity (self-play matches only).
+    sim_choice: [Option<SimChoice>; 2],
 }
+
+/// Choosing a move by simulation in a self-play match: the top
+/// `candidates` by static equity, `playouts` each.
+#[derive(Debug, Clone, Copy)]
+pub struct SimChoice {
+    pub candidates: usize,
+    pub playouts: usize,
+}
+
+/// Whether playout players consider passing when the bag is too small to
+/// exchange (4.4 in the polish plan; validated by self-play).
+pub(crate) const PASS_IN_PLAYOUTS: bool = true;
 
 impl<'a> Playout<'a> {
     fn new(
@@ -469,7 +492,72 @@ impl<'a> Playout<'a> {
             first_move_bingo: [None, None],
             opp_temperature: 0.0,
             trace: None,
+            opp_dict: dict,
+            allow_pass: [PASS_IN_PLAYOUTS; 2],
+            last_was_pass: false,
+            sim_choice: [None, None],
         }
+    }
+
+    /// `p`'s move chosen by simulating the top candidates from its own
+    /// point of view (the other rack unknown, dealt from the unseen tiles).
+    fn simulated_move(&self, p: Player, spec: SimChoice) -> Option<Move> {
+        let dict = self.dict_for(p);
+        let mut rack = crate::tile::Rack::new();
+        for t in self.rack(p) {
+            rack.add(*t);
+        }
+        let state = SolverState {
+            board: self.board.clone(),
+            rack,
+        };
+        let mut candidates = state.get_suggestions(dict);
+        if candidates.len() <= 1 {
+            return candidates.pop();
+        }
+        candidates.truncate(spec.candidates);
+        let config = MctsConfig {
+            num_candidates: spec.candidates,
+            iterations_per_candidate: spec.playouts,
+            max_plies: MctsConfig::for_bag(self.bag.len()).max_plies,
+            parallel: true,
+            score_diff: 0,
+            time_budget: None,
+            cancel: None,
+        };
+        MctsEvaluator::new(config)
+            .evaluate(&state, &candidates, dict)
+            .into_iter()
+            .next()
+            .map(|r| r.mv)
+    }
+
+    /// The dictionary `p` chooses moves with.
+    fn dict_for(&self, p: Player) -> &'a Dictionary {
+        match p {
+            Player::Us => self.dict,
+            Player::Opp => self.opp_dict,
+        }
+    }
+
+    /// Passing as a candidate for `p` in the greedy phase: only when the
+    /// bag is too small to exchange (otherwise an exchange keeps the best
+    /// tiles anyway), valued like any move at 0 points plus the leave of
+    /// the whole rack.
+    fn pass_candidate(&self, p: Player) -> Option<Move> {
+        if !self.allow_pass[p as usize]
+            || self.last_was_pass
+            || self.bag.is_empty()
+            || self.bag.len() >= EXCHANGE_MIN_BAG
+        {
+            return None;
+        }
+        let rack = self.rack(p);
+        let mut pass = Move::pass(rack);
+        pass.equity = self
+            .dict_for(p)
+            .leave_value(rack, Some(self.unseen_for_phase()));
+        Some(pass)
     }
 
     fn rack(&self, p: Player) -> &Vec<Tile> {
@@ -504,6 +592,7 @@ impl<'a> Playout<'a> {
                 .expect("move tiles come from the mover's rack");
             rack.swap_remove(idx);
         }
+        self.last_was_pass = mv.kind == MoveKind::Pass;
         let signed = mv.score as i32;
         self.spread += if p == Player::Us { signed } else { -signed };
         if self.first_move_bingo[p as usize].is_none() {
@@ -551,19 +640,23 @@ impl<'a> Playout<'a> {
 
     /// Highest-scoring move for `p` (None means pass).
     fn best_by_score(&self, p: Player) -> Option<Move> {
-        Solver::new(&self.board, self.dict).best_move_by_score(self.rack(p))
+        Solver::new(&self.board, self.dict_for(p)).best_move_by_score(self.rack(p))
     }
 
     /// Best move by static equity for `p`, including exchanges when the bag
     /// allows them (None means pass).
     fn best_by_equity(&self, p: Player) -> Option<Move> {
-        let solver = Solver::new(&self.board, self.dict);
+        let dict = self.dict_for(p);
+        let solver = Solver::new(&self.board, dict);
         let best_play = solver.best_move_by_equity(self.rack(p));
         if self.bag.len() < EXCHANGE_MIN_BAG {
-            return best_play;
+            return match (best_play, self.pass_candidate(p)) {
+                (Some(play), Some(pass)) if pass.equity > play.equity => Some(pass),
+                (play, _) => play,
+            };
         }
         let unseen = self.unseen_for_phase();
-        let best_exchange = best_exchange(self.rack(p), self.dict, Some(unseen));
+        let best_exchange = best_exchange(self.rack(p), dict, Some(unseen));
         match (best_play, best_exchange) {
             (Some(play), Some(exch)) => Some(if exch.equity > play.equity {
                 exch
@@ -579,6 +672,11 @@ impl<'a> Playout<'a> {
     /// they err (`opp_temperature` > 0). The final two turns after the bag
     /// empties stay exact for both players regardless.
     fn policy_move(&mut self, p: Player) -> Option<Move> {
+        if let Some(spec) = self.sim_choice[p as usize] {
+            if !self.bag.is_empty() {
+                return self.simulated_move(p, spec);
+            }
+        }
         if p != Player::Opp || self.opp_temperature <= 0.0 {
             return self.best_by_equity(p);
         }
@@ -586,22 +684,25 @@ impl<'a> Playout<'a> {
         // Only the best SOFTMAX_MOVES of plays and of exchanges can make the
         // cut below, so only those are built.
         let mut moves = {
-            let solver = Solver::new(&self.board, self.dict);
+            let dict = self.dict_for(p);
+            let solver = Solver::new(&self.board, dict);
             let mut moves = solver.top_moves_by_equity(self.rack(p), SOFTMAX_MOVES);
             if self.bag.len() >= EXCHANGE_MIN_BAG {
                 let unseen = self.unseen_for_phase();
                 moves.extend(top_exchanges(
                     self.rack(p),
-                    self.dict,
+                    dict,
                     Some(unseen),
                     SOFTMAX_MOVES,
                 ));
-                moves.sort_by(|a, b| {
-                    b.equity
-                        .partial_cmp(&a.equity)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+            } else if let Some(pass) = self.pass_candidate(p) {
+                moves.push(pass);
             }
+            moves.sort_by(|a, b| {
+                b.equity
+                    .partial_cmp(&a.equity)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             moves
         };
         let best_equity = moves.first()?.equity;
@@ -628,7 +729,7 @@ impl<'a> Playout<'a> {
     /// `p`'s last turn with `p.other()` holding the final move: choose the
     /// play maximising score minus the other's best reply, or pass.
     fn best_last_turn(&self, p: Player) -> (Option<Move>, i32) {
-        let solver = Solver::new(&self.board, self.dict);
+        let solver = Solver::new(&self.board, self.dict_for(p));
         let other_rack = self.rack(p.other());
         let mut moves = solver.find_moves_for(self.rack(p));
         moves.sort_by_key(|m| std::cmp::Reverse(m.score));
@@ -661,7 +762,7 @@ impl<'a> Playout<'a> {
     }
 
     /// A fresh game: empty board, shuffled full bag, both racks drawn.
-    #[cfg(test)]
+    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     fn new_game(dict: &'a Dictionary, seed: u64) -> Self {
         let mut rng = Rng::with_seed(seed);
         let mut bag = full_tile_set();
@@ -673,7 +774,7 @@ impl<'a> Playout<'a> {
 
     /// Play the game out from `to_move`'s turn. Returns the final spread
     /// (plus leave and tempo adjustments if the ply limit cut the game short).
-    #[cfg(test)]
+    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
     fn run(&mut self, to_move: Player, max_plies: usize) -> f32 {
         self.run_with(to_move, max_plies, &mut |_, _| {}).value
     }
@@ -745,6 +846,86 @@ impl<'a> Playout<'a> {
             plies += 1;
             to_move = to_move.other();
         }
+    }
+}
+
+/// One side of a self-play match: how it values leaves (through its
+/// dictionary's leave table and phase scaling), whether it may pass when
+/// the bag is too small to exchange, and whether it picks moves by static
+/// equity or by simulating the top candidates. Both sides play the exact
+/// two-ply ending.
+#[allow(dead_code)] // library API (self-play harness); the binary does not use it
+#[derive(Clone, Copy)]
+pub struct MatchEngine<'a> {
+    pub name: &'a str,
+    pub dict: &'a Dictionary,
+    pub allow_pass: bool,
+    /// Choose moves by simulation instead of static equity.
+    pub sim: Option<SimChoice>,
+}
+
+/// Outcome of [`self_play_match`], from engine A's point of view.
+#[allow(dead_code)] // library API (self-play harness); the binary does not use it
+#[derive(Debug, Clone, Copy)]
+pub struct MatchResult {
+    /// Games played (two per seed).
+    pub games: usize,
+    /// A's score per game: wins plus half the ties, divided by games.
+    pub score: f64,
+    /// Half-width of the 95% confidence interval of `score`.
+    pub score_ci95: f64,
+    /// A's mean final spread and its 95% half-width.
+    pub spread: f64,
+    pub spread_ci95: f64,
+}
+
+/// Play `pairs` pairs of games between engines A and B. Each pair uses one
+/// seed twice, once with A holding the first rack and once with B holding
+/// it, so both engines see the same tile stream; who moves first
+/// alternates between pairs. Pairs are the unit of the confidence
+/// intervals, which removes most of the luck of the draw.
+#[allow(dead_code)] // library API (self-play harness); the binary does not use it
+pub fn self_play_match(a: &MatchEngine, b: &MatchEngine, pairs: usize, seed: u64) -> MatchResult {
+    let outcome = |spread: i32| match spread.cmp(&0) {
+        std::cmp::Ordering::Greater => 1.0,
+        std::cmp::Ordering::Less => 0.0,
+        std::cmp::Ordering::Equal => 0.5,
+    };
+    let per_pair: Vec<(f64, f64)> = (0..pairs as u64)
+        .into_par_iter()
+        .map(|k| {
+            let game_seed = iteration_seed(seed, k);
+            let first = if k % 2 == 0 { Player::Us } else { Player::Opp };
+            let play = |us: &MatchEngine, them: &MatchEngine| -> i32 {
+                let mut g = Playout::new_game(us.dict, game_seed);
+                g.opp_dict = them.dict;
+                g.allow_pass = [us.allow_pass, them.allow_pass];
+                g.sim_choice = [us.sim, them.sim];
+                g.run(first, 1000).round() as i32
+            };
+            let a_first_rack = play(a, b);
+            let b_first_rack = -play(b, a);
+            (
+                (outcome(a_first_rack) + outcome(b_first_rack)) / 2.0,
+                (a_first_rack + b_first_rack) as f64 / 2.0,
+            )
+        })
+        .collect();
+    let mean_ci = |v: &mut dyn Iterator<Item = f64>| {
+        let xs: Vec<f64> = v.collect();
+        let n = xs.len().max(1) as f64;
+        let mean = xs.iter().sum::<f64>() / n;
+        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+        (mean, 1.96 * (var / n).sqrt())
+    };
+    let (score, score_ci95) = mean_ci(&mut per_pair.iter().map(|p| p.0));
+    let (spread, spread_ci95) = mean_ci(&mut per_pair.iter().map(|p| p.1));
+    MatchResult {
+        games: pairs * 2,
+        score,
+        score_ci95,
+        spread,
+        spread_ci95,
     }
 }
 
@@ -1257,6 +1438,52 @@ mod tests {
         // the tilt should push it well above that.
         let mean = z_in_opp as f32 / deals as f32;
         assert!(mean > 0.95, "expected biased Z mean above 0.95, got {mean}");
+    }
+
+    /// Passing is a playout candidate only while the bag holds 1-6 tiles
+    /// (no exchange possible), valued at the whole rack's leave, and never
+    /// twice in a row.
+    #[test]
+    fn pass_is_a_playout_candidate_without_exchanges() {
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
+        let tiles = |s: &str| -> Vec<Tile> {
+            s.chars()
+                .map(|c| {
+                    if c == '?' {
+                        Tile::blank(' ')
+                    } else {
+                        Tile::new(c)
+                    }
+                })
+                .collect()
+        };
+        let with_bag = |bag: &str| {
+            Playout::new(
+                &dict,
+                Board::new(),
+                [tiles("??AEQVV"), tiles("EEIIOOU")],
+                tiles(bag),
+                1,
+            )
+        };
+        let p = with_bag("ABC");
+        let pass = p
+            .pass_candidate(Player::Us)
+            .expect("bag of 3: pass allowed");
+        assert_eq!(pass.kind, MoveKind::Pass);
+        let rack_value = dict.leave_value(&tiles("??AEQVV"), Some(3 + RACK_SIZE));
+        assert_eq!(pass.equity, rack_value);
+
+        assert!(with_bag("").pass_candidate(Player::Us).is_none());
+        assert!(with_bag("ABCDEFG").pass_candidate(Player::Us).is_none());
+        let mut p = with_bag("ABC");
+        p.commit(Player::Us, &pass);
+        assert!(p.pass_candidate(Player::Opp).is_none(), "no second pass");
+        let mut off = with_bag("ABC");
+        off.allow_pass = [false, false];
+        assert!(off.pass_candidate(Player::Us).is_none());
     }
 
     /// With a temperature the simulated opponent errs sometimes but still
@@ -1811,6 +2038,220 @@ mod tests {
             "mean residual with us to move (sign flipped): {:+.2}",
             mean_us
         );
+    }
+
+    /// Self-play study of how a cut-off position turns into a final result:
+    /// fits the tempo of the side to move per bag-size bucket, and a
+    /// logistic win model on the cut-off estimate (spread + leaves +
+    /// tempo), the bag, and the blanks and S's still unseen. Positions are
+    /// split by game seed into a fitting half and a held-out half; the
+    /// held-out log-loss and Brier score of the fitted model are printed
+    /// next to the normal-CDF model's. Run with
+    /// `GAMES=4000 cargo test --release study_win_model -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn study_win_model() {
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
+        let games: u64 = std::env::var("GAMES")
+            .ok()
+            .and_then(|g| g.parse().ok())
+            .unwrap_or(2000);
+        let started = Instant::now();
+
+        /// A position before a greedy-phase move, from our side.
+        #[derive(Clone, Copy)]
+        struct Sample {
+            x: f64,
+            bag: usize,
+            us_to_move: bool,
+            blanks: f64,
+            s: f64,
+            game: u64,
+        }
+        let unseen_counts = |p: &Playout| {
+            let mut blanks = 0.0;
+            let mut s = 0.0;
+            for t in p.bag.iter().chain(p.rack(Player::Opp)) {
+                if t.is_blank {
+                    blanks += 1.0;
+                } else if t.letter == 'S' {
+                    s += 1.0;
+                }
+            }
+            (blanks, s)
+        };
+        let data: Vec<(Vec<Sample>, f64)> = (0..games)
+            .into_par_iter()
+            .map(|seed| {
+                let mut g = Playout::new_game(&dict, 40_000 + seed);
+                let mut samples = Vec::new();
+                let first = if seed % 2 == 0 {
+                    Player::Us
+                } else {
+                    Player::Opp
+                };
+                let outcome = g.run_with(first, 1000, &mut |p, to_move| {
+                    if p.bag.is_empty() {
+                        return;
+                    }
+                    let (blanks, s) = unseen_counts(p);
+                    samples.push(Sample {
+                        x: p.spread as f64 + p.leave_adjustment() as f64,
+                        bag: p.bag.len(),
+                        us_to_move: to_move == Player::Us,
+                        blanks,
+                        s,
+                        game: seed,
+                    });
+                });
+                (samples, outcome.value as f64)
+            })
+            .collect();
+        println!("{} games in {:?}", games, started.elapsed());
+
+        // Tempo per bag bucket: half the gap between the mean residual
+        // (final - estimate) with us to move and with them to move.
+        let buckets: [(usize, usize); 6] =
+            [(1, 7), (8, 14), (15, 21), (22, 35), (36, 50), (51, 100)];
+        let mut tempo = [0.0f64; 6];
+        println!("bucket   n(us)  n(opp)  resid(us)  resid(opp)  tempo");
+        for (bi, &(lo, hi)) in buckets.iter().enumerate() {
+            let (mut su, mut nu, mut so, mut no) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+            for (samples, fin) in &data {
+                for smp in samples.iter().filter(|s| s.bag >= lo && s.bag <= hi) {
+                    if smp.us_to_move {
+                        su += fin - smp.x;
+                        nu += 1.0;
+                    } else {
+                        so += fin - smp.x;
+                        no += 1.0;
+                    }
+                }
+            }
+            let (mu, mo) = (su / nu.max(1.0), so / no.max(1.0));
+            tempo[bi] = (mu - mo) / 2.0;
+            println!(
+                "{:>3}-{:<3} {:>7} {:>7} {:>+10.2} {:>+11.2} {:>+6.2}",
+                lo, hi, nu, no, mu, mo, tempo[bi]
+            );
+        }
+        let tempo_of = |bag: usize| {
+            buckets
+                .iter()
+                .position(|&(lo, hi)| bag >= lo && bag <= hi)
+                .map_or(0.0, |i| tempo[i])
+        };
+
+        // Rows: features of the tempo-adjusted estimate; label = win.
+        let row = |s: &Sample| {
+            let t = if s.us_to_move {
+                tempo_of(s.bag)
+            } else {
+                -tempo_of(s.bag)
+            };
+            let xt = s.x + t;
+            let sd = (150.0 + 79.8 * s.bag as f64).sqrt();
+            let z = xt / sd;
+            ([z, z * s.bag as f64 / 50.0, z * s.blanks, z * s.s], xt, sd)
+        };
+        let label = |fin: f64| match fin.partial_cmp(&0.0) {
+            Some(std::cmp::Ordering::Greater) => 1.0,
+            Some(std::cmp::Ordering::Less) => 0.0,
+            _ => 0.5,
+        };
+        let mut train = Vec::new();
+        let mut test = Vec::new();
+        for (samples, fin) in &data {
+            for s in samples {
+                let (f, xt, sd) = row(s);
+                let old = s.x + if s.us_to_move { 1.0 } else { -1.0 } * TEMPO as f64;
+                let entry = (f, label(*fin), xt, sd, old);
+                if s.game % 2 == 0 {
+                    train.push(entry);
+                } else {
+                    test.push(entry);
+                }
+            }
+        }
+
+        // Logistic regression without intercept (the model is symmetric
+        // in the sign of the estimate), fitted by Newton's method.
+        let mut w = [0.0f64; 4];
+        for _ in 0..25 {
+            let mut grad = [0.0f64; 4];
+            let mut hess = [[0.0f64; 4]; 4];
+            for (f, y, ..) in &train {
+                let z: f64 = (0..4).map(|i| w[i] * f[i]).sum();
+                let p = 1.0 / (1.0 + (-z).exp());
+                for i in 0..4 {
+                    grad[i] += (y - p) * f[i];
+                    for j in 0..4 {
+                        hess[i][j] += p * (1.0 - p) * f[i] * f[j];
+                    }
+                }
+            }
+            // Solve hess * step = grad (4x4 Gaussian elimination).
+            let mut m = hess;
+            let mut b = grad;
+            for c in 0..4 {
+                let piv = (c..4)
+                    .max_by(|&a, &bb| m[a][c].abs().partial_cmp(&m[bb][c].abs()).unwrap())
+                    .unwrap();
+                m.swap(c, piv);
+                b.swap(c, piv);
+                for r in 0..4 {
+                    if r != c {
+                        let k = m[r][c] / m[c][c];
+                        let pivot_row = m[c];
+                        for (x, p) in m[r].iter_mut().zip(pivot_row) {
+                            *x -= k * p;
+                        }
+                        b[r] -= k * b[c];
+                    }
+                }
+            }
+            for i in 0..4 {
+                w[i] += b[i] / m[i][i];
+            }
+        }
+        println!(
+            "win model: logit = z * ({:.4} + {:.4} * bag/50 + {:.4} * blanks + {:.4} * S), z = estimate / sqrt(150 + 79.8 bag)",
+            w[0], w[1], w[2], w[3]
+        );
+
+        type Entry = ([f64; 4], f64, f64, f64, f64);
+        let eval = |name: &str, p_of: &dyn Fn(&Entry) -> f64| {
+            let (mut ll, mut brier) = (0.0, 0.0);
+            for e in &test {
+                let p = p_of(e).clamp(1e-6, 1.0 - 1e-6);
+                let y = e.1;
+                ll -= y * p.ln() + (1.0 - y) * (1.0 - p).ln();
+                brier += (p - y).powi(2);
+            }
+            let n = test.len() as f64;
+            println!(
+                "{:<34} held-out log-loss {:.4}  Brier {:.4}  (n={})",
+                name,
+                ll / n,
+                brier / n,
+                test.len()
+            );
+        };
+        // The current model: constant tempo 21, normal CDF with the
+        // variance fit.
+        eval("normal CDF, constant tempo (old)", &|e| {
+            normal_cdf((e.4 / e.3) as f32) as f64
+        });
+        eval("normal CDF, tempo per bucket", &|e| {
+            normal_cdf((e.2 / e.3) as f32) as f64
+        });
+        eval("logistic fit, tempo per bucket", &|e| {
+            let z: f64 = (0..4).map(|i| w[i] * e.0[i]).sum();
+            1.0 / (1.0 + (-z).exp())
+        });
+        println!("total {:?}", started.elapsed());
     }
 
     /// Calibration of the observed-move-loss estimator: self-play games
