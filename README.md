@@ -13,7 +13,7 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 - **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
 - **Opponent modeling**: rack inference via FFI to the RefEngine C engine biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
 - **Mouse support** with clickable board squares, suggestions (double-click applies), dialog buttons and menu options
-- **Fluid layout** that adapts to any terminal size, down to a borderless grid on small terminals
+- **Fluid layout** that adapts to any terminal size: board and sidebar side by side, a stacked board, one-line rack and short list on narrow terminals, and a clear message below the minimum size (50×22)
 - **Preferences persisted to TOML** (sort mode, sidebar visibility)
 
 ## Crossplay vs Scrabble
@@ -87,35 +87,64 @@ cargo build --release --no-default-features
 
 ### Keyboard shortcuts
 
+Everywhere:
+
 | Key | Action |
 |-----|--------|
-| **Tab** | Cycle focus: Board → Rack → Suggestions |
-| **Arrow keys** | Move cursor (board) or selection (suggestions) |
-| **A-Z** | Place letter on board or add to rack (depending on focus) |
-| **?** | Toggle blank designation on tile at cursor |
-| **Backspace** | Remove tile at cursor / from rack |
-| **Delete** | Clear entire rack (when rack is focused) |
-| **Space** | Toggle typing direction (horizontal/vertical) |
-| **Ctrl+S** | Generate all legal moves (solve) and focus suggestions |
-| **Enter** | Solve (from rack) or apply selected suggestion (from suggestions) |
-| **M** | Simulate every candidate (anytime, results stream in; the endgame solver when the bag is empty). Pressing M again on the same position continues the stopped or finished run |
-| **S** | Cycle sort mode (from suggestions: Equity → Sim → Win% → n → Bingo → Score → Leave → Length → A-Z); clicking a column header sorts by it |
-| **Ctrl+Z** | Undo last applied move |
-| **Ctrl+R** | Reset board |
+| **Tab** / **Shift+Tab** | Next / previous pane (Board → Rack → Suggestions; hidden panes are skipped) |
+| **Ctrl+S** | Find all moves (solve) and start simulating |
+| **Ctrl+Z** / **Ctrl+Y** | Undo / redo (applied moves, auto-scored opponent moves, score edits, reset, clearing the rack, entered plays) |
+| **Ctrl+R** | Reset the board (undoable) |
 | **Ctrl+E** | Toggle who has the final turn (you / opponent) once the bag is empty |
-| **F1** | Toggle help dialog |
-| **Esc** | Stop a running simulation; otherwise open menu (Quit / Reset / Cancel) or return focus to board |
-| **`** (backtick) | Toggle board/logs tab |
-| **\\** (backslash) | Toggle sidebar visibility |
+| **:** | Enter a play by coordinates, e.g. `8D QUIXOTIC` across or `H4 ZAX` down (lowercase letters are blanks); the prompt checks it and previews the score |
+| **=** / **+** | Set the opponent's / your score |
+| **Esc** | In order: stop a running simulation, close a dialog, clear the list filter, return to the board, open the menu |
+| **`** (backtick) | Board / log tab |
+| **\\** (backslash) | Toggle the sidebar |
+| **F1** | Help (two columns on wide terminals, scrollable on narrow ones) |
+| **Ctrl+C** | Quit (asks first; Ctrl+C again confirms) |
+
+Board:
+
+| Key | Action |
+|-----|--------|
+| **Arrows** | Move the cursor (the title shows the square and direction, e.g. `H8 →`) |
+| **a–z** | Place a letter; the cursor then skips squares that already hold tiles, so typing only a word's new tiles fills the gaps. Typing the letter a square already shows keeps that tile |
+| **Shift+A–Z** | Place a blank as that letter |
+| **?** | Toggle the blank flag of the tile under the cursor (or place a blank) |
+| **Space** | Typing direction across / down |
+| **Backspace** / **Delete** | Delete here or step back / remove the tile at the cursor |
+| **Enter** | Solve |
+
+Rack: **A–Z** and **?** add tiles, **Backspace** removes the last, **Delete** clears the rack (undoable), **Enter** solves.
+
+Suggestions:
+
+| Key | Action |
+|-----|--------|
+| **↑/↓**, **j/k** | Select |
+| **PgUp/PgDn**, **Home/End** | Page, first / last |
+| **1–9** | Select that visible row |
+| **/** | Filter by word or square as you type (Enter keeps it, Esc clears it); **n/N** next / previous row |
+| **Enter** | Apply the selected move (also a double-click); after an exchange the rack gets the focus |
+| **M** (or **m**) | Simulate every candidate (anytime, results stream in; the endgame solver when the bag is empty). M again on the same position continues the stopped or finished run |
+| **s** / **S** | Cycle sort mode (Equity → Sim → Win% → n → Bingo → Score → Leave → Length → A-Z); clicking a column header sorts by it |
+| **y** / **Y** | Copy the selected move (`8D QUIXOTIC`) / the whole position (CGP) to the clipboard (OSC 52) |
+
+Mouse: click to focus a pane, square or row; double-click a suggestion to apply it; click a column header or sort tab to sort; the wheel scrolls the pane under the pointer. Pasting a CGP line (bracketed paste) loads that position.
+
+### Session
+
+The position, rack, scores and who has the final turn are saved after every solve and applied move (`session.cgp` in `~/.local/share/cpsolver2/` on Linux, `~/Library/Application Support/cpsolver2/` on macOS) and restored at the next start. Ctrl+R starts over (and can be undone).
 
 ### Workflow
 
-1. **Set up the position**: Focus the board (Tab), type letters to place tiles. Press `?` on a tile to mark it as a blank.
+1. **Set up the position**: Focus the board (Tab) and type letters to place tiles (Shift+letter for a blank), or press `:` and type a play like `8D QUIXOTIC`, or paste a CGP line.
 2. **Set your rack**: Tab to the rack, type your tile letters (`?` for blanks).
 3. **Solve**: Press `Ctrl+S` (or Enter from rack) to generate all legal moves, ranked by static equity.
 4. **Simulate**: Press `M`. With tiles in the bag this simulates every candidate (plays, exchanges and pass) under Crossplay rules, deeper as the bag empties: each gets a floor of playouts, then racing keeps sampling only the candidates that could still be best on spread or on win%. The table updates live and the header shows coverage (`simulated 1,840/12,300 plays · 48,200 playouts · 12.4s`). Esc stops; M continues. With the bag empty it runs the exact endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag. Exchanges appear as `EXCH` rows; applying one clears those tiles so you can type the replacements.
 5. **Apply**: Select a move with arrow keys and press Enter (or double-click it) to apply it to the board. Changing the position while an evaluation runs cancels it, so results never land on a different position.
-6. **Repeat**: After your opponent plays, update the board with their tiles and solve again.
+6. **Repeat**: After your opponent plays, put their tiles on the board (typing only the new tiles, or `:` with the full play) and solve again; their move is scored automatically.
 
 ## Architecture
 
@@ -133,6 +162,7 @@ Preferences are automatically saved to `~/.config/cpsolver2/settings.toml` (writ
 
 - **Default sort** — persisted when you cycle sort mode with `S` in the suggestions pane or click a sort tab
 - **Sidebar visibility** — persisted when you toggle with `\`
+- **Theme** — `display.theme`: `auto` (the default: no colors when `NO_COLOR` is set, the dark truecolor theme when `COLORTERM` says truecolor, the 16-color theme otherwise), `dark`, `light`, `ansi16` or `nocolor`. Outside a UTF-8 locale the ★ and ♦ marks become `*` and `+`
 
 `[simulation]` sets `min_playouts` (the playout floor every candidate gets, default 16) and `budget_secs` (how long one run may take, default 20).
 

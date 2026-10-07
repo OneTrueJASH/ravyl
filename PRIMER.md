@@ -22,17 +22,18 @@ Complete TUI redesign of `crossplay-solver`.
 | `sim` | `Simulation`: anytime simulation of every candidate (arms = plays, exchanges, pass). Admission order: exchanges and pass, then plays by static equity, in batches of 256 (widening); every arm gets `min_playouts` (n₀), then racing: an arm keeps being sampled while the upper confidence bound (z = 2.5) of its paired difference to the leader on spread *or* on win rate reaches +ε (`SPREAD_EPSILON` 0.5, `WIN_EPSILON` 0.005); once settled the top 5 on each metric keep being refined until the budget ends. `ArmStats` (Welford mean/variance for spread and win, bingo counts, per-iteration values), `SimSnapshot` (published about every 300 ms), `SimState` (saved for resume, keyed by `sim_key`: position fingerprint, candidates, opponent model, plies, score difference) |
 | `endgame` | `EndgameSolver`, `EndgameMove`, `PvMove`, `PASS_WORD` — Crossplay-native endgame solver: exact 2-ply (including passing) when the opponent replies, score-only when our move ends the game |
 | `app` | `App` (central state), `Focus`, `SortMode`, `FinalTurn` (who plays the last move once the bag is empty), `SimResult` (display record for playout/endgame results), `DialogState`, `BoardTab`, `handle_key()`/`handle_mouse()` event handlers, undo support, engine routing by game phase, background RefEngine inference, opponent-strength measurement (`opp_temperature()`, `opp_error_estimate()`) |
-| `ui::theme` | Centralized color/style constants — all UI colors defined here |
+| `ui::theme` | `Theme` (dark, light, ansi16, no-color) chosen at startup by `init(ThemeChoice)` (`display.theme`; `auto` honors `NO_COLOR` and `COLORTERM`), read with `current()`; every color, the highlight and cursor modifiers (REVERSED/BOLD when monochrome) and `Glyphs` (ASCII fallbacks outside UTF-8 locales) |
 | `ui::hit` | Thread-local hit map for mouse click resolution (`HitTarget`, `register_hit()`, `resolve_click()`) |
 | `ui::events` | `AppAction` enum (`Quit`, `Redraw`, `Nothing`) |
-| `ui::layout` | Fluid `AppLayout` computed from terminal size (no breakpoints); the board wins over the sidebar when both cannot fit |
-| `ui::board_view` | Board widget with premium squares, cursor, preview tiles; `BoardGeometry` picks full (4-row cells), compact (3-row) or borderless mini cells to fit the pane |
+| `ui::layout` | `AppLayout` from terminal size: board + sidebar side by side when both fit; otherwise, if tall enough, a stacked layout (mini board, one-line rack, short list); below `MIN_WIDTH`×`MIN_HEIGHT` (50×22) `too_small` and nothing else |
+| `ui::board_view` | Board widget with A–O / 1–15 axes, premium squares, cursor (dim when the board is not focused), blanks in lowercase, preview tiles, and the cursor readout (`H8 →`) in the title; `BoardGeometry` picks full (4-row cells), compact (3-row) or borderless mini cells to fit the pane |
 | `ui::stats_view` | Rack tiles + game stats + opponent inference widget (likely kept letters with the blank promoted, played tiles, measured error rate) |
-| `ui::suggestions` | Suggestions table (position, word, score, equity, simulation columns, leave) with sort-mode tabs and simulation lookup |
+| `ui::suggestions` | Suggestions table: `ListView` (visible indices under the filter, scroll offset kept between frames with a 2-row scroll-off, `12/340` position), only visible rows built; columns adapt to the width; clickable headers sort |
 | `ui::log_viewer` | Tab bar + log viewer |
-| `ui::status_bar` | Title bar, message bar, context-sensitive hint bar |
+| `ui::status_bar` | Title bar, message bar (colored by `MessageKind`; spinner from elapsed time plus the phase message and live progress), hint bar by mode (simulating, filtering, focused pane) fitted to the width, `render_too_small` |
 | `ui::popup_frame` | Shared popup rendering (clear + border + title) |
-| `ui::help_popup` | Help dialog with keyboard shortcuts |
+| `ui::help_popup` | Help dialog: two columns at 104+ columns, one scrollable column otherwise |
+| `ui::prompts` | Score prompt and the `:` coordinate prompt with a live legality/score preview (`App::parse_quick_entry`) |
 | `ui::confirm_popup` | Yes/No confirmation dialog |
 | `ui::menu_popup` | Escape menu (Quit/Reset/Cancel) |
 
@@ -65,6 +66,10 @@ Complete TUI redesign of `crossplay-solver`.
 ## Background work
 
 Evaluations (playouts, endgame search) and inference run on worker threads (`spawn_worker`, which catches panics; the panic hook logs worker panics instead of printing over the TUI). Every evaluation is a `Job` carrying the `position_stamp` it was started under and a cancel flag (`Arc<AtomicBool>`, checked per playout and per endgame move). Any change to the position (board or rack edit, apply, undo, reset, score edit, Ctrl+E, re-solve) bumps the stamp and cancels the job, and a result whose stamp no longer matches is dropped. The board snapshot used to detect the opponent's next move (`last_applied_board`) is taken when an evaluation starts, never from a result. A solve that finds no new tiles after our move means the opponent passed or exchanged, which clears the stored inference.
+
+## Event loop
+
+The main loop draws only when something changed (an input event, a result or inference arriving, or the spinner while an evaluation runs), and handles every pending event before drawing again. A loading frame is drawn before RefEngine starts and the session is restored. Bracketed paste is on: pasted CGP loads a position. OSC 52 writes the clipboard (`App::pending_clipboard`). Solving stays on the UI thread: `find_moves` with the opponent-loss measurement takes at most about 44 ms, even with two blanks (BEECH ??EINRS, 40,559 moves).
 
 ## Settings
 
