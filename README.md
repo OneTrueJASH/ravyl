@@ -8,7 +8,7 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 
 - **Interactive 15x15 board** with cursor navigation, tile preview, and premium square rendering
 - **Anchor-based move generation** with cross-word validation and FST-backed dictionary lookup
-- **Crossplay-rules Monte Carlo playouts** for every phase of the game, including exchanges, with expected final spread, win probability and bingo rates per candidate (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
+- **Simulates every candidate**: every legal play, every distinct exchange and passing are played out under Crossplay rules, with an anytime scheduler (every candidate gets a playout floor, then the contenders race) that streams results into the table live. For each candidate the table shows playouts, mean final spread ± standard error, win% ± standard error, the paired difference to the best candidate, bingo rates and a status (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
 - **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
 - **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
 - **Opponent modeling**: rack inference via FFI to the RefEngine C engine biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
@@ -90,13 +90,13 @@ cargo build --release --no-default-features
 | **Space** | Toggle typing direction (horizontal/vertical) |
 | **Ctrl+S** | Generate all legal moves (solve) and focus suggestions |
 | **Enter** | Solve (from rack) or apply selected suggestion (from suggestions) |
-| **M** | Evaluate: Crossplay-rules playouts, or the endgame solver when the bag is empty (from suggestions) |
-| **S** | Cycle sort mode (from suggestions: Equity → Sim → Win% → Score → Leave → Length → A-Z) |
+| **M** | Simulate every candidate (anytime, results stream in; the endgame solver when the bag is empty). Pressing M again on the same position continues the stopped or finished run |
+| **S** | Cycle sort mode (from suggestions: Equity → Sim → Win% → n → Bingo → Score → Leave → Length → A-Z); clicking a column header sorts by it |
 | **Ctrl+Z** | Undo last applied move |
 | **Ctrl+R** | Reset board |
 | **Ctrl+E** | Toggle who has the final turn (you / opponent) once the bag is empty |
 | **F1** | Toggle help dialog |
-| **Esc** | Open menu (Quit / Reset / Cancel) or return focus to board |
+| **Esc** | Stop a running simulation; otherwise open menu (Quit / Reset / Cancel) or return focus to board |
 | **`** (backtick) | Toggle board/logs tab |
 | **\\** (backslash) | Toggle sidebar visibility |
 
@@ -105,7 +105,7 @@ cargo build --release --no-default-features
 1. **Set up the position**: Focus the board (Tab), type letters to place tiles. Press `?` on a tile to mark it as a blank.
 2. **Set your rack**: Tab to the rack, type your tile letters (`?` for blanks).
 3. **Solve**: Press `Ctrl+S` (or Enter from rack) to generate all legal moves, ranked by static equity.
-4. **Simulate**: Press `M`. With tiles in the bag this plays the candidates out under Crossplay rules (deeper as the bag empties); with the bag empty it runs the endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag. Exchanges appear as `EXCH` rows; applying one clears those tiles so you can type the replacements.
+4. **Simulate**: Press `M`. With tiles in the bag this simulates every candidate (plays, exchanges and pass) under Crossplay rules, deeper as the bag empties: each gets a floor of playouts, then racing keeps sampling only the candidates that could still be best on spread or on win%. The table updates live and the header shows coverage (`simulated 1,840/12,300 plays · 48,200 playouts · 12.4s`). Esc stops; M continues. With the bag empty it runs the exact endgame solver (or, if your move ends the game, sorts by score). Check the `last:` indicator in the stats pane — press Ctrl+E if the app has the wrong idea about who emptied the bag. Exchanges appear as `EXCH` rows; applying one clears those tiles so you can type the replacements.
 5. **Apply**: Select a move with arrow keys and press Enter (or double-click it) to apply it to the board. Changing the position while an evaluation runs cancels it, so results never land on a different position.
 6. **Repeat**: After your opponent plays, update the board with their tiles and solve again.
 
@@ -125,6 +125,8 @@ Preferences are automatically saved to `~/.config/cpsolver2/settings.toml` (writ
 
 - **Default sort** — persisted when you cycle sort mode with `S` in the suggestions pane or click a sort tab
 - **Sidebar visibility** — persisted when you toggle with `\`
+
+`[simulation]` sets `min_playouts` (the playout floor every candidate gets, default 16) and `budget_secs` (how long one run may take, default 20).
 
 Missing keys take their defaults. If the file cannot be parsed, it is moved aside to `settings.toml.bak`, the defaults are used, and the message bar says so.
 

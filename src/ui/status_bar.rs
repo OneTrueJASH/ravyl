@@ -10,7 +10,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::{Focus, MctsProgress};
+use crate::app::{group_thousands, Focus, MctsProgress};
 use crate::ui::theme;
 
 /// Render the title bar (top line).
@@ -28,13 +28,23 @@ pub fn render_message(
 ) {
     if let Some(progress) = mcts_progress {
         let spinner = progress.spinner_char();
-        let text = if progress.total_candidates > 0 {
+        let text = if let Some(sim) = progress.sim {
             format!(
-                "{} Analyzing {} moves...",
-                spinner, progress.total_candidates
+                "{} Simulating: {}/{} plays \u{00b7} {} playouts \u{00b7} {:.1}s (Esc stops)",
+                spinner,
+                group_thousands(sim.simulated as u64),
+                group_thousands(sim.total as u64),
+                group_thousands(sim.playouts),
+                sim.elapsed.as_secs_f32()
+            )
+        } else if progress.total_candidates > 0 {
+            format!(
+                "{} Analyzing {} moves... (Esc stops)",
+                spinner,
+                group_thousands(progress.total_candidates as u64)
             )
         } else {
-            format!("{} Analyzing...", spinner)
+            format!("{} Analyzing... (Esc stops)", spinner)
         };
         let paragraph = Paragraph::new(text)
             .style(Style::new().fg(theme::MSG_PROGRESS))
@@ -72,6 +82,13 @@ pub fn render_hints(
         Span::styled(" F1", Style::default().fg(theme::HINT_KEY)),
         Span::styled(" Help ", Style::default().fg(theme::HINT_DESC)),
     ];
+
+    if is_simulating {
+        spans.extend([
+            Span::styled("Esc", Style::default().fg(theme::HINT_KEY)),
+            Span::styled(" Stop ", Style::default().fg(theme::HINT_DESC)),
+        ]);
+    }
 
     // Context hints based on focus
     match focus {

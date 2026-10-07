@@ -15,6 +15,7 @@ mod refengine_ffi;
 mod refengine_mcts;
 mod mcts;
 mod settings;
+mod sim;
 mod solver;
 mod stats;
 mod tile;
@@ -266,6 +267,8 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             app.selected_suggestion,
             app.focus == Focus::Suggestions,
             app.sim_results.as_deref(),
+            app.sim_progress.as_ref(),
+            app.is_mcts_running(),
         );
     }
 
@@ -520,6 +523,49 @@ mod ui_tests {
         click(&mut app, 2, h - 3);
         assert_eq!(app.dialog, DialogState::None);
         assert_eq!(app.cursor, cursor);
+    }
+
+    /// After a simulation the table shows its columns, and clicking a
+    /// column header sorts by it.
+    #[test]
+    fn simulation_columns_and_header_sorting() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = sample_app() else {
+            return;
+        };
+        app.settings.simulation.budget_secs = 1;
+        app.run_mcts_evaluation();
+        while app.is_mcts_running() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            app.poll_mcts();
+        }
+        let lines = render_at(&app, 200, 50);
+        let text = lines.join("\n");
+        for header in ["Spread", "Win%", "\u{0394}", "Status", "Bingo"] {
+            assert!(text.contains(header), "{header} column missing\n{text}");
+        }
+        assert!(
+            text.contains("simulated "),
+            "coverage header missing\n{text}"
+        );
+        assert!(
+            app.suggestions
+                .iter()
+                .any(|m| m.kind == solver::MoveKind::Pass),
+            "pass is a candidate"
+        );
+        let total = app.suggestions.len();
+        let simulated = app
+            .sim_results
+            .as_ref()
+            .map_or(0, |r| r.iter().filter(|r| r.iterations > 0).count());
+        assert!(simulated > 0 && simulated <= total);
+
+        app.set_sort_mode(app::SortMode::Score);
+        let lines = render_at(&app, 200, 50);
+        let (x, y) = find_text(&lines, "Spread");
+        click(&mut app, x + 1, y);
+        assert_eq!(app.sort_mode, app::SortMode::MctsEquity);
     }
 
     /// Escape-menu options are clickable rows.

@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,8 +19,9 @@ use crate::endgame::{EndgameMove, EndgameSolver};
 use crate::game::{observed_move_loss, SolverState};
 use crate::logging::log;
 use crate::refengine_mcts::{InferenceResult, RefSimulator};
-use crate::mcts::{MctsConfig, MctsEvaluator, MctsResult, OpponentModel, TilePool};
+use crate::mcts::{OpponentModel, TilePool};
 use crate::settings::{self, Settings};
+use crate::sim::{ArmStatus, ArmSummary, SimSettings, SimSnapshot, SimState, Simulation};
 use crate::solver::{Move, Solver};
 use crate::tile::Tile;
 use crate::ui::events::AppAction;
@@ -34,6 +35,32 @@ pub enum ScoreTarget {
     Opponent,
 }
 
+/// Where a suggestion stands in an evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimStatus {
+    /// Exact value from the endgame solver.
+    Exact,
+    /// Still being simulated.
+    Racing,
+    /// Clearly behind; playouts stopped at `iterations`.
+    Stopped,
+    /// Reached the per-candidate playout cap.
+    Capped,
+    /// Not simulated yet, or below the playout floor.
+    Pending,
+}
+
+impl SimStatus {
+    fn from_arm(status: ArmStatus) -> Self {
+        match status {
+            ArmStatus::Pending => SimStatus::Pending,
+            ArmStatus::Racing => SimStatus::Racing,
+            ArmStatus::Stopped => SimStatus::Stopped,
+            ArmStatus::Capped => SimStatus::Capped,
+        }
+    }
+}
+
 /// Evaluation result for one suggestion, as the suggestions table shows it.
 #[derive(Debug, Clone)]
 pub struct SimResult {
@@ -43,8 +70,16 @@ pub struct SimResult {
     pub direction: Direction,
     /// Win probability estimate in percent (exact 0/50/100 for endgame lines)
     pub win_pct: f32,
+    /// Standard error of `win_pct`, in percentage points.
+    pub win_se: f32,
     /// Expected final spread change (playouts) or exact 2-ply value (endgame)
     pub sim_equity: f32,
+    /// Standard error of `sim_equity`.
+    pub spread_se: f32,
+    /// Spread minus the best candidate's, paired over common playouts
+    /// (exact for endgame lines), and its standard error.
+    pub delta: f32,
+    pub delta_se: f32,
     /// Percent of playouts in which the opponent's reply was a bingo
     pub ply1_bingo_pct: f32,
     /// Percent of playouts in which our follow-up was a bingo
@@ -53,6 +88,50 @@ pub struct SimResult {
     pub is_endgame: bool,
     /// Playouts behind the estimate (0 for exact endgame lines)
     pub iterations: usize,
+    pub status: SimStatus,
+}
+
+impl SimResult {
+    /// A display record for `mv` from a simulation arm.
+    fn from_arm(mv: &Move, arm: &ArmSummary) -> Self {
+        SimResult {
+            word: mv.word.clone(),
+            row: mv.row,
+            col: mv.col,
+            direction: mv.direction,
+            win_pct: arm.win * 100.0,
+            win_se: arm.win_se * 100.0,
+            sim_equity: arm.spread,
+            spread_se: arm.spread_se,
+            delta: arm.delta,
+            delta_se: arm.delta_se,
+            ply1_bingo_pct: arm.opp_bingo * 100.0,
+            ply2_bingo_pct: arm.our_bingo * 100.0,
+            is_endgame: false,
+            iterations: arm.n,
+            status: SimStatus::from_arm(arm.status),
+        }
+    }
+
+    /// True when there is a real estimate to show.
+    pub fn is_simulated(&self) -> bool {
+        self.is_endgame || self.iterations > 0
+    }
+}
+
+/// Progress of a running simulation, for the header and message bar.
+#[derive(Debug, Clone, Copy)]
+pub struct SimProgress {
+    /// Candidates with at least one playout.
+    pub simulated: usize,
+    /// Candidates in total.
+    pub total: usize,
+    pub playouts: u64,
+    /// Time spent on this position, including resumed runs.
+    pub elapsed: Duration,
+    /// This run's share of its budget (0-1), when it has one.
+    pub budget_fraction: Option<f32>,
+    pub done: bool,
 }
 
 /// Who plays the very last move of the game.
@@ -161,6 +240,10 @@ pub enum SortMode {
     Leave,
     WordLength,
     Alpha,
+    /// Playouts behind each estimate.
+    Playouts,
+    /// Our follow-up bingo rate.
+    Bingo,
 }
 
 impl SortMode {
@@ -174,7 +257,9 @@ impl SortMode {
                 }
             }
             SortMode::MctsEquity => SortMode::WinPct,
-            SortMode::WinPct => SortMode::Score,
+            SortMode::WinPct => SortMode::Playouts,
+            SortMode::Playouts => SortMode::Bingo,
+            SortMode::Bingo => SortMode::Score,
             SortMode::Score => SortMode::Leave,
             SortMode::Leave => SortMode::WordLength,
             SortMode::WordLength => SortMode::Alpha,
@@ -191,6 +276,8 @@ impl SortMode {
             SortMode::Leave => "Leave",
             SortMode::WordLength => "Length",
             SortMode::Alpha => "A-Z",
+            SortMode::Playouts => "n",
+            SortMode::Bingo => "Bingo",
         }
     }
 }
@@ -227,6 +314,20 @@ impl<T> Job<T> {
     }
 }
 
+/// A running simulation: live snapshots land in `live` (latest wins), the
+/// final one comes through `rx` (a worker that dies drops its sender, which
+/// the poller reports as a failure).
+struct SimJob {
+    stamp: u64,
+    cancel: Arc<AtomicBool>,
+    live: Arc<Mutex<Option<SimSnapshot>>>,
+    rx: Receiver<SimSnapshot>,
+    /// The simulated candidates, in the order of the snapshots' arms.
+    candidates: Arc<Vec<Move>>,
+    /// No snapshot applied yet (the first one switches to the Sim sort).
+    first: bool,
+}
+
 /// Run `f` on a new thread, catching a panic so it cannot take the app
 /// down. A panicking worker sends nothing: its receiver reports
 /// `Disconnected`, which the poller turns into a failure message (the
@@ -247,6 +348,8 @@ const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 pub struct MctsProgress {
     pub total_candidates: usize,
     pub spinner_frame: usize,
+    /// Live progress of a simulation (playout path only).
+    pub sim: Option<SimProgress>,
 }
 
 impl MctsProgress {
@@ -271,7 +374,10 @@ pub struct App {
     undo_stack: Vec<UndoState>,
     /// Evaluation results for the current suggestions (playouts or endgame).
     pub sim_results: Option<Vec<SimResult>>,
-    playout_job: Option<Job<Vec<MctsResult>>>,
+    sim_job: Option<SimJob>,
+    /// Saved state of the last simulation run, so M on the same position
+    /// continues where it stopped.
+    sim_cache: Arc<Mutex<Option<SimState>>>,
     /// The in-flight inference, tagged with the opponent-move stamp it was
     /// started for so a late result for an old move is dropped.
     inference_receiver: Option<(u64, Receiver<Option<InferenceResult>>)>,
@@ -281,6 +387,9 @@ pub struct App {
     /// stamp they were started under and are dropped if it moved on.
     position_stamp: u64,
     pub mcts_progress: Option<MctsProgress>,
+    /// Coverage of the last simulation on this position (kept after it
+    /// ends, for the suggestions header).
+    pub sim_progress: Option<SimProgress>,
     refengine_simulator: Option<Arc<RefSimulator>>,
     /// Why RefEngine could not be started, when it could not.
     refengine_unavailable: Option<String>,
@@ -383,11 +492,13 @@ impl App {
             message: Some("Loading dictionary...".to_string()),
             undo_stack: Vec::new(),
             sim_results: None,
-            playout_job: None,
+            sim_job: None,
+            sim_cache: Arc::new(Mutex::new(None)),
             inference_receiver: None,
             endgame_job: None,
             position_stamp: 0,
             mcts_progress: None,
+            sim_progress: None,
             refengine_simulator,
             refengine_unavailable,
             inferred_opponent_rack: None,
@@ -475,6 +586,13 @@ impl App {
             && !self.has_dialog()
         {
             self.toggle_final_turn();
+            return AppAction::Redraw;
+        }
+
+        // Esc first stops a running evaluation (M resumes a simulation).
+        if key.code == KeyCode::Esc && self.is_mcts_running() && !self.has_dialog() {
+            self.cancel_evaluation();
+            self.message = Some("Simulation stopped \u{2014} M continues it".to_string());
             return AppAction::Redraw;
         }
 
@@ -814,15 +932,15 @@ impl App {
 
     /// Returns true if any background evaluation is in progress.
     pub fn is_mcts_running(&self) -> bool {
-        self.playout_job.is_some() || self.endgame_job.is_some()
+        self.sim_job.is_some() || self.endgame_job.is_some()
     }
 
     /// Stop any running evaluation and forget its result. Returns true if
     /// one was running.
     pub fn cancel_evaluation(&mut self) -> bool {
         let mut cancelled = false;
-        if let Some(job) = self.playout_job.take() {
-            job.cancel();
+        if let Some(job) = self.sim_job.take() {
+            job.cancel.store(true, AtomicOrdering::Relaxed);
             cancelled = true;
         }
         if let Some(job) = self.endgame_job.take() {
@@ -847,21 +965,48 @@ impl App {
         self.is_mcts_running() || self.inference_receiver.is_some()
     }
 
-    /// Convert a playout result into the display record the suggestions
-    /// table reads (bingo rates as percentages, win rate as a percentage).
-    fn sim_result_from_playout(r: &MctsResult) -> SimResult {
-        SimResult {
-            word: r.mv.word.clone(),
-            row: r.mv.row,
-            col: r.mv.col,
-            direction: r.mv.direction,
-            win_pct: r.win_rate * 100.0,
-            sim_equity: r.mcts_equity,
-            ply1_bingo_pct: r.opp_bingo_rate * 100.0,
-            ply2_bingo_pct: r.our_bingo_rate * 100.0,
-            is_endgame: false,
-            iterations: r.iterations,
+    /// Show a simulation snapshot: results for every candidate, re-sorted
+    /// with the selection kept on the same move.
+    fn apply_sim_snapshot(&mut self, candidates: &[Move], snap: &SimSnapshot, first: bool) {
+        let results: Vec<SimResult> = candidates
+            .iter()
+            .zip(&snap.arms)
+            .map(|(mv, arm)| SimResult::from_arm(mv, arm))
+            .collect();
+        let selected = self
+            .suggestions
+            .get(self.selected_suggestion)
+            .map(Self::move_key);
+        self.sim_results = Some(results);
+        if first {
+            self.sort_mode = SortMode::MctsEquity;
         }
+        self.apply_sort();
+        // The first results re-rank the list: start at the top. Later
+        // snapshots keep the selection on the same move.
+        self.selected_suggestion = selected
+            .filter(|_| !first)
+            .and_then(|k| self.suggestions.iter().position(|m| Self::move_key(m) == k))
+            .unwrap_or(0);
+        let progress = SimProgress {
+            simulated: snap.simulated,
+            total: snap.total,
+            playouts: snap.playouts,
+            elapsed: snap.elapsed,
+            budget_fraction: snap
+                .budget
+                .map(|b| (snap.run_elapsed.as_secs_f32() / b.as_secs_f32()).min(1.0)),
+            done: snap.done,
+        };
+        self.sim_progress = Some(progress);
+        if let Some(p) = self.mcts_progress.as_mut() {
+            p.sim = Some(progress);
+        }
+    }
+
+    /// Identity of a move in the list (its word and where it goes).
+    fn move_key(mv: &Move) -> (String, usize, usize, Direction) {
+        (mv.word.to_uppercase(), mv.row, mv.col, mv.direction)
     }
 
     /// Poll background channels and incorporate results. Returns true if new results arrived.
@@ -912,6 +1057,9 @@ impl App {
                         .map(|eg| {
                             let val = eg.endgame_value as f32;
                             let final_margin = score_diff + eg.endgame_value;
+                            let best = endgame_results
+                                .first()
+                                .map_or(0.0, |b| b.endgame_value as f32);
                             SimResult {
                                 word: eg.mv.word.clone(),
                                 row: eg.mv.row,
@@ -922,11 +1070,16 @@ impl App {
                                     std::cmp::Ordering::Less => 0.0,
                                     std::cmp::Ordering::Equal => 50.0,
                                 },
+                                win_se: 0.0,
                                 sim_equity: val,
+                                spread_se: 0.0,
+                                delta: val - best,
+                                delta_se: 0.0,
                                 ply1_bingo_pct: 0.0,
                                 ply2_bingo_pct: 0.0,
                                 is_endgame: true,
                                 iterations: 0,
+                                status: SimStatus::Exact,
                             }
                         })
                         .collect();
@@ -978,80 +1131,56 @@ impl App {
             }
         }
 
-        // Playout results.
-        if let Some(ref job) = self.playout_job {
+        // Simulation snapshots: the final one, or else the latest live one.
+        if let Some(job) = self.sim_job.as_mut() {
+            if job.stamp != self.position_stamp {
+                log("Dropped a stale simulation (the position changed)");
+                job.cancel.store(true, AtomicOrdering::Relaxed);
+                self.sim_job = None;
+                self.mcts_progress = None;
+                return false;
+            }
             match job.rx.try_recv() {
-                Ok(_) if job.stamp != self.position_stamp => {
-                    log("Dropped a stale playout result (the position changed)");
-                    self.playout_job = None;
+                Ok(snap) => {
+                    let candidates = Arc::clone(&job.candidates);
+                    let first = job.first;
+                    self.sim_job = None;
+                    self.apply_sim_snapshot(&candidates, &snap, first);
                     self.mcts_progress = None;
-                }
-                Ok(results) => {
-                    let mut new_suggestions = Vec::with_capacity(results.len());
-                    for result in &results {
-                        log(&format!(
-                            "Playout: {} {} score={} spread={:+.1} win={:.0}% ({} playouts)",
-                            result.mv.word,
-                            result.mv.coords(),
-                            result.mv.score,
-                            result.mcts_equity,
-                            result.win_rate * 100.0,
-                            result.iterations
-                        ));
-                        new_suggestions.push(result.mv.clone());
-                    }
-
-                    // Evaluated moves first, then the rest of the list.
-                    let evaluated: std::collections::HashSet<(String, usize, usize, Direction)> =
-                        results
-                            .iter()
-                            .map(|r| (r.mv.word.clone(), r.mv.row, r.mv.col, r.mv.direction))
-                            .collect();
-                    new_suggestions.extend(
-                        self.suggestions
-                            .iter()
-                            .filter(|m| {
-                                !evaluated.contains(&(m.word.clone(), m.row, m.col, m.direction))
-                            })
-                            .cloned(),
-                    );
-
-                    self.suggestions = new_suggestions;
-                    self.sim_results =
-                        Some(results.iter().map(Self::sim_result_from_playout).collect());
-                    self.selected_suggestion = 0;
-                    self.sort_mode = SortMode::MctsEquity;
-                    self.apply_sort();
-                    self.playout_job = None;
-                    self.mcts_progress = None;
-
-                    let full = results.iter().map(|r| r.iterations).max().unwrap_or(0);
-                    let shortened = results.iter().any(|r| r.iterations < full);
-                    let count = results.len();
-                    self.message = Some(if shortened {
-                        format!(
-                            "Playout: {} moves ranked by expected final spread (some cut short)",
-                            count
-                        )
-                    } else {
-                        format!("Playout: {} moves ranked by expected final spread", count)
-                    });
+                    self.message = Some(Self::sim_summary(&snap));
+                    log(&Self::sim_summary(&snap));
                     return true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
-                    if let Some(ref mut progress) = self.mcts_progress {
-                        progress.spinner_frame += 1;
+                    let live = job.live.lock().ok().and_then(|mut slot| slot.take());
+                    if let Some(snap) = live {
+                        let candidates = Arc::clone(&job.candidates);
+                        let first = job.first;
+                        job.first = false;
+                        self.apply_sim_snapshot(&candidates, &snap, first);
+                        return true;
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.playout_job = None;
+                    self.sim_job = None;
                     self.mcts_progress = None;
-                    self.message = Some("Playout evaluation failed (see the log)".to_string());
+                    self.message = Some("Simulation failed (see the log)".to_string());
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// One-line summary of a finished (or stopped) simulation.
+    fn sim_summary(snap: &SimSnapshot) -> String {
+        format!(
+            "Simulated {}/{} plays \u{00b7} {} playouts \u{00b7} {:.1}s",
+            group_thousands(snap.simulated as u64),
+            group_thousands(snap.total as u64),
+            group_thousands(snap.playouts),
+            snap.elapsed.as_secs_f32()
+        )
     }
 
     /// Advance the spinner animation by one frame.
@@ -1306,6 +1435,7 @@ impl App {
         self.position_changed();
         self.suggestions.clear();
         self.sim_results = None;
+        self.sim_progress = None;
         // Intentionally preserve inferred_opponent_rack: inference results
         // are expensive to compute and should persist until replaced by new
         // inference from the next RefEngine simulation.
@@ -1436,26 +1566,29 @@ impl App {
                 // No reply is coming and there is no leave to protect:
                 // rank by raw score.
                 all_suggestions.sort_by_key(|m| std::cmp::Reverse(m.score));
-            } else {
-                const MAX_SUGGESTIONS: usize = 100;
-                all_suggestions.truncate(MAX_SUGGESTIONS);
+            } else if self.state.bag_size() > 0 {
+                // Passing is a candidate too while the game goes on (the
+                // endgame solver adds its own pass).
+                all_suggestions.push(Move::pass(&self.state.rack.tiles()));
             }
 
             self.suggestions = all_suggestions;
             self.selected_suggestion = 0;
             self.sim_results = None;
+            self.sim_progress = None;
 
-            if self.suggestions.is_empty() {
+            if total_count == 0 {
                 self.message = Some("No valid moves found".to_string());
             } else if is_last_move {
                 self.message = Some(format!(
                     "Final move of the game: {} plays, sorted by score",
                     total_count
                 ));
-            } else if total_count > 100 {
-                self.message = Some(format!("Showing top 100 of {} moves", total_count));
             } else {
-                self.message = Some(format!("Found {} moves", self.suggestions.len()));
+                self.message = Some(format!(
+                    "Found {} moves",
+                    group_thousands(self.suggestions.len() as u64)
+                ));
             }
         } else {
             self.message = Some("Dictionary not loaded".to_string());
@@ -1669,6 +1802,7 @@ impl App {
             self.mcts_progress = Some(MctsProgress {
                 total_candidates: 0,
                 spinner_frame: 0,
+                sim: None,
             });
             let caveat = if self.final_turn_known {
                 ""
@@ -1718,24 +1852,31 @@ impl App {
             return;
         }
 
-        // Bag not empty: Monte Carlo playouts under Crossplay rules. The
-        // playout depth follows the bag: with few tiles left the game ends
-        // inside the horizon and the equal-turn ending is played exactly.
+        // Bag not empty: simulate every candidate (plays, exchanges, pass)
+        // under Crossplay rules. The playout depth follows the bag: with
+        // few tiles left the game ends inside the horizon and the
+        // equal-turn ending is played exactly.
         let bag = self.state.bag_size();
-        let config =
-            MctsConfig::for_bag(bag).with_score_diff(self.our_score as i32 - self.opp_score as i32);
-        let candidates = self.candidates_by_static_equity();
-        let count = candidates.len().min(config.num_candidates);
+        let sim_cfg = &self.settings.simulation;
+        let settings = SimSettings::for_bag(
+            bag,
+            sim_cfg.min_playouts,
+            Some(Duration::from_secs(sim_cfg.budget_secs.max(1))),
+        )
+        .with_score_diff(self.our_score as i32 - self.opp_score as i32);
+        let candidates = Arc::new(self.candidates_by_static_equity());
+        let count = candidates.len();
         self.mcts_progress = Some(MctsProgress {
             total_candidates: count,
             spinner_frame: 0,
+            sim: None,
         });
         self.message = Some(format!(
-            "{}: playing out {} candidates ({} in bag, {} plies)...",
+            "{}: simulating {} candidates ({} in bag, {} plies)... Esc stops",
             crate::stats::GamePhase::from_unseen_count(unseen as u32).label(),
-            count,
+            group_thousands(count as u64),
             bag,
-            config.max_plies
+            settings.max_plies
         ));
         let state = self.state.clone();
 
@@ -1756,15 +1897,19 @@ impl App {
 
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let config = config.with_cancel(Arc::clone(&cancel));
-        self.playout_job = Some(Job {
+        let live = Arc::new(Mutex::new(None));
+        self.sim_job = Some(SimJob {
             stamp: self.position_stamp,
-            rx,
             cancel: Arc::clone(&cancel),
+            live: Arc::clone(&live),
+            rx,
+            candidates: Arc::clone(&candidates),
+            first: true,
         });
+        let cache = Arc::clone(&self.sim_cache);
         spawn_worker(move || {
             let inference = fresh_inference
-                .and_then(|rx| rx.recv_timeout(std::time::Duration::from_secs(3)).ok())
+                .and_then(|rx| rx.recv_timeout(Duration::from_secs(3)).ok())
                 .flatten()
                 .or(stored_inference);
             let model = Self::opponent_model(inference.as_ref(), &state, temperature);
@@ -1779,11 +1924,25 @@ impl App {
                 )),
                 None => log("Opponent model: none (uniform deals, greedy opponent)"),
             }
-            let evaluator = MctsEvaluator::new(config);
-            let results = evaluator.evaluate_with_model(&state, &candidates, &dict, model.as_ref());
-            if !cancel.load(AtomicOrdering::Relaxed) {
-                let _ = tx.send(results);
+            // A saved run for this same position and model continues;
+            // anything else starts afresh.
+            let resume = cache.lock().ok().and_then(|mut c| c.take());
+            let mut sim =
+                Simulation::new(settings, &dict, &state, &candidates, model.as_ref(), resume);
+            let resumed = sim.snapshot(Duration::ZERO, false).playouts;
+            if resumed > 0 {
+                log(&format!("Resuming a simulation with {} playouts", resumed));
             }
+            let started = Instant::now();
+            let last = sim.run(&cancel, &mut |snap| {
+                if let Ok(mut slot) = live.lock() {
+                    *slot = Some(snap);
+                }
+            });
+            if let Ok(mut c) = cache.lock() {
+                *c = Some(sim.into_state(started.elapsed()));
+            }
+            let _ = tx.send(last);
         });
     }
 
@@ -2060,19 +2219,17 @@ impl App {
                     // Candidates pruned early carry a short-run estimate;
                     // rank them after those that received the full budget,
                     // and any that never got a playout after both.
-                    let full = results.iter().map(|r| r.iterations).max().unwrap_or(0);
                     let sim_map: std::collections::HashMap<_, _> = results
                         .iter()
                         .map(|r| {
                             let key = (r.word.to_uppercase(), r.row, r.col, r.direction);
-                            let tier = if r.is_endgame || r.iterations == full {
-                                2.0
-                            } else if r.iterations > 0 {
-                                1.0
-                            } else {
-                                0.0
-                            };
-                            (key, (tier, if by_win { r.win_pct } else { r.sim_equity }))
+                            (
+                                key,
+                                (
+                                    Self::sim_tier(r),
+                                    if by_win { r.win_pct } else { r.sim_equity },
+                                ),
+                            )
                         })
                         .collect();
 
@@ -2127,8 +2284,68 @@ impl App {
             SortMode::Alpha => {
                 self.suggestions.sort_by(|a, b| a.word.cmp(&b.word));
             }
+            SortMode::Playouts | SortMode::Bingo => {
+                let by_n = self.sort_mode == SortMode::Playouts;
+                let key_of: std::collections::HashMap<_, _> = self
+                    .sim_results
+                    .iter()
+                    .flatten()
+                    .map(|r| {
+                        let key = (r.word.to_uppercase(), r.row, r.col, r.direction);
+                        let v = if by_n {
+                            r.iterations as f32
+                        } else {
+                            r.ply2_bingo_pct
+                        };
+                        (key, (Self::sim_tier(r), v))
+                    })
+                    .collect();
+                self.suggestions.sort_by(|a, b| {
+                    let ka = key_of
+                        .get(&Self::move_key(a))
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
+                    let kb = key_of
+                        .get(&Self::move_key(b))
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
+                    kb.partial_cmp(&ka)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(
+                            b.equity
+                                .partial_cmp(&a.equity)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        )
+                });
+            }
         }
     }
+
+    /// Sort tier of an evaluated candidate: exact or with its playout
+    /// floor first, then those still filling up, then unsimulated ones
+    /// (whose numbers are placeholders).
+    fn sim_tier(r: &SimResult) -> f32 {
+        if r.is_endgame || (r.iterations > 0 && r.status != SimStatus::Pending) {
+            2.0
+        } else if r.iterations > 0 {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+/// `1234567` as `1,234,567`.
+pub fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 impl Default for App {
@@ -2146,7 +2363,65 @@ mod tests {
     /// must hold `RefEngine test lock for as long as the App may use RefEngine
     /// (construction and any inference it starts).
     fn test_app() -> App {
-        App::with_settings(Settings::default())
+        let mut settings = Settings::default();
+        // Keep simulations short in tests.
+        settings.simulation.budget_secs = 2;
+        App::with_settings(settings)
+    }
+
+    /// A simulation job the test controls: the sender for the final
+    /// snapshot and the live slot.
+    fn fake_sim_job(
+        app: &App,
+        candidates: Vec<Move>,
+    ) -> (
+        SimJob,
+        mpsc::Sender<SimSnapshot>,
+        Arc<Mutex<Option<SimSnapshot>>>,
+    ) {
+        let (tx, rx) = mpsc::channel();
+        let live = Arc::new(Mutex::new(None));
+        let job = SimJob {
+            stamp: app.position_stamp,
+            cancel: Arc::new(AtomicBool::new(false)),
+            live: Arc::clone(&live),
+            rx,
+            candidates: Arc::new(candidates),
+            first: true,
+        };
+        (job, tx, live)
+    }
+
+    fn fake_snapshot(spreads: &[(f32, usize)], done: bool) -> SimSnapshot {
+        SimSnapshot {
+            arms: spreads
+                .iter()
+                .map(|&(spread, n)| ArmSummary {
+                    n,
+                    spread,
+                    spread_se: 1.0,
+                    win: 0.5,
+                    win_se: 0.05,
+                    delta: 0.0,
+                    delta_se: 0.0,
+                    our_bingo: 0.0,
+                    opp_bingo: 0.0,
+                    status: if n > 0 {
+                        ArmStatus::Racing
+                    } else {
+                        ArmStatus::Pending
+                    },
+                })
+                .collect(),
+            playouts: spreads.iter().map(|s| s.1 as u64).sum(),
+            elapsed: Duration::from_millis(500),
+            simulated: spreads.iter().filter(|s| s.1 > 0).count(),
+            floored: spreads.iter().filter(|s| s.1 > 0).count(),
+            total: spreads.len(),
+            done,
+            budget: Some(Duration::from_secs(2)),
+            run_elapsed: Duration::from_millis(500),
+        }
     }
 
     /// The full Crossplay tile set, in distribution order.
@@ -2374,7 +2649,7 @@ mod tests {
             return;
         };
         app.run_mcts_evaluation();
-        let flag = Arc::clone(&app.playout_job.as_ref().expect("job started").cancel);
+        let flag = Arc::clone(&app.sim_job.as_ref().expect("job started").cancel);
         let stamp = app.position_stamp;
 
         app.focus = Focus::Rack;
@@ -2396,26 +2671,14 @@ mod tests {
         let mut app = test_app();
         app.suggestions = vec![fake_move(2)];
         let before = app.suggestions.clone();
-        let (tx, rx) = mpsc::channel();
-        app.playout_job = Some(Job {
-            stamp: app.position_stamp,
-            rx,
-            cancel: Arc::new(AtomicBool::new(false)),
-        });
+        let (job, tx, _live) = fake_sim_job(&app, vec![fake_move(3)]);
+        app.sim_job = Some(job);
         // The position moves on without going through the usual paths
         // (which would also cancel the job), then the old result arrives.
         app.position_stamp += 1;
-        tx.send(vec![MctsResult {
-            mv: fake_move(3),
-            mcts_equity: 99.0,
-            win_rate: 1.0,
-            iterations: 10,
-            opp_bingo_rate: 0.0,
-            our_bingo_rate: 0.0,
-        }])
-        .unwrap();
+        tx.send(fake_snapshot(&[(99.0, 10)], true)).unwrap();
         app.poll_mcts();
-        assert!(app.playout_job.is_none());
+        assert!(app.sim_job.is_none());
         assert!(app.sim_results.is_none(), "stale result was applied");
         assert_eq!(app.suggestions.len(), before.len());
         assert_eq!(app.suggestions[0].word, before[0].word);
@@ -2479,11 +2742,11 @@ mod tests {
             return;
         };
         app.run_mcts_evaluation();
-        let first = Arc::clone(&app.playout_job.as_ref().unwrap().cancel);
+        let first = Arc::clone(&app.sim_job.as_ref().unwrap().cancel);
         app.focus = Focus::Suggestions;
         app.handle_key(key(KeyCode::Char('m')));
         assert!(first.load(AtomicOrdering::Relaxed), "first run cancelled");
-        let second = &app.playout_job.as_ref().expect("a new run started").cancel;
+        let second = &app.sim_job.as_ref().expect("a new run started").cancel;
         assert!(!second.load(AtomicOrdering::Relaxed));
         app.cancel_evaluation();
     }
@@ -2499,22 +2762,28 @@ mod tests {
             m.row = i;
         }
         app.suggestions = moves.clone();
-        let sim = |m: &Move, eq: f32, n: usize| SimResult {
+        let sim = |m: &Move, eq: f32, n: usize, status: SimStatus| SimResult {
             word: m.word.clone(),
             row: m.row,
             col: m.col,
             direction: m.direction,
             win_pct: 50.0,
+            win_se: 0.0,
             sim_equity: eq,
+            spread_se: 0.0,
+            delta: 0.0,
+            delta_se: 0.0,
             ply1_bingo_pct: 0.0,
             ply2_bingo_pct: 0.0,
             is_endgame: false,
             iterations: n,
+            status,
         };
+        // Floored, never simulated, and still below the floor.
         app.sim_results = Some(vec![
-            sim(&moves[0], 5.0, 100),
-            sim(&moves[1], 50.0, 0),
-            sim(&moves[2], 10.0, 40),
+            sim(&moves[0], 5.0, 100, SimStatus::Racing),
+            sim(&moves[1], 50.0, 0, SimStatus::Pending),
+            sim(&moves[2], 10.0, 8, SimStatus::Pending),
         ]);
         app.set_sort_mode(SortMode::MctsEquity);
         let order: Vec<usize> = app.suggestions.iter().map(|m| m.row).collect();
@@ -2614,12 +2883,8 @@ mod tests {
     fn panicking_worker_reports_failure() {
         let _lock = crate::datafiles::test_data::refengine_lock();
         let mut app = test_app();
-        let (tx, rx) = mpsc::channel::<Vec<MctsResult>>();
-        app.playout_job = Some(Job {
-            stamp: app.position_stamp,
-            rx,
-            cancel: Arc::new(AtomicBool::new(false)),
-        });
+        let (job, tx, _live) = fake_sim_job(&app, vec![fake_move(2)]);
+        app.sim_job = Some(job);
         spawn_worker(move || {
             let _keep = tx;
             panic!("simulated worker failure");
@@ -2631,5 +2896,112 @@ mod tests {
         }
         assert!(!app.is_mcts_running());
         assert!(app.message.as_deref().unwrap_or("").contains("failed"));
+    }
+
+    /// Live snapshots update the table while the simulation runs: results
+    /// appear, the list re-sorts by simulated spread, and the selection
+    /// stays on the same move.
+    #[test]
+    fn live_snapshots_update_and_resort_the_table() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = test_app();
+        let mut moves: Vec<Move> = (1..=3).map(fake_move).collect();
+        for (i, m) in moves.iter_mut().enumerate() {
+            m.row = i;
+        }
+        app.suggestions = moves.clone();
+        app.selected_suggestion = 2; // the third move
+        let (job, tx, live) = fake_sim_job(&app, moves.clone());
+        app.sim_job = Some(job);
+
+        *live.lock().unwrap() = Some(fake_snapshot(&[(1.0, 16), (9.0, 16), (5.0, 16)], false));
+        assert!(app.poll_mcts());
+        assert!(
+            app.is_mcts_running(),
+            "a live snapshot does not end the run"
+        );
+        assert_eq!(app.sort_mode, SortMode::MctsEquity);
+        let order: Vec<usize> = app.suggestions.iter().map(|m| m.row).collect();
+        assert_eq!(order, vec![1, 2, 0]);
+        assert_eq!(app.selected_suggestion, 0, "first results start at the top");
+        assert_eq!(app.sim_progress.map(|p| p.playouts), Some(48));
+
+        // A later snapshot changes the order again (the final one ends the
+        // run); the selection follows its move.
+        app.selected_suggestion = 1; // row 2
+        tx.send(fake_snapshot(&[(20.0, 32), (9.0, 32), (5.0, 32)], true))
+            .unwrap();
+        app.poll_mcts();
+        assert!(!app.is_mcts_running());
+        assert_eq!(app.suggestions[0].row, 0);
+        assert_eq!(
+            app.suggestions[app.selected_suggestion].row, 2,
+            "selection kept"
+        );
+        assert!(app
+            .message
+            .as_deref()
+            .unwrap()
+            .starts_with("Simulated 3/3 plays"));
+    }
+
+    /// Esc stops a running simulation and M continues it from the saved
+    /// state instead of starting over.
+    #[test]
+    fn esc_stops_and_m_resumes_the_simulation() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = solved_app() else {
+            return;
+        };
+        app.focus = Focus::Suggestions;
+        assert!(
+            app.suggestions
+                .iter()
+                .any(|m| m.kind == crate::solver::MoveKind::Pass),
+            "pass is a candidate"
+        );
+        app.handle_key(key(KeyCode::Char('m')));
+        // Let it make some progress, then stop it.
+        let started = Instant::now();
+        while app.sim_progress.map_or(0, |p| p.playouts) == 0
+            && started.elapsed() < Duration::from_secs(20)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+            app.poll_mcts();
+        }
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.is_mcts_running());
+        assert_eq!(
+            app.dialog,
+            DialogState::None,
+            "Esc stopped the run, no menu"
+        );
+        // The worker saves its state when it notices the cancel.
+        let started = Instant::now();
+        let saved = loop {
+            let saved = app.sim_cache.lock().unwrap().as_ref().map(|s| s.playouts());
+            if saved.is_some() || started.elapsed() > Duration::from_secs(20) {
+                break saved.unwrap_or(0);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(saved > 0, "the stopped run saved its playouts");
+
+        app.handle_key(key(KeyCode::Char('m')));
+        finish_evaluation(&mut app);
+        let total = app.sim_progress.map_or(0, |p| p.playouts);
+        assert!(
+            total > saved,
+            "the resumed run continued from {saved} playouts (now {total})"
+        );
+    }
+
+    #[test]
+    fn thousands_are_grouped() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(999), "999");
+        assert_eq!(group_thousands(1000), "1,000");
+        assert_eq!(group_thousands(48200), "48,200");
+        assert_eq!(group_thousands(1234567), "1,234,567");
     }
 }

@@ -34,6 +34,8 @@ pub enum DefaultSort {
     Leave,
     Length,
     Alpha,
+    Playouts,
+    Bingo,
 }
 
 impl DefaultSort {
@@ -46,6 +48,8 @@ impl DefaultSort {
             DefaultSort::Leave => SortMode::Leave,
             DefaultSort::Length => SortMode::WordLength,
             DefaultSort::Alpha => SortMode::Alpha,
+            DefaultSort::Playouts => SortMode::Playouts,
+            DefaultSort::Bingo => SortMode::Bingo,
         }
     }
 
@@ -58,6 +62,8 @@ impl DefaultSort {
             SortMode::Leave => DefaultSort::Leave,
             SortMode::WordLength => DefaultSort::Length,
             SortMode::Alpha => DefaultSort::Alpha,
+            SortMode::Playouts => DefaultSort::Playouts,
+            SortMode::Bingo => DefaultSort::Bingo,
         }
     }
 }
@@ -71,11 +77,33 @@ impl Default for DisplaySettings {
     }
 }
 
+/// Simulation (M) preferences.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SimulationSettings {
+    /// Playouts every candidate gets before racing decides which deserve
+    /// more.
+    pub min_playouts: usize,
+    /// Seconds one run may take (it can be stopped earlier with Esc and
+    /// resumed with M).
+    pub budget_secs: u64,
+}
+
+impl Default for SimulationSettings {
+    fn default() -> Self {
+        SimulationSettings {
+            min_playouts: 16,
+            budget_secs: 20,
+        }
+    }
+}
+
 /// All application settings
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Settings {
     pub display: DisplaySettings,
+    pub simulation: SimulationSettings,
 }
 
 impl Settings {
