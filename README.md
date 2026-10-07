@@ -66,8 +66,11 @@ RefEngine is linked statically, so the binary has no runtime library dependency.
 5. the working directory (running from a checkout)
 
 ```text
-cpsolver2 [--data-dir <DIR>]   cpsolver2 --help   cpsolver2 --version
+cpsolver2 [--game <NAME>] [--data-dir <DIR>]
+cpsolver2 --list   cpsolver2 --help   cpsolver2 --version
 ```
+
+`--game <NAME>` opens the saved game called NAME (matched by its file name, so case and punctuation do not matter) or starts a new game with that name; `--list` prints the saved games (name, score, tiles in the bag, last played) and exits.
 
 ### Benchmarks
 
@@ -112,7 +115,8 @@ Everywhere:
 | **`** (backtick) | Board / log tab |
 | **\\** (backslash) | Toggle the sidebar |
 | **F1** | Help (two columns on wide terminals, scrollable on narrow ones) |
-| **Ctrl+C** | Quit (asks first; Ctrl+C again confirms) |
+| **Ctrl+O** | Saved games (the game picker) |
+| **Ctrl+C** | Quit (asks first; Ctrl+C again confirms). An untitled game asks for a name instead: Enter saves it and quits, Ctrl+C again quits keeping the automatic name, Esc cancels |
 
 Board:
 
@@ -141,11 +145,32 @@ Suggestions:
 | **s** / **S** | Cycle sort mode (Equity → Sim → Win% → n → Bingo → Score → Leave → Length → A-Z); clicking a column header sorts by it |
 | **y** / **Y** | Copy the selected move (`8D QUIXOTIC`) / the whole position (CGP) to the clipboard (OSC 52) |
 
+Esc menu: **Open Game…** (the picker), **Save Game As…** (name or rename the game), **New Game**, **Reset Board**, **Quit Game**, **Cancel**.
+
+Game picker (Ctrl+O, the Esc menu, or at startup):
+
+| Key | Action |
+|-----|--------|
+| **↑/↓**, **j/k**, **PgUp/PgDn**, **Home/End** | Select (also the wheel) |
+| **Enter** | Open the game (also a double-click) |
+| **n** | Start a new, untitled game |
+| **r** | Rename the selected game |
+| **d** | Delete the selected game (asks first) |
+| **Esc** | Close (at startup: start a new game) |
+
 Mouse: click to focus a pane, square or row; double-click a suggestion to apply it; click a column header or sort tab to sort; the wheel scrolls the pane under the pointer. Pasting a CGP line (bracketed paste) loads that position.
 
-### Session
+### Saved games
 
-The position, rack, scores and who has the final turn are saved after every solve and applied move (`session.cgp` in `~/.local/share/cpsolver2/` on Linux, `~/Library/Application Support/cpsolver2/` on macOS) and restored at the next start. Ctrl+R starts over (and can be undone).
+Every game is saved as you play, one file per game in `games/` under the user data directory (`~/.local/share/cpsolver2/games/` on Linux, `~/Library/Application Support/cpsolver2/games/` on macOS): the position, rack, scores, who has the final turn, and the opponent-strength measurement. Saves happen at most about once a second while the position changes, and on exit, including when the terminal window is closed (SIGHUP) or the app is killed with SIGTERM or SIGINT.
+
+A new game is called `Untitled YYYY-MM-DD HH:MM` until you name it (Esc menu → Save Game As…, usually with the opponent's name, which the title bar then shows). Saving under the name of another saved game asks before replacing it. Quitting an untitled game offers to name it first, but never insists.
+
+Several games can be open at once, each in its own terminal window, but a game is open in only one window at a time: the window holds a lock (`<name>.lock`, with its process id), and the others refuse to open it ("… is open in another window"; dimmed in the picker). A lock left behind by a crash is taken over.
+
+At startup the app lists the saved games to pick from (unless `--game` is given, or none can be opened). A `session.cgp` written by an earlier version is imported at startup as the game "Restored session" (or "Restored session (2)", …) and renamed to `session.cgp.imported`; this also catches windows still running an older version that save their session when they close.
+
+Ctrl+R clears the board of the open game (and can be undone); New Game starts another game and keeps this one.
 
 ### Workflow
 

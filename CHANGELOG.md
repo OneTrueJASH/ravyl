@@ -7,6 +7,21 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Named saved games: one file per game (`games/<name>.toml` in the user
+  data directory), saved as you play (at most about once a second) and on
+  exit, including when the terminal closes (SIGHUP) or the app is killed
+  (SIGTERM, SIGINT). Each game keeps its position, scores, final turn and
+  the opponent-strength measurement. New games are `Untitled …` until
+  named with Save Game As (the title bar shows the name); quitting an
+  untitled game offers to name it.
+- A game picker (Ctrl+O, the Esc menu, and at startup when there are saved
+  games): newest first, with score, tiles in the bag and when each was last
+  played; open, new, rename and delete. A game open in one window is locked
+  against the others; a lock left by a crash is taken over.
+- Esc menu: Open Game, Save Game As, New Game, Reset Board, Quit Game.
+- `--game <NAME>` opens or creates a game; `--list` prints the saved games.
+- A `session.cgp` from earlier versions is imported as the game "Restored
+  session".
 - Simulation of every candidate (every legal play, every distinct
   exchange, and pass) with an anytime scheduler: a playout floor for every
   candidate, racing on spread and win rate, widening for blank racks, and
@@ -22,7 +37,7 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   legality and score preview; Shift+letter places a blank on the board.
 - Board axes (A–O, 1–15) and a cursor readout.
 - Redo (Ctrl+Y); reset and clearing the rack can be undone.
-- Session autosave and restore, CGP paste, and copying the selected move
+- CGP paste, and copying the selected move
   or the position to the clipboard (OSC 52).
 - Themes (dark, light, ansi16, no-color) chosen by `display.theme`,
   honoring `NO_COLOR` and `COLORTERM`, with ASCII fallbacks.
