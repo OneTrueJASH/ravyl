@@ -1,7 +1,9 @@
 use std::path::Path;
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
-use fst::raw::Node;
+use fst::raw::{CompiledAddr, Fst};
 use fst::Set;
 
 use crate::datafiles;
@@ -9,10 +11,121 @@ use crate::leaves::{bingo_bonus_correction, LeaveValues};
 use crate::solver::{leave_value_with_phase, BINGO_BONUS};
 use crate::tile::Tile;
 
+/// A node of the flattened word graph: where its outgoing arcs start, how
+/// many there are, and whether a word ends here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DawgNode {
+    first: u32,
+    len: u8,
+    is_final: bool,
+}
+
+impl DawgNode {
+    /// True when the letters walked so far spell a word.
+    #[inline]
+    pub fn is_final(&self) -> bool {
+        self.is_final
+    }
+}
+
+/// An outgoing arc: the letter (0-25 for A-Z) and the node it leads to.
+#[derive(Debug, Clone, Copy)]
+pub struct DawgArc {
+    /// Letter index, 0 = A.
+    pub letter: u8,
+    child_len: u8,
+    child_final: bool,
+    child_first: u32,
+}
+
+impl DawgArc {
+    /// The node this arc leads to.
+    #[inline]
+    pub fn node(&self) -> DawgNode {
+        DawgNode {
+            first: self.child_first,
+            len: self.child_len,
+            is_final: self.child_final,
+        }
+    }
+}
+
+/// The dictionary's word graph flattened into one array of arcs, each
+/// node's arcs contiguous and sorted by letter. Built once from the FST at
+/// load time; the move generator walks it instead of decoding FST nodes,
+/// which dominated its run time. Shared FST states stay shared, so the
+/// graph has the FST's size.
+struct Dawg {
+    arcs: Vec<DawgArc>,
+    root: DawgNode,
+}
+
+impl Dawg {
+    fn from_fst(fst: &Fst<Vec<u8>>) -> Self {
+        let mut arcs = Vec::new();
+        let mut memo: HashMap<CompiledAddr, (u32, u8)> = HashMap::new();
+        let root = fst.root();
+        let (first, len) = Self::flatten(fst, root.addr(), &mut memo, &mut arcs);
+        Dawg {
+            arcs,
+            root: DawgNode {
+                first,
+                len,
+                is_final: root.is_final(),
+            },
+        }
+    }
+
+    /// Lay out the arcs of the node at `addr` (and, recursively, of every
+    /// node below it not laid out yet). Returns where they start and how
+    /// many there are. Recursion depth is bounded by the longest word.
+    fn flatten(
+        fst: &Fst<Vec<u8>>,
+        addr: CompiledAddr,
+        memo: &mut HashMap<CompiledAddr, (u32, u8)>,
+        arcs: &mut Vec<DawgArc>,
+    ) -> (u32, u8) {
+        if let Some(&done) = memo.get(&addr) {
+            return done;
+        }
+        let node = fst.node(addr);
+        let letters: Vec<(u8, CompiledAddr)> = node
+            .transitions()
+            .filter(|t| t.inp.is_ascii_uppercase())
+            .map(|t| (t.inp - b'A', t.addr))
+            .collect();
+        let first = arcs.len() as u32;
+        let len = letters.len() as u8;
+        memo.insert(addr, (first, len));
+        arcs.resize(
+            arcs.len() + letters.len(),
+            DawgArc {
+                letter: 0,
+                child_len: 0,
+                child_final: false,
+                child_first: 0,
+            },
+        );
+        for (k, (letter, child_addr)) in letters.into_iter().enumerate() {
+            let child_final = fst.node(child_addr).is_final();
+            let (child_first, child_len) = Self::flatten(fst, child_addr, memo, arcs);
+            arcs[first as usize + k] = DawgArc {
+                letter,
+                child_len,
+                child_final,
+                child_first,
+            };
+        }
+        (first, len)
+    }
+}
+
 /// Dictionary loaded from a pre-compiled FST for fast lookups
 pub struct Dictionary {
     /// FST set for O(1) word validation and prefix matching
     fst: Set<Vec<u8>>,
+    /// The same words as a flat graph for the move generator.
+    dawg: Dawg,
     word_count: usize,
     /// Leave values from RefEngine's table, when the file was found.
     leaves: Option<LeaveValues>,
@@ -33,8 +146,10 @@ impl Dictionary {
             count += 1;
         }
 
+        let dawg = Dawg::from_fst(fst.as_fst());
         Ok(Dictionary {
             fst,
+            dawg,
             word_count: count,
             leaves: None,
         })
@@ -124,29 +239,31 @@ impl Dictionary {
         }
     }
 
-    /// Root node of the underlying FST, for incremental prefix walking.
+    /// Root of the word graph, for incremental prefix walking.
     ///
     /// The move generator descends one letter at a time with [`Self::child`]
-    /// instead of re-validating whole prefixes, so each step is a single
-    /// transition lookup rather than a range query.
+    /// or [`Self::arcs`] instead of re-validating whole prefixes.
     #[inline]
-    pub fn root(&self) -> Node<'_> {
-        self.fst.as_fst().root()
+    pub fn root(&self) -> DawgNode {
+        self.dawg.root
     }
 
-    /// Follow the transition for `byte` (an uppercase ASCII letter) out of
-    /// `node`, returning the child node if the extended prefix exists.
+    /// Follow the arc for `byte` (an uppercase ASCII letter) out of `node`,
+    /// returning the child node if the extended prefix exists.
     #[inline]
-    pub fn child(&self, node: Node<'_>, byte: u8) -> Option<Node<'_>> {
-        node.find_input(byte)
-            .map(|i| self.fst.as_fst().node(node.transition(i).addr))
+    pub fn child(&self, node: DawgNode, byte: u8) -> Option<DawgNode> {
+        let letter = byte.wrapping_sub(b'A');
+        self.arcs(node)
+            .iter()
+            .find(|a| a.letter == letter)
+            .map(DawgArc::node)
     }
 
-    /// Node reached by following a transition's address (used when iterating
-    /// a node's transitions directly).
+    /// The arcs out of `node`, sorted by letter.
     #[inline]
-    pub fn node_at(&self, addr: fst::raw::CompiledAddr) -> Node<'_> {
-        self.fst.as_fst().node(addr)
+    pub fn arcs(&self, node: DawgNode) -> &[DawgArc] {
+        let start = node.first as usize;
+        &self.dawg.arcs[start..start + node.len as usize]
     }
 
     /// Get the total number of words in the dictionary

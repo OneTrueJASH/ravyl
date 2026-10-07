@@ -33,12 +33,14 @@ use rayon::prelude::*;
 
 use crate::board::Board;
 use crate::dictionary::Dictionary;
-use crate::game::exchange_moves;
 #[cfg(test)]
 use crate::game::full_tile_set;
 use crate::game::SolverState;
+use crate::game::{best_exchange, top_exchanges};
 use crate::solver::{Move, MoveKind, Solver, EXCHANGE_MIN_BAG};
-use crate::tile::{Rack, Tile, RACK_SIZE};
+#[cfg(test)]
+use crate::tile::Rack;
+use crate::tile::{Tile, RACK_SIZE};
 
 /// Configuration for Monte Carlo evaluation
 #[derive(Debug, Clone)]
@@ -325,6 +327,7 @@ impl OpponentModel {
     }
 }
 
+#[cfg(test)]
 fn rack_from(tiles: &[Tile]) -> Rack {
     let mut rack = Rack::new();
     for t in tiles {
@@ -332,6 +335,10 @@ fn rack_from(tiles: &[Tile]) -> Rack {
     }
     rack
 }
+
+/// Moves the softmax opponent chooses among (the best by equity, within a
+/// window of the best).
+const SOFTMAX_MOVES: usize = 16;
 
 /// Which player is to move in a playout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,28 +492,19 @@ impl<'a> Playout<'a> {
 
     /// Highest-scoring move for `p` (None means pass).
     fn best_by_score(&self, p: Player) -> Option<Move> {
-        let solver = Solver::new(&self.board, self.dict);
-        let rack = rack_from(self.rack(p));
-        solver.find_moves(&rack).into_iter().max_by_key(|m| m.score)
+        Solver::new(&self.board, self.dict).best_move_by_score(self.rack(p))
     }
 
     /// Best move by static equity for `p`, including exchanges when the bag
     /// allows them (None means pass).
     fn best_by_equity(&self, p: Player) -> Option<Move> {
         let solver = Solver::new(&self.board, self.dict);
-        let rack = rack_from(self.rack(p));
-        let best_play = solver.find_moves(&rack).into_iter().next();
+        let best_play = solver.best_move_by_equity(self.rack(p));
         if self.bag.len() < EXCHANGE_MIN_BAG {
             return best_play;
         }
         let unseen = self.unseen_for_phase();
-        let best_exchange = exchange_moves(self.rack(p), self.dict, Some(unseen))
-            .into_iter()
-            .max_by(|a, b| {
-                a.equity
-                    .partial_cmp(&b.equity)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        let best_exchange = best_exchange(self.rack(p), self.dict, Some(unseen));
         match (best_play, best_exchange) {
             (Some(play), Some(exch)) => Some(if exch.equity > play.equity {
                 exch
@@ -526,13 +524,19 @@ impl<'a> Playout<'a> {
             return self.best_by_equity(p);
         }
         let tau = self.opp_temperature;
+        // Only the best SOFTMAX_MOVES of plays and of exchanges can make the
+        // cut below, so only those are built.
         let mut moves = {
             let solver = Solver::new(&self.board, self.dict);
-            let rack = rack_from(self.rack(p));
-            let mut moves = solver.find_moves(&rack);
+            let mut moves = solver.top_moves_by_equity(self.rack(p), SOFTMAX_MOVES);
             if self.bag.len() >= EXCHANGE_MIN_BAG {
                 let unseen = self.unseen_for_phase();
-                moves.extend(exchange_moves(self.rack(p), self.dict, Some(unseen)));
+                moves.extend(top_exchanges(
+                    self.rack(p),
+                    self.dict,
+                    Some(unseen),
+                    SOFTMAX_MOVES,
+                ));
                 moves.sort_by(|a, b| {
                     b.equity
                         .partial_cmp(&a.equity)
@@ -546,7 +550,7 @@ impl<'a> Playout<'a> {
         // player; without the window the long tail of junk moves would
         // dominate the sample by sheer count.
         moves.retain(|m| m.equity >= best_equity - 3.0 * tau);
-        moves.truncate(16);
+        moves.truncate(SOFTMAX_MOVES);
         let weights: Vec<f32> = moves
             .iter()
             .map(|m| ((m.equity - best_equity) / tau).exp())
@@ -566,19 +570,13 @@ impl<'a> Playout<'a> {
     /// play maximising score minus the other's best reply, or pass.
     fn best_last_turn(&self, p: Player) -> (Option<Move>, i32) {
         let solver = Solver::new(&self.board, self.dict);
-        let rack = rack_from(self.rack(p));
-        let other_rack = rack_from(self.rack(p.other()));
-        let mut moves = solver.find_moves(&rack);
+        let other_rack = self.rack(p.other());
+        let mut moves = solver.find_moves_for(self.rack(p));
         moves.sort_by_key(|m| std::cmp::Reverse(m.score));
 
-        let reply_score = |board: &Board| -> i32 {
-            Solver::new(board, self.dict)
-                .find_moves(&other_rack)
-                .iter()
-                .map(|m| m.score as i32)
-                .max()
-                .unwrap_or(0)
-        };
+        // Only the reply's score matters, so no reply moves are built.
+        let reply_score =
+            |board: &Board| -> i32 { Solver::new(board, self.dict).best_score(other_rack) as i32 };
 
         // Passing: the other player replies on the unchanged board.
         let mut best_value = -reply_score(&self.board);
@@ -701,7 +699,6 @@ struct CandidateSim<'a> {
     draw_count: usize,
     score_diff: i32,
     model: Option<&'a OpponentModel>,
-    rng: Rng,
     total: f32,
     wins: f32,
     iterations: usize,
@@ -742,12 +739,6 @@ impl<'a> CandidateSim<'a> {
             draw_count,
             score_diff,
             model,
-            // The unseen pool is the same for every candidate (it does not
-            // depend on which move we play), so seeding every candidate
-            // identically makes them face the same draw sequences: common
-            // random numbers, which tightens comparisons between candidates
-            // and makes repeated runs reproducible.
-            rng: Rng::with_seed(0x5EED_C0DE),
             total: 0.0,
             wins: 0.0,
             iterations: 0,
@@ -785,35 +776,53 @@ impl<'a> CandidateSim<'a> {
         self.iterations += 1;
     }
 
-    fn run(
-        &mut self,
+    /// Run playouts `start..start + count` (iteration numbers) and return
+    /// what they found, without touching the accumulators, so batches of
+    /// one candidate can run in parallel. Stops early at the deadline or on
+    /// cancellation; the returned batch is then shorter.
+    ///
+    /// Playout `i` draws from its own generator seeded by `i` alone, the
+    /// same for every candidate: common random numbers. Each iteration
+    /// faces the same deal whichever candidate is played, which tightens
+    /// comparisons between candidates, makes runs reproducible, and does
+    /// not depend on how the work is split between threads.
+    fn run_batch(
+        &self,
         dict: &Dictionary,
-        playouts: usize,
+        start: usize,
+        count: usize,
         max_plies: usize,
         deadline: Option<Instant>,
         cancel: Option<&AtomicBool>,
-    ) {
+    ) -> Vec<PlayoutRecord> {
+        let mut out = Vec::with_capacity(count);
         if self.pool.is_empty() {
             // Opponent has nothing: our move ends the game.
-            for _ in 0..playouts {
-                self.record(PlayoutOutcome {
-                    value: self.mv.score as f32,
-                    finished: true,
-                    bag: 0,
-                });
-            }
-            return;
+            out.resize(
+                count,
+                PlayoutRecord {
+                    outcome: PlayoutOutcome {
+                        value: self.mv.score as f32,
+                        finished: true,
+                        bag: 0,
+                    },
+                    opp_bingo: false,
+                    our_bingo: false,
+                },
+            );
+            return out;
         }
 
-        for _ in 0..playouts {
+        for i in start..start + count {
             if deadline.is_some_and(|d| Instant::now() >= d)
                 || cancel.is_some_and(|c| c.load(AtomicOrdering::Relaxed))
             {
-                return;
+                break;
             }
+            let mut rng = Rng::with_seed(iteration_seed(PLAYOUT_SEED, i as u64));
             let shuffled = match self.model {
-                Some(m) if m.has_marginals() => m.dealt(&self.pool, self.draw_count, &mut self.rng),
-                _ => self.pool.shuffled(&mut self.rng),
+                Some(m) if m.has_marginals() => m.dealt(&self.pool, self.draw_count, &mut rng),
+                _ => self.pool.shuffled(&mut rng),
             };
             let (drawn, rest) = shuffled.split_at(self.draw_count);
             let (opp_rack, bag) = rest.split_at(rest.len().min(RACK_SIZE));
@@ -825,10 +834,10 @@ impl<'a> CandidateSim<'a> {
                 // Exchanged tiles go back after we draw; the bag is shuffled
                 // so the position does not matter.
                 bag.extend_from_slice(returned);
-                self.rng.shuffle(&mut bag);
+                rng.shuffle(&mut bag);
             }
 
-            let seed = self.rng.u64(..);
+            let seed = rng.u64(..);
             let mut playout = Playout::new(
                 dict,
                 self.board.clone(),
@@ -845,11 +854,21 @@ impl<'a> CandidateSim<'a> {
             }
 
             let outcome = playout.run_with(Player::Opp, max_plies, &mut |_, _| {});
-            self.opp_bingos +=
-                u32::from(playout.first_move_bingo[Player::Opp as usize] == Some(true));
-            self.our_bingos +=
-                u32::from(playout.first_move_bingo[Player::Us as usize] == Some(true));
-            self.record(outcome);
+            out.push(PlayoutRecord {
+                outcome,
+                opp_bingo: playout.first_move_bingo[Player::Opp as usize] == Some(true),
+                our_bingo: playout.first_move_bingo[Player::Us as usize] == Some(true),
+            });
+        }
+        out
+    }
+
+    /// Add a batch's playouts to the accumulators, in iteration order.
+    fn absorb(&mut self, records: &[PlayoutRecord]) {
+        for r in records {
+            self.opp_bingos += u32::from(r.opp_bingo);
+            self.our_bingos += u32::from(r.our_bingo);
+            self.record(r.outcome);
         }
     }
 
@@ -901,6 +920,29 @@ fn normal_cdf(x: f32) -> f32 {
     let erf = 1.0 - poly * (-z * z).exp();
     let erf = if z >= 0.0 { erf } else { -erf };
     (0.5 * (1.0 + erf)) as f32
+}
+
+/// What one playout reports back to its candidate.
+#[derive(Debug, Clone, Copy)]
+struct PlayoutRecord {
+    outcome: PlayoutOutcome,
+    opp_bingo: bool,
+    our_bingo: bool,
+}
+
+/// Base seed of the playout generators (see [`CandidateSim::run_batch`]).
+const PLAYOUT_SEED: u64 = 0x5EED_C0DE;
+
+/// Playouts per scheduled job: small enough to spread a few candidates
+/// over every core, large enough to amortise scheduling.
+const PLAYOUT_BATCH: usize = 8;
+
+/// SplitMix64 finaliser: a well-mixed seed for iteration `i`.
+fn iteration_seed(base: u64, i: u64) -> u64 {
+    let mut z = base ^ i.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 /// Result of one playout.
@@ -995,17 +1037,41 @@ impl MctsEvaluator {
             if playouts == 0 {
                 continue;
             }
-            if self.config.parallel {
-                let active_set: std::collections::HashSet<usize> = active.iter().copied().collect();
-                sims.par_iter_mut()
-                    .enumerate()
-                    .filter(|(i, _)| active_set.contains(i))
-                    .for_each(|(_, sim)| {
-                        sim.run(dictionary, playouts, max_plies, deadline, cancel)
-                    });
-            } else {
-                for &i in &active {
-                    sims[i].run(dictionary, playouts, max_plies, deadline, cancel);
+            // One job per (candidate, batch of playouts), so every core
+            // stays busy even when only a few candidates are left.
+            let mut jobs: Vec<(usize, usize, usize)> = Vec::new();
+            for &ci in &active {
+                let first = sims[ci].iterations;
+                let mut start = first;
+                while start < first + playouts {
+                    let n = PLAYOUT_BATCH.min(first + playouts - start);
+                    jobs.push((ci, start, n));
+                    start += n;
+                }
+            }
+            let run = |&(ci, start, n): &(usize, usize, usize)| {
+                let records = sims[ci].run_batch(dictionary, start, n, max_plies, deadline, cancel);
+                (ci, start, n, records)
+            };
+            let mut batches: Vec<(usize, usize, usize, Vec<PlayoutRecord>)> =
+                if self.config.parallel {
+                    jobs.par_iter().map(run).collect()
+                } else {
+                    jobs.iter().map(run).collect()
+                };
+            // Keep each candidate's playouts contiguous in iteration order:
+            // after a batch cut short (deadline or cancel), later batches of
+            // that candidate are dropped, so iteration i means the same
+            // deal for every candidate in the paired comparisons.
+            batches.sort_by_key(|&(ci, start, _, _)| (ci, start));
+            let mut cut = vec![false; sims.len()];
+            for (ci, _, n, records) in &batches {
+                if cut[*ci] {
+                    continue;
+                }
+                sims[*ci].absorb(records);
+                if records.len() < *n {
+                    cut[*ci] = true;
                 }
             }
             if deadline.is_some_and(|d| Instant::now() >= d) || self.config.is_cancelled() {
