@@ -59,6 +59,14 @@ cargo run --release
 
 RefEngine is linked statically, so the binary has no runtime library dependency. Run it from the repository root (it looks for `data/` and `external/refengine/data/` next to the executable or in the working directory).
 
+### Benchmarks
+
+```bash
+cargo bench --bench engine
+```
+
+Criterion benchmarks for move generation (EMPTY, MID, END and blank-heavy BEECH positions), playouts per second for a fixed candidate set, and the endgame solver.
+
 ### Building without RefEngine
 
 RefEngine sits behind the `refengine` cargo feature (on by default). Without it the pure-Rust solver, playouts and endgame solver work as usual; only opponent-rack inference is unavailable (the stats pane says so):
