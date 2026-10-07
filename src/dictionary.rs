@@ -129,6 +129,49 @@ pub struct Dictionary {
     word_count: usize,
     /// Leave values from RefEngine's table, when the file was found.
     leaves: Option<LeaveValues>,
+    /// How leave values are weighted by game phase.
+    phase: PhaseScaling,
+}
+
+/// How leave values are weighted as the bag runs out (see
+/// [`PhaseScaling::scale`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PhaseScaling {
+    /// 1.0 above 14 unseen tiles, 0.6 at 8-14, 0.25 at 7 or fewer.
+    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
+    Stepped,
+    /// The same anchor values joined linearly: 1.0 from 21 unseen down to
+    /// 0.6 at 14 and 0.25 at 7, flat below. The default: in 4,000 paired
+    /// greedy self-play games (`examples/selfplay.rs phase 2000`) it beat
+    /// the stepped weights by +0.49 +- 0.33 points of spread per game
+    /// (score 0.501 +- 0.003).
+    #[default]
+    Smoothed,
+}
+
+impl PhaseScaling {
+    /// Leave weight with `unseen` tiles unseen (bag + opponent rack);
+    /// `None` means full weight.
+    pub fn scale(self, unseen: Option<usize>) -> f32 {
+        let Some(n) = unseen else {
+            return 1.0;
+        };
+        match self {
+            PhaseScaling::Stepped => phase_scale(Some(n)),
+            PhaseScaling::Smoothed => {
+                let n = n as f32;
+                if n <= 7.0 {
+                    0.25
+                } else if n <= 14.0 {
+                    0.25 + (n - 7.0) / 7.0 * 0.35
+                } else if n <= 21.0 {
+                    0.6 + (n - 14.0) / 7.0 * 0.4
+                } else {
+                    1.0
+                }
+            }
+        }
+    }
 }
 
 impl Dictionary {
@@ -152,6 +195,7 @@ impl Dictionary {
             dawg,
             word_count: count,
             leaves: None,
+            phase: PhaseScaling::default(),
         })
     }
 
@@ -160,6 +204,19 @@ impl Dictionary {
     pub fn with_leaves(mut self, leaves: LeaveValues) -> Self {
         self.leaves = Some(leaves);
         self
+    }
+
+    /// Use `phase` to weight leave values by game phase.
+    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
+    pub fn with_phase_scaling(mut self, phase: PhaseScaling) -> Self {
+        self.phase = phase;
+        self
+    }
+
+    /// The phase weighting in use.
+    #[allow(dead_code)] // library API (self-play harness); the binary does not use it
+    pub fn phase_scaling(&self) -> PhaseScaling {
+        self.phase
     }
 
     /// True when leave values come from a fitted table rather than the
@@ -184,9 +241,10 @@ impl Dictionary {
         if leave.is_empty() {
             return 0.0;
         }
+        let scale = self.phase.scale(unseen);
         if let Some(table) = &self.leaves {
-            if let Some(v) = table.value(leave) {
-                return (v + bingo_bonus_correction(leave, BINGO_BONUS)) * phase_scale(unseen);
+            if let Some(v) = Self::table_value(table, leave) {
+                return v * scale;
             }
             if leave.len() == crate::tile::RACK_SIZE {
                 let mut total = 0.0;
@@ -198,17 +256,50 @@ impl Dictionary {
                         .filter(|(i, _)| *i != skip)
                         .map(|(_, t)| *t)
                         .collect();
-                    if let Some(v) = table.value(&sub) {
-                        total += v + bingo_bonus_correction(&sub, BINGO_BONUS);
+                    if let Some(v) = Self::table_value(table, &sub) {
+                        total += v;
                         found += 1;
                     }
                 }
                 if found == leave.len() {
-                    return total / found as f32 * phase_scale(unseen);
+                    return total / found as f32 * scale;
                 }
             }
         }
-        leave_value_with_phase(leave, unseen)
+        // Heuristic fallback, scaled the same way.
+        leave_value_with_phase(leave, None) * scale
+    }
+
+    /// Table value of a leave with the bingo-bonus correction, extended to
+    /// leaves the Scrabble-fitted table cannot hold: Crossplay has three
+    /// blanks and the table at most two, so each blank beyond the second
+    /// is valued at what the second adds over the first. Without this a
+    /// three-blank leave fell back to the per-letter heuristic, on a
+    /// different scale from every other leave.
+    fn table_value(table: &LeaveValues, leave: &[Tile]) -> Option<f32> {
+        let correction = bingo_bonus_correction(leave, BINGO_BONUS);
+        if let Some(v) = table.value(leave) {
+            return Some(v + correction);
+        }
+        let blanks = leave.iter().filter(|t| t.is_blank).count();
+        if blanks <= 2 {
+            return None;
+        }
+        let mut reduced = Vec::with_capacity(leave.len());
+        let mut kept_blanks = 0;
+        for t in leave {
+            if t.is_blank {
+                if kept_blanks == 2 {
+                    continue;
+                }
+                kept_blanks += 1;
+            }
+            reduced.push(*t);
+        }
+        let base = table.value(&reduced)?;
+        let one = table.value(&[Tile::blank(' ')])?;
+        let two = table.value(&[Tile::blank(' '), Tile::blank(' ')])?;
+        Some(base + (blanks - 2) as f32 * (two - one) + correction)
     }
 
     /// Check if a word is valid
@@ -278,7 +369,8 @@ impl Dictionary {
     }
 }
 
-/// Leave weight by game phase: leaves matter less as redraws run out.
+/// Leave weight by game phase: leaves matter less as redraws run out
+/// ([`PhaseScaling::Stepped`]).
 pub fn phase_scale(unseen: Option<usize>) -> f32 {
     match unseen {
         Some(n) if n <= 7 => 0.25, // Endgame: no redraws; the 2-ply solver decides
@@ -340,6 +432,7 @@ pub fn load_default_dictionary() -> Result<Dictionary> {
 
 #[cfg(test)]
 mod tests {
+    use super::PhaseScaling;
     use crate::datafiles::{test_data, LEAVES_KLV2};
 
     #[test]
@@ -352,6 +445,63 @@ mod tests {
         // (an LFS pointer stub falls back to heuristic leaves).
         let klv_real = test_data::file(LEAVES_KLV2).is_some();
         assert_eq!(dict.has_leave_table(), klv_real);
+    }
+
+    /// Leaves the Scrabble table cannot hold (three blanks) are valued on
+    /// the table's scale, not by the per-letter heuristic: the third blank
+    /// adds what the second did, and a full rack with three blanks is the
+    /// mean of its sub-leaves like any other.
+    #[test]
+    fn three_blank_leaves_stay_on_the_table_scale() {
+        use crate::tile::Tile;
+        let Some(dict) = test_data::dictionary() else {
+            return;
+        };
+        if !dict.has_leave_table() {
+            return;
+        }
+        let blanks = |n: usize, rest: &str| -> Vec<Tile> {
+            let mut v: Vec<Tile> = (0..n).map(|_| Tile::blank(' ')).collect();
+            v.extend(rest.chars().map(Tile::new));
+            v
+        };
+        let one = dict.leave_value(&blanks(1, ""), None);
+        let two = dict.leave_value(&blanks(2, ""), None);
+        let three = dict.leave_value(&blanks(3, ""), None);
+        assert!(two > one && three > two, "{one} {two} {three}");
+        // Far below the heuristic stacking a flat 25 per blank (75+).
+        assert!(three < 70.0, "{three}");
+
+        let with_letters = dict.leave_value(&blanks(3, "ERS"), None);
+        let two_letters = dict.leave_value(&blanks(2, "ERS"), None);
+        assert!(with_letters > two_letters && with_letters < two_letters + 30.0);
+
+        // A seven-tile rack with three blanks averages its sub-leaves.
+        let rack = blanks(3, "AEIN");
+        let v = dict.leave_value(&rack, None);
+        assert!(v.is_finite() && v > two_letters - 30.0 && v < 80.0, "{v}");
+    }
+
+    /// Smoothed phase weights pass through the stepped anchors and are
+    /// monotone in the unseen count.
+    #[test]
+    fn smoothed_phase_scaling() {
+        let s = PhaseScaling::Smoothed;
+        assert_eq!(s.scale(None), 1.0);
+        assert_eq!(s.scale(Some(3)), 0.25);
+        assert_eq!(s.scale(Some(7)), 0.25);
+        assert!((s.scale(Some(14)) - 0.6).abs() < 1e-6);
+        assert_eq!(s.scale(Some(21)), 1.0);
+        assert_eq!(s.scale(Some(80)), 1.0);
+        let mut prev = 0.0;
+        for n in 0..=100 {
+            let v = s.scale(Some(n));
+            assert!(v >= prev);
+            prev = v;
+        }
+        // The stepped weights jump at the same anchors.
+        assert_eq!(PhaseScaling::Stepped.scale(Some(8)), 0.6);
+        assert_eq!(PhaseScaling::Stepped.scale(Some(15)), 1.0);
     }
 
     #[test]
