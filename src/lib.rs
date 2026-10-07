@@ -8,6 +8,7 @@ pub mod datafiles;
 pub mod dictionary;
 pub mod endgame;
 pub mod game;
+pub mod games;
 pub mod leaves;
 pub mod logging;
 #[cfg(feature = "refengine")]
