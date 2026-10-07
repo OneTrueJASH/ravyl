@@ -5,7 +5,7 @@
 ```bash
 git clone --recurse-submodules https://github.com/OneTrueJASH/cpsolver2
 cd cpsolver2
-git lfs install && git lfs pull   # the NWL23.* lexicon files are in Git LFS
+git lfs install && git lfs pull   # the lexicon files are in Git LFS
 ```
 
 You need Rust 1.88 or newer and a C compiler (`build.rs` compiles the

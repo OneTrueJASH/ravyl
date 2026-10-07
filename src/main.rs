@@ -93,7 +93,7 @@ Options:
   -h, --help        Print this help
   -V, --version     Print the version
 
-Data is looked for in $CPSOLVER_DATA_DIR, then --data-dir, then the user
+Data is looked for in --data-dir, then $CPSOLVER_DATA_DIR, then the user
 data directory (cpsolver2/), then <exe>/../share/cpsolver2, then the
 working directory.
 ";

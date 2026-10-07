@@ -27,7 +27,7 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 - Themes (dark, light, ansi16, no-color) chosen by `display.theme`,
   honoring `NO_COLOR` and `COLORTERM`, with ASCII fallbacks.
 - Stacked layout for narrow terminals and a "terminal too small" message.
-- A data-directory search order (`$CPSOLVER_DATA_DIR`, `--data-dir`, the
+- A data-directory search order (`--data-dir`, `$CPSOLVER_DATA_DIR`, the
   user data directory, `<exe>/../share/cpsolver2`, the working directory)
   and `--help` / `--version`.
 - Criterion benchmarks, a self-play strength harness
@@ -37,6 +37,9 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   cargo-deny; a release workflow (dist) that runs only by hand.
 
 ### Changed
+- Licensed under GPL-3.0-or-later (was MIT), since the binary links
+  GPL-3.0 RefEngine; copyright holder corrected to OneTrueJASH.
+- `--data-dir` now takes precedence over `$CPSOLVER_DATA_DIR`.
 - RefEngine is compiled from vendored source (a pinned submodule) and linked
   statically, behind the default `refengine` cargo feature; without it the
   pure-Rust solver builds on its own.

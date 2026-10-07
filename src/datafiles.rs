@@ -1,7 +1,7 @@
 //! Locating the data files (dictionary FST, RefEngine lexica) and telling a
 //! real file from a Git LFS pointer stub.
 //!
-//! The `external/refengine/data/lexica/NWL23.*` files are stored in Git LFS.
+//! The `external/refengine/data/lexica/AMERICAN.*` files are stored in Git LFS.
 //! A checkout without `git lfs pull` leaves ~130-byte text pointers in
 //! their place; handing one of those to RefEngine or the leave parser fails
 //! with an unhelpful error, so callers check here first.
@@ -14,9 +14,9 @@ pub const WORDS_FST: &str = "data/words.fst";
 /// Relative location of RefEngine's data directory under a data root.
 pub const REF_ENGINE_DATA: &str = "external/refengine/data";
 /// Relative location of the leave table under a data root.
-pub const LEAVES_KLV2: &str = "external/refengine/data/lexica/NWL23.klv2";
+pub const LEAVES_KLV2: &str = "external/refengine/data/lexica/AMERICAN.klv2";
 /// Relative location of RefEngine's lexicon under a data root.
-pub const LEXICON_KWG: &str = "external/refengine/data/lexica/NWL23.kwg";
+pub const LEXICON_KWG: &str = "external/refengine/data/lexica/AMERICAN.kwg";
 
 /// Hint shown whenever an LFS pointer stub is found instead of data.
 pub const LFS_HINT: &str = "run `git lfs install && git lfs pull`";
@@ -71,8 +71,8 @@ pub fn set_cli_data_dir(dir: PathBuf) {
 
 /// Directories searched for data files, in order:
 ///
-/// 1. `$CPSOLVER_DATA_DIR`
-/// 2. `--data-dir`
+/// 1. `--data-dir`
+/// 2. `$CPSOLVER_DATA_DIR`
 /// 3. the user data directory (`~/.local/share/cpsolver2`,
 ///    `~/Library/Application Support/cpsolver2`)
 /// 4. `<exe>/../share/cpsolver2` (an installed layout)
@@ -103,8 +103,8 @@ fn ordered_roots(
     exe: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    roots.extend(env.filter(|p| !p.as_os_str().is_empty()));
     roots.extend(cli);
+    roots.extend(env.filter(|p| !p.as_os_str().is_empty()));
     roots.extend(user_data.map(|d| d.join("cpsolver2")));
     roots.extend(
         exe.as_deref()
@@ -157,7 +157,7 @@ pub fn lfs_warning() -> Option<String> {
     });
     stubbed.then(|| {
         format!(
-            "NWL23 data files are Git LFS pointers (no leave table or inference): {}",
+            "Lexicon data files are Git LFS pointers (no leave table or inference): {}",
             LFS_HINT
         )
     })
@@ -243,8 +243,8 @@ mod tests {
             Some("/opt/cp/bin/cpsolver2".into()),
         );
         let expect: Vec<PathBuf> = vec![
-            "/env".into(),
             "/cli".into(),
+            "/env".into(),
             "/home/u/.local/share/cpsolver2".into(),
             "/opt/cp/bin/../share/cpsolver2".into(),
             ".".into(),

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::app::SortMode;
 
 /// The lexicon used by Crossplay (fixed, not user-configurable).
-pub const LEXICON: &str = "NWL23";
+/// RefEngine picks the letter distribution from the lexicon name's prefix and
+/// rejects names it does not know; `America…` maps to English.
+pub const LEXICON: &str = "AMERICAN";
 
 /// Display preferences. Missing keys take their defaults, so a file
 /// written by an older version still loads.
@@ -265,6 +267,6 @@ mod tests {
 
     #[test]
     fn test_lexicon_constant() {
-        assert_eq!(LEXICON, "NWL23");
+        assert_eq!(LEXICON, "AMERICAN");
     }
 }

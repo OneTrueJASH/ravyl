@@ -4,8 +4,7 @@ members = ["cargo:."]
 # Release builds with dist (https://opensource.axo.dev/cargo-dist/).
 # Releases are cut only by running the Release workflow by hand
 # (workflow_dispatch); pushing a tag does nothing. No public release has
-# been cut: the licensing of the bundled RefEngine code and of the NWL23
-# data files is still an open question for the owner.
+# been cut. The archives carry no data files.
 [dist]
 cargo-dist-version = "0.32.0"
 ci = "github"

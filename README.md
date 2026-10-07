@@ -45,10 +45,10 @@ With tiles still in the bag the app plays each candidate out many times under th
 ```bash
 git clone --recurse-submodules https://github.com/OneTrueJASH/cpsolver2
 cd cpsolver2
-git lfs install && git lfs pull   # if the NWL23.* files are ~130-byte pointer stubs
+git lfs install && git lfs pull   # if the lexicon files are ~130-byte pointer stubs
 ```
 
-`NWL23.klv2` also supplies the leave values; a per-letter heuristic is used if it is missing or still an LFS pointer.
+`AMERICAN.klv2` also supplies the leave values; a per-letter heuristic is used if it is missing or still an LFS pointer.
 
 ### Build and run
 
@@ -59,8 +59,8 @@ cargo run --release
 
 RefEngine is linked statically, so the binary has no runtime library dependency. It needs the data files at run time and looks for a directory holding `data/words.fst` and `external/refengine/data/` in this order:
 
-1. `$CPSOLVER_DATA_DIR`
-2. `--data-dir <DIR>`
+1. `--data-dir <DIR>`
+2. `$CPSOLVER_DATA_DIR`
 3. the user data directory: `~/.local/share/cpsolver2` on Linux, `~/Library/Application Support/cpsolver2` on macOS
 4. `<exe>/../share/cpsolver2`
 5. the working directory (running from a checkout)
@@ -188,4 +188,8 @@ Each run logs to `cpsolver2-<pid>.log` in `~/.local/state/cpsolver2/` on Linux, 
 
 ## License
 
-[MIT](LICENSE)
+Copyright (C) 2026 OneTrueJASH.
+
+cpsolver2 is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
+
+It is GPL because it links RefEngine (GPL-3.0), vendored in `external/refengine-src`; see [`external/refengine/NOTICE`](external/refengine/NOTICE) for the RefEngine data files and the ones modified for Crossplay. Anyone you give a binary to is entitled to the matching source.

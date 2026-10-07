@@ -144,7 +144,7 @@ impl HelpPopup {
                 desc,
             )),
             Line::from(Span::styled(
-                "Based on crossplay-solver (github.com/OneTrueJASH/crossplay-solver)",
+                "cpsolver2 by OneTrueJASH (github.com/OneTrueJASH/cpsolver2)",
                 desc,
             )),
             Line::from(Span::styled(

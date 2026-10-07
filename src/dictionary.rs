@@ -373,7 +373,7 @@ pub fn phase_scale(unseen: Option<usize>) -> f32 {
 }
 
 /// Load the dictionary and leave table from one data root: `data/words.fst`
-/// plus `external/refengine/data/lexica/NWL23.klv2` when it is real data. A
+/// plus `external/refengine/data/lexica/AMERICAN.klv2` when it is real data. A
 /// missing table or an LFS pointer stub falls back to heuristic leaves.
 pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
     let fst_path = root.join(datafiles::WORDS_FST);
@@ -410,7 +410,7 @@ pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
 }
 
 /// Load the default dictionary (`data/words.fst`) from the first data root
-/// that has it, attaching RefEngine's leave table (`NWL23.klv2`) when present.
+/// that has it, attaching RefEngine's leave table (`AMERICAN.klv2`) when present.
 pub fn load_default_dictionary() -> Result<Dictionary> {
     let fst_path = datafiles::find_data_file(datafiles::WORDS_FST).context(
         "Could not find the dictionary (data/words.fst). Point --data-dir or \
