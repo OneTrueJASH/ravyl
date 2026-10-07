@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::app::BoardTab;
-use crate::logging::{log_path_str, read_log_lines};
+use crate::logging::{log_path_str, with_section_lines};
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
 
@@ -86,22 +86,27 @@ pub fn render_log_viewer(
     let log_path = log_path_str();
     let inner_height = area.height.saturating_sub(2) as usize;
 
-    let lines = read_log_lines();
-    let total_lines = lines.len();
+    // Only the visible window is copied out of the in-memory log.
+    let (visible, total_lines, effective_scroll) = with_section_lines(|lines| {
+        let total_lines = lines.len();
+        let max_scroll = total_lines.saturating_sub(inner_height);
+        let effective_scroll = scroll_offset.min(max_scroll);
+        let end_idx = total_lines.saturating_sub(effective_scroll);
+        let start_idx = end_idx.saturating_sub(inner_height);
+        (
+            lines[start_idx..end_idx].to_vec(),
+            total_lines,
+            effective_scroll,
+        )
+    });
 
-    let max_scroll = total_lines.saturating_sub(inner_height);
-    let effective_scroll = scroll_offset.min(max_scroll);
-
-    let end_idx = total_lines.saturating_sub(effective_scroll);
-    let start_idx = end_idx.saturating_sub(inner_height);
-
-    let visible_lines: Vec<Line> = lines[start_idx..end_idx]
-        .iter()
+    let visible_lines: Vec<Line> = visible
+        .into_iter()
         .map(|line| {
             if line.starts_with('[') {
                 if let Some(bracket_end) = line.find(']') {
-                    let timestamp = &line[..=bracket_end];
-                    let rest = &line[bracket_end + 1..];
+                    let timestamp = line[..=bracket_end].to_string();
+                    let rest = line[bracket_end + 1..].to_string();
 
                     let content_color = if rest.contains("ERROR") || rest.contains("error") {
                         theme::MSG_ERROR
@@ -118,16 +123,10 @@ pub fn render_log_viewer(
                         Span::styled(rest, Style::default().fg(content_color)),
                     ])
                 } else {
-                    Line::from(Span::styled(
-                        line.as_str(),
-                        Style::default().fg(theme::TEXT_PRIMARY),
-                    ))
+                    Line::from(Span::styled(line, Style::default().fg(theme::TEXT_PRIMARY)))
                 }
             } else {
-                Line::from(Span::styled(
-                    line.as_str(),
-                    Style::default().fg(theme::TEXT_PRIMARY),
-                ))
+                Line::from(Span::styled(line, Style::default().fg(theme::TEXT_PRIMARY)))
             }
         })
         .collect();
