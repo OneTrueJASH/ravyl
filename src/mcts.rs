@@ -1030,7 +1030,6 @@ impl MctsEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dictionary::load_default_dictionary;
 
     #[test]
     fn test_tile_pool_creation() {
@@ -1094,7 +1093,9 @@ mod tests {
     /// prefers better moves; our own side stays exact.
     #[test]
     fn opponent_policy_errs_at_temperature() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut playout = Playout::new_game(&dict, 42);
 
         let best = playout.best_by_equity(Player::Opp).unwrap();
@@ -1144,7 +1145,9 @@ mod tests {
     /// `evaluate` and `evaluate_with_model(None)` are the same computation.
     #[test]
     fn evaluate_without_model_is_unchanged() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut state = SolverState::new();
         for ch in ['C', 'A', 'T', 'S', 'E', 'R', 'N'] {
             state.add_to_rack(ch);
@@ -1170,7 +1173,9 @@ mod tests {
 
     #[test]
     fn test_mcts_evaluator_basic() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let state = SolverState::new();
 
         let mut test_state = state.clone();
@@ -1210,7 +1215,9 @@ mod tests {
     /// final turns rather than when a rack empties.
     #[test]
     fn test_playout_follows_equal_turn_rule() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut board = Board::new();
         board.place_tile(7, 6, Tile::new('C'));
         board.place_tile(7, 7, Tile::new('A'));
@@ -1266,7 +1273,9 @@ mod tests {
     /// terminate with an empty bag and a finite value.
     #[test]
     fn test_pre_endgame_evaluation_terminates() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         // 87 tiles on the board and 4 in our rack: 9 unseen, bag of 2.
         const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
         let state = SolverState::from_cgp(&format!("{} AEST", MID)).unwrap();
@@ -1323,7 +1332,9 @@ mod tests {
     /// their short-run means.
     #[test]
     fn fully_simulated_candidates_rank_first() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
         let state = SolverState::from_cgp(&format!("{} ES", MID)).unwrap();
         let suggestions = state.get_suggestions(&dict);
@@ -1354,7 +1365,9 @@ mod tests {
     /// for every candidate.
     #[test]
     fn time_budget_is_honoured() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
         let state = SolverState::from_cgp(&format!("{} AEST", MID)).unwrap();
         let suggestions = state.get_suggestions(&dict);
@@ -1381,7 +1394,9 @@ mod tests {
     #[ignore]
     fn bench_pre_endgame() {
         use std::time::Instant;
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         const MID: &str = "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6";
         // Same dense board with the three board blanks turned into real
         // tiles, so the three blanks are unseen and land in the opponent's
@@ -1510,7 +1525,9 @@ mod tests {
     #[test]
     #[ignore]
     fn study_spread_variance() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let games: usize = std::env::var("GAMES")
             .ok()
             .and_then(|g| g.parse().ok())
@@ -1633,7 +1650,9 @@ mod tests {
     fn study_loss_calibration() {
         use crate::game::observed_move_loss;
 
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let games: usize = std::env::var("GAMES")
             .ok()
             .and_then(|g| g.parse().ok())
@@ -1762,7 +1781,9 @@ mod tests {
     #[test]
     #[ignore]
     fn study_bingo_probability() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let games: usize = std::env::var("GAMES")
             .ok()
             .and_then(|g| g.parse().ok())
@@ -1901,7 +1922,9 @@ mod tests {
     /// never "emptied" by it.
     #[test]
     fn playout_exchange_conserves_tiles_and_bag_size() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let bag = tiles_of("EEEEEEEEEE");
         let mut p = Playout::new(
             &dict,
@@ -1939,7 +1962,9 @@ mod tests {
     /// before the exchanged tiles went back).
     #[test]
     fn full_exchange_with_bag_of_seven_does_not_claim_final_turn() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut p = Playout::new(
             &dict,
             Board::new(),
@@ -1958,7 +1983,9 @@ mod tests {
     /// move for the other side and then the emptier's final move.
     #[test]
     fn playout_endings_follow_the_equal_turn_sequence() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let board = Board::new();
         let mut b = board.clone();
         b.place_tile(7, 6, Tile::new('C'));
@@ -2030,7 +2057,9 @@ mod tests {
     /// evaluator handles them alongside plays.
     #[test]
     fn exchange_candidates_evaluate() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let state =
             SolverState::from_cgp("15/15/15/15/15/15/15/3BEECH7/7I7/7K7/7E7/7r7/15/15/15 QVWXZ?A")
                 .unwrap();

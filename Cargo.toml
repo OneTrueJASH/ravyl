@@ -7,16 +7,30 @@ license = "MIT"
 repository = "https://github.com/OneTrueJASH/cpsolver2"
 keywords = ["crossplay", "word-game", "solver", "tui", "scrabble"]
 categories = ["command-line-utilities", "games"]
-rust-version = "1.82"
+rust-version = "1.88"
+publish = false
+
+[features]
+default = ["refengine"]
+# Opponent-rack inference (and the reference move generator in tests) via
+# the RefEngine C engine, compiled from external/refengine-src.
+refengine = ["dep:cc", "dep:libc"]
 
 [dependencies]
 ratatui = "0.30"
-crossterm = "0.28"
 fst = "0.4"
 anyhow = "1.0"
 rayon = "1.10"
 fastrand = "2.3.0"
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 dirs = "6.0"
+
+[build-dependencies]
+cc = { version = "1.2", optional = true }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

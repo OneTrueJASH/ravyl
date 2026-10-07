@@ -7,7 +7,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use crate::board::{Board, Direction, BOARD_SIZE};
 use crate::dictionary::Dictionary;
@@ -233,6 +235,8 @@ pub struct App {
     endgame_receiver: Option<Receiver<Vec<EndgameMove>>>,
     pub mcts_progress: Option<MctsProgress>,
     refengine_simulator: Option<Arc<RefSimulator>>,
+    /// Why RefEngine could not be started, when it could not.
+    refengine_unavailable: Option<String>,
     pub dialog: DialogState,
     pub should_quit: bool,
     pub board_tab: BoardTab,
@@ -297,12 +301,13 @@ impl App {
 
     /// Create a new App with the given settings.
     pub fn with_settings(settings: Settings) -> Self {
-        let refengine_simulator = match RefSimulator::new("external/refengine/data", settings::LEXICON)
-        {
-            Ok(sim) => Some(Arc::new(sim)),
+        let refengine = crate::datafiles::refengine_data_dir()
+            .and_then(|dir| RefSimulator::new(&dir.to_string_lossy(), settings::LEXICON));
+        let (refengine_simulator, refengine_unavailable) = match refengine {
+            Ok(sim) => (Some(Arc::new(sim)), None),
             Err(e) => {
-                eprintln!("RefEngine init failed: {}", e);
-                None
+                log(&format!("Opponent inference unavailable: {}", e));
+                (None, Some(e))
             }
         };
 
@@ -326,6 +331,7 @@ impl App {
             endgame_receiver: None,
             mcts_progress: None,
             refengine_simulator,
+            refengine_unavailable,
             inferred_opponent_rack: None,
             last_applied_board: None,
             pending_opponent_tiles: None,
@@ -359,6 +365,13 @@ impl App {
         let temperature = (measured - OPP_LOSS_BASELINE) / OPP_LOSS_PER_TEMPERATURE;
         let shrink = n as f32 / (n as f32 + 2.0);
         (temperature * shrink).clamp(0.0, MAX_OPP_TEMPERATURE)
+    }
+
+    /// Note for the stats pane when opponent inference cannot run.
+    pub fn inference_note(&self) -> Option<&'static str> {
+        self.refengine_unavailable
+            .as_ref()
+            .map(|_| "inference unavailable")
     }
 
     /// Estimated true equity loss per opponent move for the stats pane,
@@ -1912,7 +1925,7 @@ mod tests {
     use crate::game::SolverState;
 
     /// Build an App without touching the user's settings file. Callers
-    /// must hold `REF_ENGINE_TEST_LOCK` for as long as the App may use RefEngine
+    /// must hold `RefEngine test lock for as long as the App may use RefEngine
     /// (construction and any inference it starts).
     fn test_app() -> App {
         App::with_settings(Settings::default())
@@ -1953,11 +1966,12 @@ mod tests {
 
     #[test]
     fn final_turn_inferred_from_applied_move() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut app = test_app();
-        app.dictionary = Some(Arc::new(
-            crate::dictionary::load_default_dictionary().unwrap(),
-        ));
+        app.dictionary = Some(Arc::new(dict));
 
         // 80 tiles on the board + 7 in our rack = 13 unseen = bag of 6.
         app.state = state_with(80, 7);
@@ -1990,11 +2004,12 @@ mod tests {
     /// the auto-score rolls the measurement back too.
     #[test]
     fn opponent_moves_are_measured_and_undone() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut app = test_app();
-        app.dictionary = Some(Arc::new(
-            crate::dictionary::load_default_dictionary().unwrap(),
-        ));
+        app.dictionary = Some(Arc::new(dict));
 
         // Play our own move first so the board snapshot exists.
         for ch in ['A', 'E', 'I', 'O', 'U', 'S', 'T'] {
@@ -2044,11 +2059,12 @@ mod tests {
     /// the next evaluation would pick up a stale result.
     #[test]
     fn inference_is_polled_after_ranking() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
         let mut app = test_app();
-        app.dictionary = Some(Arc::new(
-            crate::dictionary::load_default_dictionary().unwrap(),
-        ));
+        app.dictionary = Some(Arc::new(dict));
         // Our opening, then the opponent hooked an S: the diff yields tiles.
         app.state =
             SolverState::from_cgp("15/15/15/15/15/15/15/3ANESTRI5/15/15/15/15/15/15/15 DEGILOU")
@@ -2074,7 +2090,7 @@ mod tests {
 
     #[test]
     fn our_move_ends_game_depends_on_final_turn() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let _lock = crate::datafiles::test_data::refengine_lock();
         let mut app = test_app();
         app.state = state_with(90, 3);
         assert_eq!(app.state.unseen_tile_count(), 7);

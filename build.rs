@@ -1,21 +1,70 @@
+//! Compiles the vendored RefEngine C engine into a static library when the
+//! `refengine` feature is on (the default). RefEngine is only used for opponent
+//! rack inference and as the reference move generator in tests; without the
+//! feature the pure-Rust solver builds on its own.
+
+#[cfg(feature = "refengine")]
 use std::env;
-use std::path::PathBuf;
+#[cfg(feature = "refengine")]
+use std::path::{Path, PathBuf};
 
 fn main() {
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let refengine_dir = PathBuf::from(&manifest_dir).join("external/refengine");
+    println!("cargo:rerun-if-changed=build.rs");
+    #[cfg(feature = "refengine")]
+    build_refengine();
+}
 
-    println!("cargo:rustc-link-search=native={}", refengine_dir.display());
-    println!("cargo:rustc-link-lib=dylib=refengine");
+#[cfg(feature = "refengine")]
+fn collect_c_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            collect_c_sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "c") {
+            out.push(path);
+        }
+    }
+}
 
-    #[cfg(target_os = "macos")]
-    {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", refengine_dir.display());
-        println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../external/refengine");
+#[cfg(feature = "refengine")]
+fn build_refengine() {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let src_dir = manifest_dir.join("external/refengine-src/src");
+    println!("cargo:rerun-if-changed={}", src_dir.display());
+
+    let mut sources = Vec::new();
+    collect_c_sources(&src_dir, &mut sources);
+    if sources.is_empty() {
+        panic!(
+            "RefEngine sources not found in {}.\n\
+             Run `git submodule update --init` to fetch them, or build with \
+             `--no-default-features` to leave RefEngine out.",
+            src_dir.display()
+        );
     }
 
-    println!(
-        "cargo:rerun-if-changed={}",
-        refengine_dir.join("librefengine.dylib").display()
-    );
+    let mut build = cc::Build::new();
+    build
+        .files(&sources)
+        .include(&src_dir)
+        .define("BOARD_DIM", "15")
+        .define("RACK_SIZE", "7")
+        .define("NDEBUG", None)
+        .opt_level(3)
+        // RefEngine is built with -Werror upstream; warnings from a different
+        // compiler version are not ours to fix here.
+        .warnings(false)
+        .flag_if_supported("-Wno-trigraphs")
+        .flag_if_supported("-pthread");
+    build.compile("refengine");
+
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "windows" {
+        println!("cargo:rustc-link-lib=pthread");
+        println!("cargo:rustc-link-lib=m");
+    }
 }

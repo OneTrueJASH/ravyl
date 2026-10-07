@@ -32,6 +32,9 @@ pub struct RackStatsWidget<'a> {
     /// Mean measured equity loss per opponent move and how many were
     /// measured, once any have been.
     opp_skill: Option<(f32, u32)>,
+    /// Shown instead of the inference lines when inference cannot run
+    /// (e.g. a build without RefEngine).
+    inference_note: Option<&'a str>,
 }
 
 impl<'a> RackStatsWidget<'a> {
@@ -53,7 +56,14 @@ impl<'a> RackStatsWidget<'a> {
             final_turn: final_turn.0,
             final_turn_known: final_turn.1,
             opp_skill,
+            inference_note: None,
         }
+    }
+
+    /// Note to show when opponent inference is unavailable.
+    pub fn with_inference_note(mut self, note: Option<&'a str>) -> Self {
+        self.inference_note = note;
+        self
     }
 
     fn render_text(buf: &mut Buffer, x: u16, y: u16, max_x: u16, text: &str, style: Style) {
@@ -459,6 +469,22 @@ impl Widget for RackStatsWidget<'_> {
                 }
             }
 
+            if self.inferred_rack.is_none() {
+                if let Some(note) = self.inference_note {
+                    if row < inner.y + inner.height {
+                        Self::render_text(
+                            buf,
+                            inner.x,
+                            row,
+                            max_x,
+                            &format!("Opp kept: {}", note),
+                            Style::new().fg(theme::TEXT_DIM),
+                        );
+                        row += 1;
+                    }
+                }
+            }
+
             // === Measured opponent strength ===
             if let Some((mean_loss, moves)) = self.opp_skill {
                 if row < inner.y + inner.height {
@@ -526,6 +552,7 @@ pub fn render_rack_stats(
     scores: (u32, u32),
     final_turn: (FinalTurn, bool),
     opp_skill: Option<(f32, u32)>,
+    inference_note: Option<&str>,
 ) {
     let widget = RackStatsWidget::new(
         state,
@@ -534,6 +561,7 @@ pub fn render_rack_stats(
         scores,
         final_turn,
         opp_skill,
-    );
+    )
+    .with_inference_note(inference_note);
     frame.render_widget(widget, area);
 }

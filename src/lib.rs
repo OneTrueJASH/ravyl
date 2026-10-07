@@ -4,6 +4,7 @@
 //! The TUI application modules (app, ui, settings) are only available in the binary.
 
 pub mod board;
+pub mod datafiles;
 pub mod dictionary;
 pub mod endgame;
 pub mod game;

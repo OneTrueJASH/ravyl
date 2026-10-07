@@ -4,11 +4,13 @@
 
 mod app;
 mod board;
+mod datafiles;
 mod dictionary;
 mod endgame;
 mod game;
 mod leaves;
 mod logging;
+#[cfg(feature = "refengine")]
 mod refengine_ffi;
 mod refengine_mcts;
 mod mcts;
@@ -22,7 +24,7 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::{
+use ratatui::crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -186,6 +188,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             (app.our_score, app.opp_score),
             (app.final_turn, app.final_turn_known),
             opp_skill,
+            app.inference_note(),
         );
     }
 
@@ -329,11 +332,11 @@ mod ui_tests {
             .collect()
     }
 
-    /// Callers hold `REF_ENGINE_TEST_LOCK` while the App lives (it may start
+    /// Callers hold the RefEngine test lock while the App lives (it may start
     /// RefEngine inference in the background).
-    fn sample_app() -> App {
+    fn sample_app() -> Option<App> {
         let mut app = App::with_settings(settings::Settings::default());
-        let dict = dictionary::load_default_dictionary().unwrap();
+        let dict = crate::datafiles::test_data::dictionary()?;
         app.set_dictionary(dict);
         app.state = game::SolverState::from_cgp(
             "15/15/15/15/15/15/15/3BEECH7/7I7/7K7/7E7/7r7/15/15/15 AEINRS?",
@@ -350,15 +353,17 @@ mod ui_tests {
             .iter()
             .position(|m| m.tiles_used.iter().all(|(r, _, _)| *r != 0 && *r != 14))
             .unwrap_or(0);
-        app
+        Some(app)
     }
 
     /// Every board row must be visible at common terminal sizes: the board
     /// picks a geometry that fits instead of clipping its bottom rows.
     #[test]
     fn board_fits_common_terminal_sizes() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
-        let app = sample_app();
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(app) = sample_app() else {
+            return;
+        };
         for (w, h) in [
             (220, 60),
             (200, 50),
@@ -410,8 +415,10 @@ mod ui_tests {
     #[test]
     #[ignore]
     fn ui_snapshots() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
-        let mut app = sample_app();
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = sample_app() else {
+            return;
+        };
         // Evaluate so the results columns are populated in the renders.
         app.run_mcts_evaluation();
         while app.is_mcts_running() {
@@ -437,9 +444,12 @@ mod render_bench {
     #[test]
     #[ignore]
     fn bench_render() {
-        let _lock = crate::refengine_ffi::tests::REF_ENGINE_TEST_LOCK.lock().unwrap();
+        let _lock = crate::datafiles::test_data::refengine_lock();
         let mut app = App::with_settings(settings::Settings::default());
-        app.set_dictionary(dictionary::load_default_dictionary().unwrap());
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
+        app.set_dictionary(dict);
         app.state = game::SolverState::from_cgp(
             "14U/5HELM3ZIN/4VIG7T/6AYES3BI/6DOWER2AL/9GOOFS1/1BRA4GOWN1I1/POETIC1QI2L1N1/OX3H1U3Y3/R3FINAlS5/T4V1K1P5/A4e1EME5/L6DON5/EtHER3AD5/D2RECOAT6 AEST",
         )

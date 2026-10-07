@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use fst::raw::Node;
 use fst::Set;
 
+use crate::datafiles;
 use crate::leaves::{bingo_bonus_correction, LeaveValues};
 use crate::solver::{leave_value_with_phase, BINGO_BONUS};
 use crate::tile::Tile;
@@ -169,61 +170,78 @@ pub fn phase_scale(unseen: Option<usize>) -> f32 {
     }
 }
 
-/// Directories searched for data files: next to the executable, one level
-/// up from it, and the working directory.
-fn data_roots() -> Vec<std::path::PathBuf> {
-    let exe_path = std::env::current_exe().ok();
-    let exe_dir = exe_path.as_ref().and_then(|p| p.parent());
-    let mut roots = Vec::new();
-    if let Some(dir) = exe_dir {
-        roots.push(dir.to_path_buf());
-        roots.push(dir.join(".."));
+/// Load the dictionary and leave table from one data root: `data/words.fst`
+/// plus `external/refengine/data/lexica/NWL23.klv2` when it is real data. A
+/// missing table or an LFS pointer stub falls back to heuristic leaves.
+pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
+    let fst_path = root.join(datafiles::WORDS_FST);
+    if datafiles::is_lfs_pointer(&fst_path) {
+        anyhow::bail!(
+            "{} is a Git LFS pointer; {}",
+            fst_path.display(),
+            datafiles::LFS_HINT
+        );
     }
-    roots.push(std::path::PathBuf::from("."));
-    roots
-}
-
-/// Load the default dictionary (`data/words.fst`), attaching RefEngine's leave
-/// table (`external/refengine/data/lexica/NWL23.klv2`) when it is present.
-pub fn load_default_dictionary() -> Result<Dictionary> {
-    let roots = data_roots();
-    let fst_path = roots
-        .iter()
-        .map(|r| r.join("data/words.fst"))
-        .find(|p| p.exists())
-        .context(
-            "Could not find words.fst dictionary.\n\
-             Run: cargo run --bin build-wordlist <input.txt> data/words.fst",
-        )?;
-    let dict = Dictionary::load_from_fst(&fst_path)?;
-
-    let leaves_path = roots
-        .iter()
-        .map(|r| r.join("external/refengine/data/lexica/NWL23.klv2"))
-        .find(|p| p.exists());
-    match leaves_path.map(LeaveValues::load) {
-        Some(Ok(table)) => Ok(dict.with_leaves(table)),
-        Some(Err(e)) => {
-            eprintln!("Leave table unusable, using heuristic leave values: {e:#}");
+    let dict = Dictionary::load_from_fst(&fst_path)
+        .with_context(|| format!("loading {}", fst_path.display()))?;
+    let leaves_path = root.join(datafiles::LEAVES_KLV2);
+    match datafiles::file_status(&leaves_path) {
+        datafiles::FileStatus::Present => {}
+        datafiles::FileStatus::LfsPointer => {
+            crate::logging::log(&format!(
+                "Leave table is a Git LFS pointer ({}); using heuristic leave values",
+                datafiles::LFS_HINT
+            ));
+            return Ok(dict);
+        }
+        datafiles::FileStatus::Missing => return Ok(dict),
+    }
+    match LeaveValues::load(&leaves_path) {
+        Ok(table) => Ok(dict.with_leaves(table)),
+        Err(e) => {
+            crate::logging::log(&format!(
+                "Leave table unusable, using heuristic leave values: {e:#}"
+            ));
             Ok(dict)
         }
-        None => Ok(dict),
     }
+}
+
+/// Load the default dictionary (`data/words.fst`) from the first data root
+/// that has it, attaching RefEngine's leave table (`NWL23.klv2`) when present.
+pub fn load_default_dictionary() -> Result<Dictionary> {
+    let fst_path = datafiles::find_data_file(datafiles::WORDS_FST).context(
+        "Could not find the dictionary (data/words.fst). Run cpsolver2 from \
+         the repository root, or put the data files next to the binary.",
+    )?;
+    let root = fst_path
+        .parent()
+        .and_then(Path::parent)
+        .context("dictionary path has no data root")?;
+    load_dictionary_from(root)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::datafiles::{test_data, LEAVES_KLV2};
 
     #[test]
     fn test_load_dictionary() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = test_data::dictionary() else {
+            return;
+        };
         assert!(dict.len() > 100000);
+        // The leave table is attached whenever the real file is present
+        // (an LFS pointer stub falls back to heuristic leaves).
+        let klv_real = test_data::file(LEAVES_KLV2).is_some();
+        assert_eq!(dict.has_leave_table(), klv_real);
     }
 
     #[test]
     fn test_word_validation() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
 
         // Valid words
         assert!(dict.is_valid("WORD"));
@@ -238,7 +256,9 @@ mod tests {
 
     #[test]
     fn test_prefix_matching() {
-        let dict = load_default_dictionary().unwrap();
+        let Some(dict) = crate::datafiles::test_data::dictionary() else {
+            return;
+        };
 
         assert!(dict.has_prefix("QU"));
         assert!(dict.has_prefix("QUAR"));
