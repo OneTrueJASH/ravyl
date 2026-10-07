@@ -18,7 +18,7 @@ pub(super) const MAX_OPP_TEMPERATURE: f32 = 12.0;
 /// background thread would need its own staleness accounting.
 pub(super) const OPP_LOSS_SAMPLES: usize = 10;
 
-/// Fitted by `study_loss_calibration` (mcts.rs, 120 games per point): the
+/// Fitted by `study_loss_calibration` (mcts/studies.rs, 120 games per point): the
 /// estimator reads `measured ~= 7.78 + 0.557 * tau` for a softmax-`tau`
 /// opponent. The baseline exists because a sampled completion of their
 /// rack usually admits a better play than the tiles they really held, so
