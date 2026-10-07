@@ -67,6 +67,14 @@ cargo bench --bench engine
 
 Criterion benchmarks for move generation (EMPTY, MID, END and blank-heavy BEECH positions), playouts per second for a fixed candidate set, and the endgame solver.
 
+### Self-play harness
+
+```bash
+cargo run --release --example selfplay -- <phase|pass|sim|same> [pairs] [seed]
+```
+
+Plays two engine variants against each other over paired, fixed-seed games (each seed twice, with the racks swapped) and reports engine A's score and mean spread with 95% confidence intervals.
+
 ### Building without RefEngine
 
 RefEngine sits behind the `refengine` cargo feature (on by default). Without it the pure-Rust solver, playouts and endgame solver work as usual; only opponent-rack inference is unavailable (the stats pane says so):
