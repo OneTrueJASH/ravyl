@@ -20,7 +20,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
     }
 
     // Title bar.
-    crate::ui::status_bar::render_title(frame, layout.title_bar);
+    crate::ui::status_bar::render_title(frame, layout.title_bar, app.game_name.as_deref());
 
     // Tab bar.
     crate::ui::log_viewer::render_tabs(
@@ -182,6 +182,43 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             ref target,
             ref buffer,
         } => crate::ui::prompts::render_score_input(frame, size, *target, buffer),
+
+        DialogState::GamePicker { selected, .. } => {
+            crate::ui::game_picker::render_game_picker(frame, size, app, selected)
+        }
+
+        DialogState::SaveAs {
+            ref buffer,
+            ref purpose,
+            pristine,
+        } => crate::ui::prompts::render_save_as(
+            frame,
+            size,
+            buffer,
+            purpose,
+            pristine,
+            (app.message_kind == crate::app::MessageKind::Error)
+                .then_some(app.message.as_deref())
+                .flatten(),
+        ),
+
+        DialogState::ConfirmOverwrite { ref name, yes, .. } => {
+            let message = format!("Replace the saved game {}?", name);
+            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
+            frame.render_widget(
+                crate::ui::confirm_popup::ConfirmPopup::new("Game exists", &message, yes),
+                popup_area,
+            );
+        }
+
+        DialogState::ConfirmDelete { ref name, yes, .. } => {
+            let message = format!("Delete {}? This cannot be undone.", name);
+            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
+            frame.render_widget(
+                crate::ui::confirm_popup::ConfirmPopup::new("Delete game", &message, yes),
+                popup_area,
+            );
+        }
 
         DialogState::QuickEntry { ref buffer } => crate::ui::prompts::render_quick_entry(
             frame,
@@ -408,6 +445,68 @@ mod tests {
         let (x, y) = find_text(&lines, "Quit Game");
         click(&mut app, x, y);
         assert_eq!(app.dialog, DialogState::ConfirmQuit(false));
+    }
+
+    /// The picker draws its games (locked ones marked), a click selects a
+    /// row, a second click opens it, and the title bar names the game.
+    #[test]
+    fn game_picker_renders_and_takes_clicks() {
+        use crate::games::{self, OppLosses, SavedGame};
+        use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let dir = games::test_dir("ui-picker");
+        for (name, updated) in [("Alice", 30), ("Bob", 20)] {
+            let game = SavedGame {
+                name: name.to_string(),
+                cgp: "15/15/15/15/15/15/15/4CAT8/15/15/15/15/15/15/15 EINRST/ 337/205 0"
+                    .to_string(),
+                updated,
+                opp_losses: OppLosses::default(),
+            };
+            games::save(&dir, &game).unwrap();
+        }
+        std::fs::write(games::lock_path(&dir, "alice"), "1\n").unwrap();
+        let mut app = App::with_settings(crate::settings::Settings::default());
+        app.games_dir = Some(dir.clone());
+        app.show_game_picker(true);
+        let lines = render_at(&app, 120, 40);
+        let text = lines.join("\n");
+        assert!(text.contains("Saved games"), "{text}");
+        assert!(text.contains("Alice (open in another window)"), "{text}");
+        assert!(text.contains("337\u{2013}205"), "{text}");
+        assert!(text.contains("Bag"), "{text}");
+
+        let (x, y) = find_text(&lines, "Bob");
+        click(&mut app, x, y);
+        assert!(matches!(
+            app.dialog,
+            DialogState::GamePicker { selected: 1, .. }
+        ));
+        // The wheel moves the selection.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(
+            app.dialog,
+            DialogState::GamePicker { selected: 0, .. }
+        ));
+        click(&mut app, x, y);
+        click(&mut app, x, y);
+        assert_eq!(app.dialog, DialogState::None, "double-click opens");
+        assert_eq!(app.game_name.as_deref(), Some("Bob"));
+        let title = render_at(&app, 120, 40).remove(0);
+        assert!(title.contains("Crossplay Solver \u{00b7} Bob"), "{title}");
+
+        // The naming prompt.
+        app.show_save_as(crate::app::SaveAsPurpose::Quit);
+        let text = render_at(&app, 120, 40).join("\n");
+        assert!(text.contains("Name this game before quitting"), "{text}");
+        assert!(text.contains("Name: Bob_"), "{text}");
+        app.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Snapshots of the whole UI at three terminal sizes, as text. The

@@ -17,12 +17,21 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+C asks first; a second Ctrl+C (or y) confirms.
+        // Ctrl+C asks first; a second Ctrl+C (or y) confirms. An untitled
+        // game asks for a name instead, and a second Ctrl+C there quits
+        // keeping the automatic name.
         if key.code == KeyCode::Char('c') && ctrl {
-            if matches!(self.dialog, DialogState::ConfirmQuit(_)) {
+            if matches!(
+                self.dialog,
+                DialogState::ConfirmQuit(_)
+                    | DialogState::SaveAs {
+                        purpose: SaveAsPurpose::Quit,
+                        ..
+                    }
+            ) {
                 return AppAction::Quit;
             }
-            self.dialog = DialogState::ConfirmQuit(false);
+            self.request_quit();
             return AppAction::Redraw;
         }
 
@@ -60,6 +69,7 @@ impl App {
             KeyCode::Char('e') if ctrl => self.toggle_final_turn(),
             KeyCode::Char('s') if ctrl => self.find_moves_and_focus(),
             KeyCode::Char('r') if ctrl => self.show_reset_confirm(),
+            KeyCode::Char('o') if ctrl => self.show_game_picker(false),
             KeyCode::Char('z') if ctrl => self.undo(),
             KeyCode::Char('y') if ctrl => self.redo(),
             KeyCode::Char('=') => self.open_score_input(ScoreTarget::Opponent),
@@ -132,6 +142,21 @@ impl App {
     /// on a button acts on it, a click elsewhere inside the dialog does
     /// nothing, and a click outside it cancels the dialog.
     pub(super) fn handle_dialog_mouse(&mut self, mouse: MouseEvent) -> AppAction {
+        // The wheel moves the picker's selection.
+        if let DialogState::GamePicker { selected, startup } = self.dialog {
+            let step = match mouse.kind {
+                MouseEventKind::ScrollUp => Some(selected.saturating_sub(1)),
+                MouseEventKind::ScrollDown => Some(selected + 1),
+                _ => None,
+            };
+            if let Some(i) = step {
+                self.dialog = DialogState::GamePicker {
+                    selected: i.min(self.picker_games.len().saturating_sub(1)),
+                    startup,
+                };
+                return AppAction::Redraw;
+            }
+        }
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return AppAction::Nothing;
         }
@@ -145,9 +170,21 @@ impl App {
                     self.close_dialog();
                     self.reset();
                 }
+                DialogState::ConfirmOverwrite { .. } => {
+                    self.answer_overwrite(true);
+                    if self.should_quit {
+                        return AppAction::Quit;
+                    }
+                }
+                DialogState::ConfirmDelete { .. } => self.answer_delete(true),
                 _ => {}
             },
-            Some(HitTarget::DialogNo) => self.close_dialog(),
+            Some(HitTarget::DialogNo) => match self.dialog {
+                DialogState::ConfirmOverwrite { .. } => self.answer_overwrite(false),
+                DialogState::ConfirmDelete { .. } => self.answer_delete(false),
+                _ => self.close_dialog(),
+            },
+            Some(HitTarget::PickerRow(index)) => self.click_picker_row(index),
             Some(HitTarget::MenuItem(option)) => {
                 if matches!(self.dialog, DialogState::EscapeMenu(_)) {
                     self.choose_menu_option(option);
@@ -162,7 +199,13 @@ impl App {
     /// Act on an escape-menu choice (Enter or a click).
     pub(super) fn choose_menu_option(&mut self, option: EscapeMenuOption) {
         match option {
-            EscapeMenuOption::Quit => self.dialog = DialogState::ConfirmQuit(false),
+            EscapeMenuOption::OpenGame => self.show_game_picker(false),
+            EscapeMenuOption::SaveAs => self.show_save_as(SaveAsPurpose::Save),
+            EscapeMenuOption::NewGame => {
+                self.close_dialog();
+                self.new_game();
+            }
+            EscapeMenuOption::Quit => self.request_quit(),
             EscapeMenuOption::Reset => self.dialog = DialogState::ConfirmReset(false),
             EscapeMenuOption::Cancel => self.close_dialog(),
         }
@@ -214,7 +257,8 @@ impl App {
             HitTarget::DialogYes
             | HitTarget::DialogNo
             | HitTarget::DialogArea
-            | HitTarget::MenuItem(_) => {}
+            | HitTarget::MenuItem(_)
+            | HitTarget::PickerRow(_) => {}
         }
         AppAction::Redraw
     }
@@ -405,6 +449,38 @@ impl App {
                 _ => {}
             },
 
+            DialogState::GamePicker { selected, startup } => {
+                self.handle_picker_key(key, selected, startup)
+            }
+
+            DialogState::SaveAs { .. } => self.handle_save_as_key(key),
+
+            DialogState::ConfirmOverwrite { yes, .. } => match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                    if let DialogState::ConfirmOverwrite { ref mut yes, .. } = self.dialog {
+                        *yes = !*yes;
+                    }
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.answer_overwrite(true),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.answer_overwrite(false)
+                }
+                KeyCode::Enter => self.answer_overwrite(yes),
+                _ => {}
+            },
+
+            DialogState::ConfirmDelete { yes, .. } => match key.code {
+                KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
+                    if let DialogState::ConfirmDelete { ref mut yes, .. } = self.dialog {
+                        *yes = !*yes;
+                    }
+                }
+                KeyCode::Char('y') | KeyCode::Char('Y') => self.answer_delete(true),
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.answer_delete(false),
+                KeyCode::Enter => self.answer_delete(yes),
+                _ => {}
+            },
+
             DialogState::QuickEntry { ref mut buffer } => match key.code {
                 KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == ' ' || c == '?' => {
                     if buffer.len() < 24 {
@@ -543,6 +619,25 @@ impl App {
         if let DialogState::QuickEntry { buffer } = &mut self.dialog {
             buffer.push_str(text.trim());
             return AppAction::Redraw;
+        }
+        if let DialogState::SaveAs {
+            buffer, pristine, ..
+        } = &mut self.dialog
+        {
+            if *pristine {
+                buffer.clear();
+                *pristine = false;
+            }
+            buffer.extend(text.trim().chars().filter(|c| !c.is_control()).take(40));
+            return AppAction::Redraw;
+        }
+        if matches!(
+            self.dialog,
+            DialogState::GamePicker { .. }
+                | DialogState::ConfirmOverwrite { .. }
+                | DialogState::ConfirmDelete { .. }
+        ) {
+            return AppAction::Nothing;
         }
         match self.load_position(text, true) {
             Ok(()) => self.set_message(MessageKind::Success, "Loaded the pasted position"),

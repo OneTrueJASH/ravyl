@@ -171,6 +171,34 @@ pub enum DialogState {
     QuickEntry {
         buffer: String,
     },
+    /// The saved games (`App::picker_games`); `startup` when shown at
+    /// launch.
+    GamePicker {
+        selected: usize,
+        startup: bool,
+    },
+    /// "Save game as": a name for the open game (or, from the picker, a
+    /// new name for a saved one). `pristine` while the buffer still holds
+    /// an automatic name, which the first key typed replaces.
+    SaveAs {
+        buffer: String,
+        purpose: SaveAsPurpose,
+        pristine: bool,
+    },
+    /// Saving as `name` would replace another saved game: Yes replaces it,
+    /// No returns to the prompt.
+    ConfirmOverwrite {
+        name: String,
+        purpose: SaveAsPurpose,
+        yes: bool,
+    },
+    /// Delete a saved game from the picker (then back to the picker).
+    ConfirmDelete {
+        slug: String,
+        name: String,
+        startup: bool,
+        yes: bool,
+    },
 }
 
 /// Board pane tab
@@ -438,6 +466,21 @@ pub struct App {
     /// results carry the stamp they were started under, so a result that
     /// arrives after the opponent moved again is recognisably stale.
     pub(super) opp_move_stamp: u64,
+    /// Where saved games live; `None` turns saving off (tests, unless they
+    /// set a temporary directory).
+    pub games_dir: Option<PathBuf>,
+    /// The open game's display name; `None` until a new game is first
+    /// saved (it then gets an automatic `Untitled …` name). This window
+    /// holds the game's lock while it is open.
+    pub game_name: Option<String>,
+    /// The position changed since the last save.
+    pub(super) game_dirty: bool,
+    /// When the game was last saved, for the autosave throttle.
+    pub(super) last_autosave: Option<Instant>,
+    /// The game picker's list, loaded when it opens.
+    pub picker_games: Vec<crate::games::GameEntry>,
+    /// Last click on a picker row, for double-click detection.
+    pub(super) last_picker_click: Option<(usize, Instant)>,
 }
 
 impl Default for App {
@@ -517,6 +560,12 @@ impl App {
             opp_loss_total: 0.0,
             opp_moves_measured: 0,
             opp_move_stamp: 0,
+            games_dir: None,
+            game_name: None,
+            game_dirty: false,
+            last_autosave: None,
+            picker_games: Vec::new(),
+            last_picker_click: None,
         }
     }
 

@@ -13,12 +13,17 @@ use ratatui::{
 use crate::app::{group_thousands, App, BoardTab, Focus, MctsProgress, MessageKind};
 use crate::ui::theme;
 
-/// Render the title bar (top line).
-pub fn render_title(frame: &mut ratatui::Frame, area: Rect) {
-    let title = Line::from(vec![" Crossplay Solver "
-        .bold()
-        .fg(theme::current().title_fg)]);
-    frame.render_widget(Paragraph::new(title), area);
+/// Render the title bar (top line): the app name, then the open game's.
+pub fn render_title(frame: &mut ratatui::Frame, area: Rect, game: Option<&str>) {
+    let t = theme::current();
+    let mut spans = vec![" Crossplay Solver ".bold().fg(t.title_fg)];
+    if let Some(name) = game {
+        spans.push(Span::styled(
+            format!("\u{00b7} {} ", name),
+            Style::default().fg(t.text_primary),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Shown instead of the UI when the terminal is below the minimum size.

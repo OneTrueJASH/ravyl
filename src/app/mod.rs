@@ -8,7 +8,9 @@
 //! - `engine`: solving, the simulation and endgame jobs, polling results
 //! - `opponent`: detecting and scoring their move, their strength, inference
 //! - `edit`: board and rack entry, applying moves, undo/redo, the `:`
-//!   prompt, clipboard and session
+//!   prompt, clipboard and the CGP position
+//! - `session`: the open game: autosave, its lock, naming, switching
+//!   games, the picker and the quit flow
 //! - `sort`: ordering the suggestions list
 //!
 //! The submodules share this module's imports (`use super::*`).
@@ -17,16 +19,18 @@ mod edit;
 mod engine;
 mod input;
 mod opponent;
+mod session;
 mod sort;
 mod state;
 #[cfg(test)]
 mod tests;
 
-pub use edit::{base64, parse_coords, session_path, QuickPlay};
+pub use edit::{base64, parse_coords, QuickPlay};
+pub use session::{SaveAsPurpose, AUTOSAVE_INTERVAL};
 pub use state::*;
 
 #[allow(unused_imports)]
-use self::{edit::*, engine::*, input::*, opponent::*, sort::*};
+use self::{edit::*, engine::*, input::*, opponent::*, session::*, sort::*};
 
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver};
@@ -35,6 +39,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use std::cell::Cell;
+use std::path::PathBuf;
 
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,

@@ -13,43 +13,48 @@ use crate::ui::popup_frame::{centered_rect, centered_x, render_popup_frame};
 use crate::ui::theme;
 
 /// Menu options in display order.
-const OPTIONS: [EscapeMenuOption; 3] = [
-    EscapeMenuOption::Quit,
+const OPTIONS: [EscapeMenuOption; 6] = [
+    EscapeMenuOption::OpenGame,
+    EscapeMenuOption::SaveAs,
+    EscapeMenuOption::NewGame,
     EscapeMenuOption::Reset,
+    EscapeMenuOption::Quit,
     EscapeMenuOption::Cancel,
 ];
 
 /// Menu options for the escape menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EscapeMenuOption {
-    Quit,
+    OpenGame,
+    SaveAs,
+    NewGame,
     Reset,
+    Quit,
     Cancel,
 }
 
 impl EscapeMenuOption {
     pub fn label(&self) -> &'static str {
         match self {
-            EscapeMenuOption::Quit => "Quit Game",
+            EscapeMenuOption::OpenGame => "Open Game\u{2026}",
+            EscapeMenuOption::SaveAs => "Save Game As\u{2026}",
+            EscapeMenuOption::NewGame => "New Game",
             EscapeMenuOption::Reset => "Reset Board",
+            EscapeMenuOption::Quit => "Quit Game",
             EscapeMenuOption::Cancel => "Cancel",
         }
     }
 
+    fn index(&self) -> usize {
+        OPTIONS.iter().position(|o| o == self).unwrap_or(0)
+    }
+
     pub fn next(&self) -> Self {
-        match self {
-            EscapeMenuOption::Quit => EscapeMenuOption::Reset,
-            EscapeMenuOption::Reset => EscapeMenuOption::Cancel,
-            EscapeMenuOption::Cancel => EscapeMenuOption::Quit,
-        }
+        OPTIONS[(self.index() + 1) % OPTIONS.len()]
     }
 
     pub fn prev(&self) -> Self {
-        match self {
-            EscapeMenuOption::Quit => EscapeMenuOption::Cancel,
-            EscapeMenuOption::Reset => EscapeMenuOption::Quit,
-            EscapeMenuOption::Cancel => EscapeMenuOption::Reset,
-        }
+        OPTIONS[(self.index() + OPTIONS.len() - 1) % OPTIONS.len()]
     }
 }
 
@@ -64,7 +69,8 @@ impl EscapeMenuPopup {
     }
 
     pub fn area(terminal_area: Rect) -> Rect {
-        centered_rect(terminal_area, 30, 9)
+        // Border, a blank row, the options, a blank row, the hint.
+        centered_rect(terminal_area, 30, OPTIONS.len() as u16 + 5)
     }
 
     /// The clickable row of each option, for a menu whose inner area is
@@ -110,17 +116,11 @@ impl Widget for EscapeMenuPopup {
         let inner = render_popup_frame(area, buf, "Menu", theme::current().popup_border);
         register_hit(area, HitTarget::DialogArea);
 
-        let content = vec![
-            Line::from(""),
-            Line::from(""),
-            Line::from(""),
-            Line::from(""),
-            Line::from(""),
-            Line::from(Span::styled(
-                "↑/↓ select, Enter confirm",
-                Style::default().fg(theme::current().text_dim),
-            )),
-        ];
+        let mut content = vec![Line::from(""); OPTIONS.len() + 2];
+        content.push(Line::from(Span::styled(
+            "↑/↓ select, Enter confirm",
+            Style::default().fg(theme::current().text_dim),
+        )));
         let paragraph = Paragraph::new(content).centered();
         paragraph.render(inner, buf);
 

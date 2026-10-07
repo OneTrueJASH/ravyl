@@ -6,6 +6,7 @@ pub mod board_view;
 pub mod confirm_popup;
 pub mod events;
 pub mod frame;
+pub mod game_picker;
 pub mod help_popup;
 pub mod hit;
 pub mod layout;

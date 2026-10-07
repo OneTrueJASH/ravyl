@@ -35,6 +35,8 @@ pub enum HitTarget {
     DialogNo,
     /// An option in the escape menu.
     MenuItem(EscapeMenuOption),
+    /// A row of the game picker (index into `App::picker_games`).
+    PickerRow(usize),
 }
 
 struct HitEntry {

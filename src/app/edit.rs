@@ -1,5 +1,5 @@
 //! Editing the position: board and rack entry, applying moves, undo and
-//! redo, the coordinate prompt, the clipboard and session persistence.
+//! redo, the coordinate prompt, the clipboard and the CGP position.
 
 use super::*;
 
@@ -37,15 +37,6 @@ pub fn parse_coords(text: &str) -> Option<(usize, usize, Direction)> {
         Direction::Vertical
     };
     Some((row - 1, col, dir))
-}
-
-/// Where the session is saved (`None` in tests, which must not touch the
-/// user's files).
-pub fn session_path() -> Option<std::path::PathBuf> {
-    if cfg!(test) {
-        return None;
-    }
-    dirs::data_dir().map(|d| d.join("cpsolver2").join("session.cgp"))
 }
 
 /// Base64 (standard alphabet, padded), for OSC 52 clipboard writes.
@@ -294,7 +285,6 @@ impl App {
             },
         );
         self.clear_suggestions();
-        self.autosave();
     }
 
     /// Record the current state for undo, before a change; any redo
@@ -582,7 +572,7 @@ impl App {
     }
 
     /// Load a CGP position: board, our rack, scores (when given) and, from
-    /// a saved session, who has the final turn. The board becomes the
+    /// a saved game, who has the final turn. The board becomes the
     /// reference for detecting the opponent's next move.
     pub fn load_position(&mut self, text: &str, undoable: bool) -> Result<(), String> {
         let text = text.trim();
@@ -617,44 +607,5 @@ impl App {
         self.awaiting_opp_reply = false;
         self.clear_suggestions();
         Ok(())
-    }
-
-    /// Save the session (position, scores, final turn) for the next start.
-    pub fn autosave(&self) {
-        let Some(path) = session_path() else {
-            return;
-        };
-        let write = || -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            let tmp = path.with_extension("cgp.tmp");
-            std::fs::write(&tmp, self.position_cgp() + "\n")?;
-            std::fs::rename(&tmp, &path)
-        };
-        if let Err(e) = write() {
-            log(&format!("Session autosave failed: {}", e));
-        }
-    }
-
-    /// Restore the saved session, if there is one. Returns true if a
-    /// position was loaded.
-    pub fn restore_session(&mut self) -> bool {
-        let Some(text) = session_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
-            return false;
-        };
-        match self.load_position(&text, false) {
-            Ok(()) => {
-                self.set_message(
-                    MessageKind::Info,
-                    "Restored the last session (Ctrl+R to start over)",
-                );
-                true
-            }
-            Err(e) => {
-                log(&format!("Saved session unreadable: {}", e));
-                false
-            }
-        }
     }
 }

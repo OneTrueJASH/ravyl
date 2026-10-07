@@ -993,3 +993,479 @@ fn base64_matches_known_vectors() {
     assert_eq!(base64(b"foobar"), "Zm9vYmFy");
     assert_eq!(base64(b"8D QUIXOTIC"), "OEQgUVVJWE9USUM=");
 }
+
+// ── Saved games ────────────────────────────────────────────────────
+
+use crate::games::{self, OppLosses, SavedGame};
+
+/// A test App that saves its games in `dir` (a temporary directory).
+fn games_app(dir: &std::path::Path) -> App {
+    let mut app = test_app();
+    app.games_dir = Some(dir.to_path_buf());
+    app
+}
+
+/// Store a game in `dir` directly, as another window would have.
+fn store_game(dir: &std::path::Path, name: &str, updated: u64) {
+    let game = SavedGame {
+        name: name.to_string(),
+        cgp: "15/15/15/15/15/15/15/4CAT8/15/15/15/15/15/15/15 EINRST/ 12/8 0".to_string(),
+        updated,
+        opp_losses: OppLosses::default(),
+    };
+    games::save(dir, &game).unwrap();
+}
+
+/// The files in `dir`, sorted, for checking what was written.
+fn files_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|r| {
+            r.filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// A new game is not saved while empty, gets an automatic name on its
+/// first save, and reopens with its position, scores, final turn and
+/// opponent measurement; the lock goes away on exit.
+#[test]
+fn saved_game_round_trip_with_automatic_name() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-roundtrip");
+    let mut app = games_app(&dir);
+    assert!(!app.autosave(), "nothing entered yet");
+    assert!(files_in(&dir).is_empty());
+
+    app.load_position(
+        "15/15/15/15/15/15/15/4CAT8/15/15/15/15/15/15/15 AEINRST/ 120/95 0",
+        false,
+    )
+    .unwrap();
+    app.final_turn = FinalTurn::Us;
+    app.final_turn_known = true;
+    app.opp_loss_total = 31.5;
+    app.opp_moves_measured = 3;
+    assert!(app.autosave());
+    let name = app.game_name.clone().unwrap();
+    assert!(games::is_automatic_name(&name), "{name}");
+    let slug = games::slug(&name);
+    assert_eq!(
+        files_in(&dir),
+        [format!("{slug}.lock"), format!("{slug}.toml")]
+    );
+    app.shutdown();
+    assert_eq!(files_in(&dir), [format!("{slug}.toml")], "lock released");
+
+    let mut other = games_app(&dir);
+    other.state.add_to_rack('Q');
+    other.push_undo("something".to_string());
+    other.open_game(&slug).unwrap();
+    assert_eq!(other.game_name.as_deref(), Some(name.as_str()));
+    assert_eq!(other.state.board_cgp(), app.state.board_cgp());
+    assert_eq!((other.our_score, other.opp_score), (120, 95));
+    assert_eq!(other.final_turn, FinalTurn::Us);
+    assert!(other.final_turn_known);
+    assert_eq!(other.opp_moves_measured, 3);
+    assert_eq!(other.opp_loss_total, 31.5);
+    assert_eq!(other.opp_temperature(), app.opp_temperature());
+    assert!(
+        other.undo_stack.is_empty(),
+        "the old game's history is gone"
+    );
+    assert!(!other.game_dirty);
+    other.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two windows cannot open the same game; a lock left by a process that
+/// is gone is taken over.
+#[test]
+fn a_game_opens_in_one_window_only() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-lock");
+    let mut first = games_app(&dir);
+    first.start_session(Some("Alice")).unwrap();
+    assert_eq!(first.game_name.as_deref(), Some("Alice"));
+    first.autosave();
+
+    let mut second = games_app(&dir);
+    let err = second.open_game("alice").unwrap_err();
+    assert_eq!(err, "Alice is open in another window");
+    assert!(second.start_session(Some("alice")).is_err());
+    assert_eq!(second.game_name, None);
+
+    // Picker: dimmed and refused.
+    second.show_game_picker(false);
+    assert!(second.picker_games[0].locked);
+    second.handle_key(key(KeyCode::Enter));
+    assert!(matches!(second.dialog, DialogState::GamePicker { .. }));
+    assert_eq!(second.message_kind, MessageKind::Error);
+    second.close_dialog();
+
+    // A stale lock is taken over.
+    store_game(&dir, "Bob", 5);
+    std::fs::write(
+        games::lock_path(&dir, "bob"),
+        format!("{}\n", games::dead_pid()),
+    )
+    .unwrap();
+    second.open_game("bob").unwrap();
+    assert_eq!(second.game_name.as_deref(), Some("Bob"));
+    assert_eq!(games::lock_holder(&dir, "bob"), Some(std::process::id()));
+
+    // Once the first window closes, the game can be opened elsewhere.
+    first.shutdown();
+    second.open_game("alice").unwrap();
+    assert!(
+        !games::lock_path(&dir, "bob").exists(),
+        "switching games releases the old lock"
+    );
+    second.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Save As from the menu renames the game: the file and the lock move,
+/// and the first key typed replaces an automatic name.
+#[test]
+fn save_as_renames_the_file_and_lock() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-rename");
+    let mut app = games_app(&dir);
+    app.state.add_to_rack('Q');
+    app.autosave();
+    let old = app.game_slug().unwrap();
+
+    // Esc opens the menu on Cancel; four rows up is Save Game As.
+    app.handle_key(key(KeyCode::Esc));
+    for _ in 0..4 {
+        app.handle_key(key(KeyCode::Up));
+    }
+    assert_eq!(
+        app.dialog,
+        DialogState::EscapeMenu(EscapeMenuOption::SaveAs)
+    );
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(
+        app.dialog,
+        DialogState::SaveAs { pristine: true, .. }
+    ));
+    type_keys(&mut app, "Alice Smith");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.dialog, DialogState::None);
+    assert_eq!(app.game_name.as_deref(), Some("Alice Smith"));
+    assert_eq!(files_in(&dir), ["alice-smith.lock", "alice-smith.toml"]);
+    assert!(!files_in(&dir).contains(&format!("{old}.toml")));
+    assert_eq!(
+        games::load(&dir, "alice-smith").unwrap().name,
+        "Alice Smith"
+    );
+
+    // Renaming to a name with the same slug only changes the display name.
+    app.show_save_as(SaveAsPurpose::Save);
+    app.handle_key(ctrl('u'));
+    type_keys(&mut app, "alice smith");
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(files_in(&dir), ["alice-smith.lock", "alice-smith.toml"]);
+    assert_eq!(
+        games::load(&dir, "alice-smith").unwrap().name,
+        "alice smith"
+    );
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Saving under another saved game's name asks first; No returns to the
+/// prompt, Yes replaces that game.
+#[test]
+fn save_as_over_another_game_asks_first() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-overwrite");
+    store_game(&dir, "Bob", 5);
+    let mut app = games_app(&dir);
+    app.start_session(Some("Alice")).unwrap();
+    // The picker was not shown: --game was given.
+    assert_eq!(app.dialog, DialogState::None);
+    app.state.add_to_rack('Z');
+
+    app.show_save_as(SaveAsPurpose::Save);
+    app.handle_key(ctrl('u'));
+    type_keys(&mut app, "BOB");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(app.dialog, DialogState::ConfirmOverwrite { .. }));
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(matches!(
+        &app.dialog,
+        DialogState::SaveAs { buffer, .. } if buffer == "BOB"
+    ));
+    assert_eq!(app.game_name.as_deref(), Some("Alice"));
+
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert_eq!(app.dialog, DialogState::None);
+    assert_eq!(app.game_name.as_deref(), Some("BOB"));
+    assert_eq!(files_in(&dir), ["bob.lock", "bob.toml"]);
+    assert!(games::load(&dir, "bob").unwrap().cgp.contains(" Z/ "));
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Quitting an untitled game asks for a name: Enter saves it and quits,
+/// a second Ctrl+C quits keeping the automatic name, Esc cancels. A named
+/// game quits as before.
+#[test]
+fn quitting_an_untitled_game_offers_a_name() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-quit");
+    let mut app = games_app(&dir);
+    app.state.add_to_rack('Q');
+
+    assert!(matches!(app.handle_key(ctrl('c')), AppAction::Redraw));
+    assert!(matches!(
+        app.dialog,
+        DialogState::SaveAs {
+            purpose: SaveAsPurpose::Quit,
+            ..
+        }
+    ));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.dialog, DialogState::None, "Esc cancels the quit");
+    assert!(!app.should_quit);
+
+    // Ctrl+C twice: quit, keeping the automatic name.
+    app.handle_key(ctrl('c'));
+    assert!(matches!(app.handle_key(ctrl('c')), AppAction::Quit));
+    let untitled = app.game_name.clone().unwrap();
+    assert!(games::is_automatic_name(&untitled));
+
+    // Enter with the name unchanged also keeps it.
+    app.request_quit();
+    assert!(matches!(
+        app.handle_key(key(KeyCode::Enter)),
+        AppAction::Quit
+    ));
+    assert_eq!(app.game_name.as_deref(), Some(untitled.as_str()));
+    app.should_quit = false;
+
+    // The menu's Quit names it too; a typed name is saved, then quit.
+    app.show_escape_menu();
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(app.dialog, DialogState::SaveAs { .. }));
+    type_keys(&mut app, "Carol");
+    assert!(matches!(
+        app.handle_key(key(KeyCode::Enter)),
+        AppAction::Quit
+    ));
+    assert_eq!(app.game_name.as_deref(), Some("Carol"));
+    assert!(games::exists(&dir, "carol"));
+    assert!(!games::exists(&dir, &games::slug(&untitled)));
+
+    // Named: the usual confirmation.
+    app.should_quit = false;
+    app.handle_key(ctrl('c'));
+    assert_eq!(app.dialog, DialogState::ConfirmQuit(false));
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The picker lists games newest first; it opens, starts, renames and
+/// deletes games, and refuses games open in another window.
+#[test]
+fn game_picker_keys() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-picker");
+    store_game(&dir, "Ann", 10);
+    store_game(&dir, "Bea", 30);
+    store_game(&dir, "Cy", 20);
+    // Pid 1 always runs: Cy is open "in another window".
+    std::fs::write(games::lock_path(&dir, "cy"), "1\n").unwrap();
+
+    let mut app = games_app(&dir);
+    app.start_session(None).unwrap();
+    assert_eq!(
+        app.dialog,
+        DialogState::GamePicker {
+            selected: 0,
+            startup: true
+        },
+        "shown at startup"
+    );
+    let names: Vec<&str> = app.picker_games.iter().map(|g| g.name.as_str()).collect();
+    assert_eq!(names, ["Bea", "Cy", "Ann"]);
+    assert_eq!(app.picker_games[0].score_text(), "12\u{2013}8");
+    assert!(app.picker_games[1].locked);
+
+    // The locked game can be neither opened nor deleted.
+    app.handle_key(key(KeyCode::Char('j')));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(
+        app.dialog,
+        DialogState::GamePicker { selected: 1, .. }
+    ));
+    app.handle_key(key(KeyCode::Char('d')));
+    assert!(matches!(app.dialog, DialogState::GamePicker { .. }));
+    assert_eq!(app.message_kind, MessageKind::Error);
+
+    // Delete asks; No keeps it, Yes deletes it.
+    app.handle_key(key(KeyCode::End));
+    app.handle_key(key(KeyCode::Char('d')));
+    assert!(matches!(app.dialog, DialogState::ConfirmDelete { .. }));
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(matches!(
+        app.dialog,
+        DialogState::GamePicker { selected: 2, .. }
+    ));
+    assert!(games::exists(&dir, "ann"));
+    app.handle_key(key(KeyCode::Char('d')));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(!games::exists(&dir, "ann"));
+    assert_eq!(app.picker_games.len(), 2);
+
+    // Rename from the picker, then back to the picker on the new name.
+    app.handle_key(key(KeyCode::Home));
+    app.handle_key(key(KeyCode::Char('r')));
+    app.handle_key(ctrl('u'));
+    type_keys(&mut app, "Beatrice");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(
+        app.dialog,
+        DialogState::GamePicker { selected: 0, .. }
+    ));
+    assert_eq!(app.picker_games[0].name, "Beatrice");
+    assert!(!games::exists(&dir, "bea"));
+
+    // Enter opens it.
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.dialog, DialogState::None);
+    assert_eq!(app.game_name.as_deref(), Some("Beatrice"));
+    assert_eq!(app.our_score, 12);
+
+    // The open game cannot be deleted from its own window.
+    app.handle_key(ctrl('o'));
+    app.handle_key(key(KeyCode::Char('d')));
+    assert!(matches!(app.dialog, DialogState::GamePicker { .. }));
+    assert!(games::exists(&dir, "beatrice"));
+
+    // n starts a new, untitled game and releases the old one.
+    app.handle_key(key(KeyCode::Char('n')));
+    assert_eq!(app.dialog, DialogState::None);
+    assert_eq!(app.game_name, None);
+    assert_eq!(app.our_score, 0);
+    assert!(!games::lock_path(&dir, "beatrice").exists());
+
+    // Esc closes it.
+    app.handle_key(ctrl('o'));
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.dialog, DialogState::None);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Switching games drops what belonged to the old one: undo history,
+/// inference, results and the simulation resume cache.
+#[test]
+fn switching_games_clears_the_old_games_state() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let Some(mut app) = solved_app() else {
+        return;
+    };
+    let dir = games::test_dir("app-switch");
+    app.games_dir = Some(dir.clone());
+    store_game(&dir, "Dee", 1);
+    app.push_undo("before".to_string());
+    app.inferred_opponent_rack = Some(InferenceResult {
+        played_tiles: "AB".to_string(),
+        top_leaves: Vec::new(),
+        letter_marginals: Vec::new(),
+        total_racks: None,
+    });
+    app.opp_moves_measured = 4;
+    app.opp_loss_total = 40.0;
+    app.run_mcts_evaluation();
+    app.open_game("dee").unwrap();
+    assert!(!app.is_mcts_running());
+    assert!(app.undo_stack.is_empty() && app.redo_stack.is_empty());
+    assert!(app.inferred_opponent_rack.is_none());
+    assert!(app.suggestions.is_empty() && app.sim_results.is_none());
+    assert!(app.sim_cache.lock().unwrap().is_none());
+    assert_eq!(app.opp_moves_measured, 0);
+    // The game left behind was saved with its own measurement.
+    let saved: Vec<SavedGame> = files_in(&dir)
+        .iter()
+        .filter(|f| f.ends_with(".toml") && *f != "dee.toml")
+        .map(|f| games::load(&dir, f.trim_end_matches(".toml")).unwrap())
+        .collect();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].opp_losses.moves, 4);
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The old single session file is imported once at startup and offered
+/// in the picker.
+#[test]
+fn old_session_is_imported_at_startup() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let base = games::test_dir("app-migrate");
+    std::fs::write(
+        base.join("session.cgp"),
+        "15/15/15/15/15/15/15/4CAT8/15/15/15/15/15/15/15 AEINRST/ 10/20 0\n",
+    )
+    .unwrap();
+    let mut app = games_app(&base.join("games"));
+    app.start_session(None).unwrap();
+    assert!(matches!(app.dialog, DialogState::GamePicker { .. }));
+    assert_eq!(app.picker_games[0].name, games::RESTORED_NAME);
+    assert_eq!(app.picker_games[0].scores, Some((10, 20)));
+    assert!(base.join("session.cgp.imported").exists());
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!((app.our_score, app.opp_score), (10, 20));
+    app.shutdown();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Edits mark the game for saving; saves happen at most once per
+/// interval, and always on exit.
+#[test]
+fn autosave_is_throttled_and_runs_on_exit() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let dir = games::test_dir("app-throttle");
+    let mut app = games_app(&dir);
+    app.start_session(Some("Eve")).unwrap();
+    let t0 = Instant::now();
+    let rack = |dir: &std::path::Path| {
+        let cgp = games::load(dir, "eve").unwrap().cgp;
+        cgp.split_whitespace().nth(1).unwrap().to_string()
+    };
+
+    app.focus = Focus::Rack;
+    type_keys(&mut app, "a");
+    assert_eq!(app.autosave_due_in(t0), Some(Duration::ZERO));
+    assert!(app.autosave_if_due(t0));
+    assert_eq!(rack(&dir), "A/");
+    assert_eq!(app.autosave_due_in(t0), None, "nothing new to save");
+
+    type_keys(&mut app, "b");
+    assert!(!app.autosave_if_due(t0 + Duration::from_millis(500)));
+    assert_eq!(rack(&dir), "A/", "throttled");
+    assert!(app.autosave_if_due(t0 + AUTOSAVE_INTERVAL + Duration::from_millis(10)));
+    assert_eq!(rack(&dir), "AB/");
+
+    // Score edits and undo count as changes too.
+    app.handle_key(key(KeyCode::Char('+')));
+    type_keys(&mut app, "42");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.autosave_due_in(t0).is_some());
+
+    // Exit saves whatever is pending, at once.
+    type_keys(&mut app, "c");
+    app.shutdown();
+    assert_eq!(rack(&dir), "ABC/");
+    assert!(games::load(&dir, "eve").unwrap().cgp.contains(" 42/0 "));
+    assert!(!games::lock_path(&dir, "eve").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

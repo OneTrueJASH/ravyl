@@ -29,7 +29,8 @@ const SECTIONS: &[Section] = &[
             ("= / +", "Set opponent / your score"),
             ("`", "Board / log tab"),
             ("\\", "Toggle sidebar"),
-            ("^C", "Quit (asks first)"),
+            ("^O", "Saved games"),
+            ("^C", "Quit (asks first; names an untitled game)"),
         ],
     ),
     (
@@ -70,10 +71,20 @@ const SECTIONS: &[Section] = &[
         ],
     ),
     (
+        "GAMES",
+        &[
+            ("Esc menu", "Open, Save As, New Game"),
+            ("Autosave", "Every change, one file per game"),
+            ("Enter", "Picker: open the game"),
+            ("n / r / d", "Picker: new / rename / delete"),
+            ("Dimmed", "Open in another window"),
+        ],
+    ),
+    (
         "MOUSE",
         &[
             ("Click", "Focus pane, square or row"),
-            ("Double-click", "Apply a suggestion"),
+            ("Double-click", "Apply a suggestion, open a game"),
             ("Header", "Sort by that column"),
             ("Wheel", "Scroll the pane under it"),
             ("Paste", "Load a CGP position"),

@@ -1,5 +1,5 @@
-//! Small input dialogs: the score prompt and the coordinate quick-entry
-//! prompt (`:` then `8D QUIXOTIC`).
+//! Small input dialogs: the score prompt, the coordinate quick-entry
+//! prompt (`:` then `8D QUIXOTIC`) and "Save game as".
 
 use ratatui::{
     layout::Rect,
@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
-use crate::app::{QuickPlay, ScoreTarget};
+use crate::app::{QuickPlay, SaveAsPurpose, ScoreTarget};
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::popup_frame::{centered_rect, render_popup_frame};
 use crate::ui::theme;
@@ -106,6 +106,64 @@ pub fn render_quick_entry(
             "Enter to place, Esc to cancel",
             Style::default().fg(t.text_dim),
         )),
+    ];
+    Paragraph::new(content)
+        .wrap(Wrap { trim: false })
+        .centered()
+        .render(inner, frame.buffer_mut());
+}
+
+/// The "Save game as" prompt (also used to name a game before quitting
+/// and to rename one from the picker).
+pub fn render_save_as(
+    frame: &mut ratatui::Frame,
+    size: Rect,
+    buffer: &str,
+    purpose: &SaveAsPurpose,
+    pristine: bool,
+    error: Option<&str>,
+) {
+    let t = theme::current();
+    let (title, hint) = match purpose {
+        SaveAsPurpose::Save => ("Save game as", "Enter saves, Esc cancels"),
+        SaveAsPurpose::Quit => (
+            "Name this game before quitting",
+            "Enter saves and quits \u{00b7} ^C quits keeping this name \u{00b7} Esc cancels",
+        ),
+        SaveAsPurpose::Rename { .. } => ("Rename game", "Enter renames, Esc cancels"),
+    };
+    let popup_area = centered_rect(size, 64, 8);
+    register_hit(popup_area, HitTarget::DialogArea);
+    let inner = render_popup_frame(popup_area, frame.buffer_mut(), title, t.popup_border);
+    // A pristine automatic name is shown dimmed: typing replaces it.
+    let name_style = if pristine {
+        Style::default().fg(t.text_dim)
+    } else {
+        Style::default()
+            .fg(t.text_primary)
+            .add_modifier(Modifier::BOLD)
+    };
+    let status = match error {
+        Some(e) => Line::from(Span::styled(
+            e.to_string(),
+            Style::default().fg(t.msg_error),
+        )),
+        None => Line::from(Span::styled(
+            "Usually the opponent's name",
+            Style::default().fg(t.text_dim),
+        )),
+    };
+    let content = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Name: ", Style::default().fg(t.popup_key)),
+            Span::styled(buffer.to_string(), name_style),
+            Span::styled("_", Style::default().fg(t.text_primary)),
+        ]),
+        Line::from(""),
+        status,
+        Line::from(""),
+        Line::from(Span::styled(hint, Style::default().fg(t.text_dim))),
     ];
     Paragraph::new(content)
         .wrap(Wrap { trim: false })

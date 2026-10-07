@@ -41,8 +41,10 @@ impl App {
     }
 
     /// The position changed: results computed for the old one are stale.
+    /// It also marks the game for the next autosave.
     pub(super) fn position_changed(&mut self) {
         self.position_stamp += 1;
+        self.mark_dirty();
         if self.cancel_evaluation() {
             log("Evaluation cancelled: the position changed");
         }
@@ -395,7 +397,6 @@ impl App {
             self.sim_progress = None;
             self.filter = None;
             self.list_offset.set(0);
-            self.autosave();
 
             if total_count == 0 {
                 self.set_message(MessageKind::Error, "No valid moves found".to_string());

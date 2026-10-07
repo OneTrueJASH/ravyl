@@ -258,6 +258,7 @@ dependencies = [
  "ratatui",
  "rayon",
  "serde",
+ "signal-hook",
  "toml",
 ]
 
