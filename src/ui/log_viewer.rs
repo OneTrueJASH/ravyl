@@ -2,7 +2,7 @@
 
 use ratatui::{
     layout::Rect,
-    style::{palette::tailwind, Color, Style, Stylize},
+    style::{Color, Style, Stylize},
     symbols,
     text::{Line, Span},
     widgets::{Block, Padding, Paragraph, Tabs, Wrap},
@@ -13,15 +13,17 @@ use crate::logging::{log_path_str, with_section_lines};
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
 
-pub fn tab_palette(tab: BoardTab) -> tailwind::Palette {
+/// Background and highlight colors of a tab.
+fn tab_colors(tab: BoardTab) -> (Color, Color) {
+    let t = theme::current();
     match tab {
-        BoardTab::Board => tailwind::EMERALD,
-        BoardTab::Logs => tailwind::CYAN,
+        BoardTab::Board => (t.tab_board_bg, t.tab_board_hl),
+        BoardTab::Logs => (t.tab_logs_bg, t.tab_logs_hl),
     }
 }
 
 pub fn tab_border_color(tab: BoardTab) -> Color {
-    tab_palette(tab).c700
+    tab_colors(tab).1
 }
 
 pub fn render_tabs(
@@ -37,7 +39,7 @@ pub fn render_tabs(
         BoardTab::Logs => 1,
     };
 
-    let highlight_style = (Color::default(), tab_palette(selected_tab).c700);
+    let highlight_style = (Color::default(), tab_colors(selected_tab).1);
 
     let tabs = Tabs::new(titles)
         .select(selected_index)
@@ -45,17 +47,14 @@ pub fn render_tabs(
         .padding("", "")
         .divider(" ");
 
-    // Register tab header hits.
-    // Rough estimation: each tab is ~8 chars wide
-    let tab_w = 8u16;
-    register_hit(
-        Rect::new(area.x, area.y, tab_w, 1),
-        HitTarget::TabHeader(BoardTab::Board),
-    );
-    register_hit(
-        Rect::new(area.x + tab_w + 1, area.y, tab_w, 1),
-        HitTarget::TabHeader(BoardTab::Logs),
-    );
+    // Register tab header hits at the titles' real widths (no padding,
+    // one-column divider between them).
+    let mut x = area.x;
+    for tab in [BoardTab::Board, BoardTab::Logs] {
+        let w = tab_title(tab).width() as u16;
+        register_hit(Rect::new(x, area.y, w, 1), HitTarget::TabHeader(tab));
+        x += w + 1;
+    }
 
     frame.render_widget(tabs, area);
 }
@@ -66,8 +65,8 @@ fn tab_title(tab: BoardTab) -> Line<'static> {
         BoardTab::Logs => "Logs",
     };
     format!("  {name}  ")
-        .fg(tailwind::SLATE.c200)
-        .bg(tab_palette(tab).c900)
+        .fg(theme::current().tab_fg)
+        .bg(tab_colors(tab).0)
         .into()
 }
 
@@ -80,7 +79,7 @@ pub fn render_log_viewer(
     let border_color = if is_focused {
         tab_border_color(BoardTab::Logs)
     } else {
-        theme::BORDER_NORMAL
+        theme::current().border_normal
     };
 
     let log_path = log_path_str();
@@ -109,24 +108,30 @@ pub fn render_log_viewer(
                     let rest = line[bracket_end + 1..].to_string();
 
                     let content_color = if rest.contains("ERROR") || rest.contains("error") {
-                        theme::MSG_ERROR
+                        theme::current().msg_error
                     } else if rest.contains("===") {
-                        theme::POPUP_HEADER
+                        theme::current().popup_header
                     } else if rest.contains("Parsed") || rest.contains("results") {
-                        theme::MSG_OK
+                        theme::current().msg_ok
                     } else {
-                        theme::TEXT_PRIMARY
+                        theme::current().text_primary
                     };
 
                     Line::from(vec![
-                        Span::styled(timestamp, Style::default().fg(theme::TEXT_DIM)),
+                        Span::styled(timestamp, Style::default().fg(theme::current().text_dim)),
                         Span::styled(rest, Style::default().fg(content_color)),
                     ])
                 } else {
-                    Line::from(Span::styled(line, Style::default().fg(theme::TEXT_PRIMARY)))
+                    Line::from(Span::styled(
+                        line,
+                        Style::default().fg(theme::current().text_primary),
+                    ))
                 }
             } else {
-                Line::from(Span::styled(line, Style::default().fg(theme::TEXT_PRIMARY)))
+                Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme::current().text_primary),
+                ))
             }
         })
         .collect();
@@ -141,7 +146,7 @@ pub fn render_log_viewer(
     let block = Block::bordered()
         .border_set(symbols::border::PROPORTIONAL_TALL)
         .padding(Padding::horizontal(1))
-        .title_bottom(Line::from(footer).style(Style::default().fg(theme::TEXT_DIM)))
+        .title_bottom(Line::from(footer).style(Style::default().fg(theme::current().text_dim)))
         .border_style(border_color);
 
     let paragraph = Paragraph::new(visible_lines)

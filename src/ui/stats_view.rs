@@ -80,11 +80,14 @@ impl<'a> RackStatsWidget<'a> {
     fn draw_tile(buf: &mut Buffer, x: u16, y: u16, letter: char, value: u32, is_blank: bool) {
         let style = if is_blank {
             Style::new()
-                .bg(theme::TILE_BG)
-                .fg(theme::TILE_BLANK_FG)
+                .bg(theme::current().tile_bg)
+                .fg(theme::current().tile_blank_fg)
                 .bold()
         } else {
-            Style::new().bg(theme::TILE_BG).fg(theme::TILE_FG).bold()
+            Style::new()
+                .bg(theme::current().tile_bg)
+                .fg(theme::current().tile_fg)
+                .bold()
         };
 
         for dy in 0..TILE_HEIGHT {
@@ -111,7 +114,7 @@ impl<'a> RackStatsWidget<'a> {
     }
 
     fn draw_empty_slot(buf: &mut Buffer, x: u16, y: u16) {
-        let style = Style::new().bg(theme::TILE_EMPTY_BG);
+        let style = Style::new().bg(theme::current().tile_empty_bg);
         for dy in 0..TILE_HEIGHT {
             for dx in 0..TILE_WIDTH {
                 if let Some(cell) = buf.cell_mut((x + dx, y + dy)) {
@@ -122,7 +125,7 @@ impl<'a> RackStatsWidget<'a> {
     }
 
     fn render_separator(buf: &mut Buffer, x: u16, y: u16, width: u16) {
-        let style = Style::new().fg(theme::TEXT_DIM);
+        let style = Style::new().fg(theme::current().text_dim);
         for dx in 0..width {
             if let Some(cell) = buf.cell_mut((x + dx, y)) {
                 cell.set_char('\u{2500}').set_style(style);
@@ -134,9 +137,9 @@ impl<'a> RackStatsWidget<'a> {
 impl Widget for RackStatsWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let border_color = if self.is_focused {
-            theme::PANE_RACK
+            theme::current().pane_rack
         } else {
-            theme::BORDER_NORMAL
+            theme::current().border_normal
         };
 
         let title = if self.is_focused {
@@ -209,7 +212,7 @@ impl Widget for RackStatsWidget<'_> {
                 row,
                 max_x,
                 &score_text,
-                Style::new().fg(theme::TEXT_PRIMARY).bold(),
+                Style::new().fg(theme::current().text_primary).bold(),
             );
             x += score_text.chars().count() as u16;
 
@@ -218,7 +221,7 @@ impl Widget for RackStatsWidget<'_> {
             } else if diff < 0 {
                 Color::Red
             } else {
-                theme::TEXT_DIM
+                theme::current().text_dim
             };
             Self::render_text(buf, x, row, max_x, &diff_text, Style::new().fg(diff_color));
             row += 1;
@@ -254,7 +257,7 @@ impl Widget for RackStatsWidget<'_> {
                 row,
                 max_x,
                 &rack_text,
-                Style::new().fg(theme::TEXT_PRIMARY),
+                Style::new().fg(theme::current().text_primary),
             );
             x += rack_text.len() as u16;
 
@@ -267,7 +270,7 @@ impl Widget for RackStatsWidget<'_> {
                     row,
                     max_x,
                     &dupe_text,
-                    Style::new().fg(theme::SCORE_FG),
+                    Style::new().fg(theme::current().score_fg),
                 );
             }
             row += 1;
@@ -279,7 +282,7 @@ impl Widget for RackStatsWidget<'_> {
 
             // === Bag count + game phase + blanks/S ===
             if row < inner.y + inner.height {
-                let pc = theme::phase_color(&stats.game_phase);
+                let pc = theme::current().phase_color(&stats.game_phase);
 
                 let bag_text = format!("~{}", stats.estimated_bag);
                 let phase_label = format!(" [{}]", stats.game_phase.label());
@@ -293,7 +296,7 @@ impl Widget for RackStatsWidget<'_> {
                     row,
                     max_x,
                     &bag_text,
-                    Style::new().fg(theme::TEXT_PRIMARY),
+                    Style::new().fg(theme::current().text_primary),
                 );
                 x += bag_text.len() as u16;
                 Self::render_text(buf, x, row, max_x, &phase_label, Style::new().fg(pc));
@@ -302,7 +305,7 @@ impl Widget for RackStatsWidget<'_> {
                 let blank_style = if stats.blanks_unseen > 0 {
                     Style::new().fg(Color::Cyan).bold()
                 } else {
-                    Style::new().fg(theme::TEXT_DIM)
+                    Style::new().fg(theme::current().text_dim)
                 };
                 Self::render_text(buf, x, row, max_x, &blank_text, blank_style);
                 x += blank_text.len() as u16;
@@ -310,7 +313,7 @@ impl Widget for RackStatsWidget<'_> {
                 let s_style = if stats.s_unseen > 0 {
                     Style::new().fg(Color::Green)
                 } else {
-                    Style::new().fg(theme::TEXT_DIM)
+                    Style::new().fg(theme::current().text_dim)
                 };
                 Self::render_text(buf, x, row, max_x, &s_text, s_style);
                 x += s_text.len() as u16;
@@ -333,22 +336,28 @@ impl Widget for RackStatsWidget<'_> {
                         let (text, style) = match loc {
                             crate::stats::TileLocation::InBag(n) if *n > 0 => (
                                 format!("{}:{}", letter, n),
-                                Style::new().fg(theme::TEXT_PRIMARY),
+                                Style::new().fg(theme::current().text_primary),
                             ),
-                            crate::stats::TileLocation::OnBoard => {
-                                (format!("{}:B", letter), Style::new().fg(theme::TEXT_DIM))
-                            }
+                            crate::stats::TileLocation::OnBoard => (
+                                format!("{}:B", letter),
+                                Style::new().fg(theme::current().text_dim),
+                            ),
                             crate::stats::TileLocation::InRack => (
                                 format!("{}:R", letter),
-                                Style::new().fg(theme::PHASE_ENDGAME).bold(),
+                                Style::new().fg(theme::current().phase_endgame).bold(),
                             ),
-                            crate::stats::TileLocation::BoardAndRack => {
-                                (format!("{}:BR", letter), Style::new().fg(theme::SCORE_FG))
-                            }
-                            crate::stats::TileLocation::Split => {
-                                (format!("{}:?", letter), Style::new().fg(theme::SCORE_FG))
-                            }
-                            _ => (format!("{}:-", letter), Style::new().fg(theme::TEXT_DIM)),
+                            crate::stats::TileLocation::BoardAndRack => (
+                                format!("{}:BR", letter),
+                                Style::new().fg(theme::current().score_fg),
+                            ),
+                            crate::stats::TileLocation::Split => (
+                                format!("{}:?", letter),
+                                Style::new().fg(theme::current().score_fg),
+                            ),
+                            _ => (
+                                format!("{}:-", letter),
+                                Style::new().fg(theme::current().text_dim),
+                            ),
                         };
                         Self::render_text(buf, x, row, max_x, &text, style);
                         x += text.len() as u16 + 1;
@@ -397,7 +406,7 @@ impl Widget for RackStatsWidget<'_> {
                             row,
                             max_x,
                             &text,
-                            Style::new().fg(theme::PHASE_ENDGAME).bold(),
+                            Style::new().fg(theme::current().phase_endgame).bold(),
                         );
                         row += 1;
                     }
@@ -415,7 +424,7 @@ impl Widget for RackStatsWidget<'_> {
                             row,
                             max_x,
                             &detail,
-                            Style::new().fg(theme::TEXT_DIM),
+                            Style::new().fg(theme::current().text_dim),
                         );
                         row += 1;
                     }
@@ -439,7 +448,7 @@ impl Widget for RackStatsWidget<'_> {
                             row,
                             max_x,
                             &text,
-                            Style::new().fg(theme::PHASE_ENDGAME).bold(),
+                            Style::new().fg(theme::current().phase_endgame).bold(),
                         );
                         row += 1;
                     }
@@ -462,7 +471,7 @@ impl Widget for RackStatsWidget<'_> {
                             row,
                             max_x,
                             &detail,
-                            Style::new().fg(theme::TEXT_DIM),
+                            Style::new().fg(theme::current().text_dim),
                         );
                         row += 1;
                     }
@@ -478,7 +487,7 @@ impl Widget for RackStatsWidget<'_> {
                             row,
                             max_x,
                             &format!("Opp kept: {}", note),
-                            Style::new().fg(theme::TEXT_DIM),
+                            Style::new().fg(theme::current().text_dim),
                         );
                         row += 1;
                     }
@@ -495,7 +504,7 @@ impl Widget for RackStatsWidget<'_> {
                         row,
                         max_x,
                         &text,
-                        Style::new().fg(theme::TEXT_DIM),
+                        Style::new().fg(theme::current().text_dim),
                     );
                     row += 1;
                 }
@@ -523,9 +532,9 @@ impl Widget for RackStatsWidget<'_> {
 
                 let count = unseen.get(letter).copied().unwrap_or(0);
                 let style = if count <= 2 {
-                    Style::new().fg(theme::SCORE_FG)
+                    Style::new().fg(theme::current().score_fg)
                 } else {
-                    Style::new().fg(theme::TEXT_PRIMARY)
+                    Style::new().fg(theme::current().text_primary)
                 };
 
                 let x = inner.x + (col as u16 * col_width);
@@ -540,6 +549,53 @@ impl Widget for RackStatsWidget<'_> {
             }
         }
     }
+}
+
+/// One-line rack for narrow (stacked) layouts: the tiles, how many, and
+/// the score.
+pub fn render_rack_line(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &SolverState,
+    is_focused: bool,
+    scores: (u32, u32),
+) {
+    let t = theme::current();
+    let tiles: Vec<String> = state
+        .rack
+        .tiles()
+        .iter()
+        .map(|t| {
+            if t.is_blank {
+                "?".to_string()
+            } else {
+                t.letter.to_string()
+            }
+        })
+        .collect();
+    let label_style = if is_focused {
+        Style::new().fg(t.pane_rack).bold()
+    } else {
+        Style::new().fg(t.text_dim)
+    };
+    let diff = scores.0 as i32 - scores.1 as i32;
+    let line = ratatui::text::Line::from(vec![
+        ratatui::text::Span::styled(" Rack ", label_style),
+        ratatui::text::Span::styled(
+            if tiles.is_empty() {
+                "(empty)".to_string()
+            } else {
+                tiles.join(" ")
+            },
+            Style::new().fg(t.text_primary).bold(),
+        ),
+        ratatui::text::Span::styled(
+            format!("   {}\u{2013}{} ({:+})", scores.0, scores.1, diff),
+            Style::new().fg(t.text_dim),
+        ),
+    ]);
+    register_hit(area, HitTarget::FocusPane(crate::app::Focus::Rack));
+    frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
 }
 
 #[allow(clippy::too_many_arguments)]

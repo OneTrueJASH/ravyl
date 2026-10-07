@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Color, Style},
     symbols::{self, merge::MergeStrategy},
+    text::Line,
     widgets::{Block, BorderType, Padding, Widget},
 };
 
@@ -18,6 +19,15 @@ use crate::ui::theme;
 
 const MIN_CELL_WIDTH: u16 = 7;
 const MIN_CELL_HEIGHT: u16 = 4;
+/// Columns left of the grid for the row numbers (1-15).
+pub const AXIS_W: u16 = 3;
+/// Rows above the grid for the column letters (A-O).
+pub const AXIS_H: u16 = 1;
+
+/// The square's name in board notation: column letter, row number (`H8`).
+pub fn square_name(row: usize, col: usize) -> String {
+    format!("{}{}", (b'A' + col as u8) as char, row + 1)
+}
 
 /// How board cells are drawn for the space available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,19 +113,29 @@ fn premium_label(premium: &Premium) -> &'static str {
         Premium::DoubleWord => "2W",
         Premium::TripleLetter => "3L",
         Premium::DoubleLetter => "2L",
-        Premium::Center => "\u{2666}",
+        Premium::Center => theme::current().glyphs.center,
         Premium::Normal => "",
     }
 }
 
 fn premium_fg(premium: &Premium) -> Color {
+    let t = theme::current();
     match premium {
-        Premium::TripleWord => theme::PREMIUM_3W,
-        Premium::DoubleWord => theme::PREMIUM_2W,
-        Premium::TripleLetter => theme::PREMIUM_3L,
-        Premium::DoubleLetter => theme::PREMIUM_2L,
-        Premium::Center => theme::PREMIUM_CENTER,
-        Premium::Normal => theme::PREMIUM_NORMAL,
+        Premium::TripleWord => t.premium_3w,
+        Premium::DoubleWord => t.premium_2w,
+        Premium::TripleLetter => t.premium_3l,
+        Premium::DoubleLetter => t.premium_2l,
+        Premium::Center => t.premium_center,
+        Premium::Normal => t.premium_normal,
+    }
+}
+
+/// A tile's letter as shown on the board: lowercase for a blank.
+fn tile_label(tile: &Tile) -> String {
+    if tile.is_blank {
+        tile.letter.to_ascii_lowercase().to_string()
+    } else {
+        tile.letter.to_string()
     }
 }
 
@@ -186,8 +206,13 @@ impl<'a> BoardWidget<'a> {
             Rect::new(x, y, cell_w.saturating_sub(1), cell_h)
         };
 
+        let cursor_mod = if show_direction {
+            theme::current().cursor_modifier()
+        } else {
+            ratatui::style::Modifier::empty()
+        };
         if let Some(bg) = bg_color {
-            let fill_style = Style::new().bg(bg);
+            let fill_style = Style::new().bg(bg).add_modifier(cursor_mod);
             for dy in 0..inner.height {
                 for dx in 0..inner.width {
                     if let Some(cell) = buf.cell_mut((inner.x + dx, inner.y + dy)) {
@@ -211,7 +236,8 @@ impl<'a> BoardWidget<'a> {
                 Style::new().fg(fg_color).bg(bg).bold()
             } else {
                 Style::new().fg(fg_color).bold()
-            };
+            }
+            .add_modifier(cursor_mod);
             for (i, ch) in label.chars().enumerate() {
                 if let Some(cell) = buf.cell_mut((label_x + i as u16, label_y)) {
                     cell.set_char(ch).set_style(style);
@@ -238,9 +264,10 @@ impl<'a> BoardWidget<'a> {
         }
 
         if show_direction && inner.width > 0 && inner.height > 0 {
+            let glyphs = theme::current().glyphs;
             let arrow = match self.typing_direction {
-                Direction::Horizontal => '\u{2192}',
-                Direction::Vertical => '\u{2193}',
+                Direction::Horizontal => glyphs.arrow_right,
+                Direction::Vertical => glyphs.arrow_down,
             };
             let arrow_x = inner.x + inner.width.saturating_sub(1);
             let arrow_y = inner.y + inner.height.saturating_sub(1);
@@ -258,15 +285,24 @@ impl<'a> BoardWidget<'a> {
 
 impl Widget for BoardWidget<'_> {
     fn render(mut self, area: Rect, buf: &mut Buffer) {
+        let t = theme::current();
         let border_color = if self.is_focused {
-            theme::TAB_BOARD_ACTIVE
+            t.tab_board_active
         } else {
-            theme::BORDER_NORMAL
+            t.border_normal
         };
 
+        // The title reads out the cursor square and typing direction.
+        let (cr, cc) = self.cursor;
+        let arrow = match self.typing_direction {
+            Direction::Horizontal => t.glyphs.arrow_right,
+            Direction::Vertical => t.glyphs.arrow_down,
+        };
+        let readout = format!(" {} {} ", square_name(cr, cc), arrow);
         let block = Block::bordered()
             .border_set(symbols::border::PROPORTIONAL_TALL)
             .border_style(border_color)
+            .title(Line::from(readout).alignment(Alignment::Right))
             .padding(Padding::uniform(0));
         let inner = block.inner(area);
         block.render(area, buf);
@@ -274,13 +310,50 @@ impl Widget for BoardWidget<'_> {
         // Register focus pane hit for the whole board area.
         register_hit(area, HitTarget::FocusPane(crate::app::Focus::Board));
 
-        self.geometry = BoardGeometry::fit(inner.width, inner.height);
+        // Coordinate axes take a strip on the left and one on top.
+        let grid_area = Rect {
+            x: inner.x + AXIS_W,
+            y: inner.y + AXIS_H,
+            width: inner.width.saturating_sub(AXIS_W),
+            height: inner.height.saturating_sub(AXIS_H),
+        };
+        self.geometry = BoardGeometry::fit(grid_area.width, grid_area.height);
         let BoardGeometry { cell_w, cell_h, .. } = self.geometry;
         let (step_x, step_y) = self.geometry.step();
         let (board_w, board_h) = self.geometry.grid_size();
 
-        let start_x = inner.x + (inner.width.saturating_sub(board_w)) / 2;
-        let start_y = inner.y + (inner.height.saturating_sub(board_h)) / 2;
+        let start_x = grid_area.x + (grid_area.width.saturating_sub(board_w)) / 2;
+        let start_y = grid_area.y + (grid_area.height.saturating_sub(board_h)) / 2;
+        let inner = grid_area;
+
+        // Axes: column letters above each column's centre, row numbers to
+        // the left of each row's content line.
+        let axis_style = Style::new().fg(t.axis_fg);
+        let content_dy = if self.geometry.bordered {
+            cell_h / 2
+        } else {
+            0
+        };
+        let content_x0 = if self.geometry.bordered { 1 } else { 0 };
+        let content_w = if self.geometry.bordered {
+            cell_w.saturating_sub(2)
+        } else {
+            cell_w.saturating_sub(1)
+        };
+        for i in 0..BOARD_SIZE {
+            let x = start_x + i as u16 * step_x + content_x0 + content_w.saturating_sub(1) / 2;
+            if start_y > inner.y.saturating_sub(AXIS_H) && x < inner.x + inner.width {
+                let ch = (b'A' + i as u8) as char;
+                if let Some(cell) = buf.cell_mut((x, start_y - 1)) {
+                    cell.set_char(ch).set_style(axis_style);
+                }
+            }
+            let y = start_y + i as u16 * step_y + content_dy;
+            if y < inner.y + inner.height && start_x >= AXIS_W {
+                let label = format!("{:>2}", i + 1);
+                buf.set_string(start_x - AXIS_W, y, label, axis_style);
+            }
+        }
 
         for row in 0..BOARD_SIZE {
             for col in 0..BOARD_SIZE {
@@ -299,19 +372,25 @@ impl Widget for BoardWidget<'_> {
                     HitTarget::BoardCell(row, col),
                 );
 
-                let is_cursor = self.is_focused && self.cursor == (row, col);
-                let border = theme::BORDER_NORMAL;
+                // The cursor is bright while the board has focus and dim
+                // otherwise, so its position is never lost.
+                let at_cursor = self.cursor == (row, col);
+                let is_cursor = self.is_focused && at_cursor;
+                let dim_cursor = !self.is_focused && at_cursor;
+                let border = t.border_normal;
 
                 if let Some(tile) = self.state.get_tile(row, col) {
                     let bg = if is_cursor {
-                        theme::CURSOR_BG
+                        t.cursor_bg
+                    } else if dim_cursor {
+                        t.cursor_dim_bg
                     } else {
-                        theme::TILE_BG
+                        t.tile_bg
                     };
                     let fg = if tile.is_blank {
-                        theme::TILE_BLANK_FG
+                        theme::current().tile_blank_fg
                     } else {
-                        theme::CURSOR_FG
+                        theme::current().cursor_fg
                     };
                     let value = if tile.is_blank {
                         0
@@ -327,22 +406,22 @@ impl Widget for BoardWidget<'_> {
                         border,
                         Some(bg),
                         fg,
-                        &tile.letter.to_string(),
+                        &tile_label(tile),
                         is_cursor,
                         Some(value),
                     );
                 } else if let Some(preview_tile) = self.preview.get(&(row, col)) {
                     let bg = if is_cursor {
-                        theme::CURSOR_BG
+                        theme::current().cursor_bg
                     } else {
-                        theme::TILE_PREVIEW_BG
+                        theme::current().tile_preview_bg
                     };
                     let fg = if is_cursor {
-                        theme::CURSOR_FG
+                        theme::current().cursor_fg
                     } else if preview_tile.is_blank {
-                        theme::TILE_PREVIEW_BLANK_FG
+                        theme::current().tile_preview_blank_fg
                     } else {
-                        theme::TILE_PREVIEW_FG
+                        theme::current().tile_preview_fg
                     };
                     let value = if preview_tile.is_blank {
                         0
@@ -358,17 +437,22 @@ impl Widget for BoardWidget<'_> {
                         border,
                         Some(bg),
                         fg,
-                        &preview_tile.letter.to_string(),
+                        &tile_label(preview_tile),
                         is_cursor,
                         Some(value),
                     );
-                } else if is_cursor {
+                } else if is_cursor || dim_cursor {
                     let board_cell = self
                         .state
                         .board
                         .get(row, col)
                         .expect("row/col within board dimensions");
                     let label = premium_label(&board_cell.premium);
+                    let bg = if is_cursor {
+                        t.cursor_bg
+                    } else {
+                        t.cursor_dim_bg
+                    };
                     self.draw_cell(
                         buf,
                         cell_x,
@@ -376,10 +460,10 @@ impl Widget for BoardWidget<'_> {
                         cell_w,
                         cell_h,
                         border,
-                        Some(theme::CURSOR_BG),
-                        theme::CURSOR_FG,
+                        Some(bg),
+                        t.cursor_fg,
                         label,
-                        true,
+                        is_cursor,
                         None,
                     );
                 } else {

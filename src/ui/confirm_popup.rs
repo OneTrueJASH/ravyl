@@ -53,35 +53,35 @@ impl<'a> ConfirmPopup<'a> {
 
 impl Widget for ConfirmPopup<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let inner = render_popup_frame(area, buf, self.title, theme::POPUP_WARN_BORDER);
+        let inner = render_popup_frame(area, buf, self.title, theme::current().popup_warn_border);
         register_hit(area, HitTarget::DialogArea);
 
         let message_line = Line::from(Span::styled(
             self.message,
-            Style::default().fg(theme::TEXT_PRIMARY),
+            Style::default().fg(theme::current().text_primary),
         ));
 
         let yes_style = if self.selected {
             Style::default()
-                .fg(theme::BTN_SELECTED_FG)
-                .bg(theme::BTN_YES_FG)
+                .fg(theme::current().btn_selected_fg)
+                .bg(theme::current().btn_yes_fg)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::BTN_YES_FG)
+            Style::default().fg(theme::current().btn_yes_fg)
         };
 
         let no_style = if !self.selected {
             Style::default()
-                .fg(theme::BTN_SELECTED_FG)
-                .bg(theme::BTN_NO_FG)
+                .fg(theme::current().btn_selected_fg)
+                .bg(theme::current().btn_no_fg)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::BTN_NO_FG)
+            Style::default().fg(theme::current().btn_no_fg)
         };
 
         let hint_line = Line::from(Span::styled(
             "←/→ to select, Enter to confirm",
-            Style::default().fg(theme::TEXT_DIM),
+            Style::default().fg(theme::current().text_dim),
         ));
 
         let content = vec![

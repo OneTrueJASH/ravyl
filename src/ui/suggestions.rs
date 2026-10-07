@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use ratatui::{
     layout::{Alignment, Constraint, Flex, Layout, Rect},
-    style::{palette::tailwind, Color, Style, Stylize},
+    style::{Color, Style, Stylize},
     symbols,
     text::Line,
     widgets::{Block, Cell, LineGauge, Padding, Paragraph, Row, Table, TableState, Tabs},
@@ -47,6 +47,33 @@ impl<'a> SimEquityLookup<'a> {
     pub fn has_data(&self) -> bool {
         !self.map.is_empty()
     }
+}
+
+/// The move's word with letters played from blanks in lowercase, the
+/// usual notation.
+pub fn display_word(mv: &Move) -> String {
+    if mv.kind != crate::solver::MoveKind::Play || mv.tiles_used.iter().all(|(_, _, t)| !t.is_blank)
+    {
+        return mv.word.clone();
+    }
+    let (dr, dc) = mv.direction.delta();
+    mv.word
+        .chars()
+        .enumerate()
+        .map(|(i, ch)| {
+            let r = (mv.row as i32 + dr * i as i32) as usize;
+            let c = (mv.col as i32 + dc * i as i32) as usize;
+            let blank = mv
+                .tiles_used
+                .iter()
+                .any(|(pr, pc, t)| *pr == r && *pc == c && t.is_blank);
+            if blank {
+                ch.to_ascii_lowercase()
+            } else {
+                ch
+            }
+        })
+        .collect()
 }
 
 /// A table column: header, width, and the sort a header click selects.
@@ -184,66 +211,110 @@ fn render_progress(frame: &mut ratatui::Frame, area: Rect, progress: &SimProgres
     let [label, gauge] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(gauge_w)]).areas(area);
     frame.render_widget(
-        Paragraph::new(text).style(Style::new().fg(theme::TEXT_DIM)),
+        Paragraph::new(text).style(Style::new().fg(theme::current().text_dim)),
         label,
     );
     if gauge_w > 0 {
         let ratio = progress.budget_fraction.unwrap_or(0.0).clamp(0.0, 1.0) as f64;
         frame.render_widget(
             LineGauge::default()
-                .filled_style(Style::new().fg(theme::SIM_EQUITY_FG))
-                .unfilled_style(Style::new().fg(theme::TEXT_DIM))
+                .filled_style(Style::new().fg(theme::current().sim_equity_fg))
+                .unfilled_style(Style::new().fg(theme::current().text_dim))
                 .ratio(ratio),
             gauge,
         );
     }
 }
 
+/// Rows kept visible above and below the selection when scrolling.
+const SCROLL_OFF: usize = 2;
+
+/// What the list shows and where it is scrolled to.
+pub struct ListView<'a> {
+    /// Every suggestion.
+    pub moves: &'a [Move],
+    /// Indices into `moves` of the rows shown (all, or the filter's matches).
+    pub visible: &'a [usize],
+    /// Index into `moves` of the selected suggestion.
+    pub selected: usize,
+    /// First shown row (an index into `visible`), kept between frames.
+    pub offset: &'a std::cell::Cell<usize>,
+    /// Rows shown, recorded for paging.
+    pub height: &'a std::cell::Cell<usize>,
+    pub filter: Option<&'a str>,
+    pub filter_editing: bool,
+}
+
+/// Scroll `offset` just enough that `pos` sits at least `SCROLL_OFF` rows
+/// inside a window of `height` rows over `len` rows.
+pub fn scroll_to(offset: usize, pos: usize, height: usize, len: usize) -> usize {
+    if height == 0 {
+        return 0;
+    }
+    let so = SCROLL_OFF.min(height.saturating_sub(1) / 2);
+    let mut off = offset;
+    if pos < off + so {
+        off = pos.saturating_sub(so);
+    } else if pos + so >= off + height {
+        off = pos + so + 1 - height;
+    }
+    off.min(len.saturating_sub(height))
+}
+
 /// Render the suggestions panel. Only the visible rows are built, so the
 /// full candidate list (tens of thousands of plays with blanks) costs no
 /// more to draw than a page.
-#[allow(clippy::too_many_arguments)]
 pub fn render_suggestions(
     frame: &mut ratatui::Frame,
     area: Rect,
-    moves: &[Move],
-    selected: usize,
+    view: ListView,
     is_focused: bool,
     sim_results: Option<&[SimResult]>,
     progress: Option<&SimProgress>,
     running: bool,
 ) {
     let border_color = if is_focused {
-        theme::PANE_SUGGESTIONS
+        theme::current().pane_suggestions
     } else {
-        theme::BORDER_NORMAL
+        theme::current().border_normal
     };
 
+    let moves = view.moves;
     let lookup = SimEquityLookup::new(sim_results);
     let has_sim = lookup.has_data();
+    let pos = view.visible.iter().position(|&i| i == view.selected);
 
+    // Title: count, and the selection's place in the list ("12/340").
     let title = if moves.is_empty() {
         " Suggestions ".to_string()
     } else {
         format!(
-            " Suggestions ({}){} ",
-            group_thousands(moves.len() as u64),
+            " Suggestions {}/{}{} ",
+            pos.map_or(0, |p| p + 1),
+            group_thousands(view.visible.len() as u64),
             if has_sim { "*" } else { "" }
         )
     };
+    let filter_title = view.filter.map(|f| {
+        let cursor = if view.filter_editing { "_" } else { "" };
+        format!(" /{}{} ", f, cursor)
+    });
 
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_set(symbols::border::PROPORTIONAL_TALL)
         .title(title)
         .border_style(border_color)
         .padding(Padding::horizontal(1));
+    if let Some(f) = filter_title {
+        block = block.title(Line::from(f).alignment(Alignment::Right));
+    }
 
     // Register focus pane hit.
     register_hit(area, HitTarget::FocusPane(crate::app::Focus::Suggestions));
 
     if moves.is_empty() {
         let paragraph = Paragraph::new("Ctrl+S to find moves")
-            .style(Style::new().fg(theme::TEXT_DIM))
+            .style(Style::new().fg(theme::current().text_dim))
             .block(block);
         frame.render_widget(paragraph, area);
         return;
@@ -266,11 +337,14 @@ pub fn render_suggestions(
     let cols = columns(has_sim, table_area.width);
     let wide = table_area.width >= 96;
 
-    // Visible window: the selection stays on screen, scrolling just enough
-    // (the persistent scroll offset comes with the list navigation work).
-    let visible = table_area.height.saturating_sub(1) as usize; // minus header
-    let offset = selected.saturating_sub(visible.saturating_sub(1));
-    let end = (offset + visible).min(moves.len());
+    // Visible window, kept between frames: it scrolls only as far as
+    // needed to keep the selection SCROLL_OFF rows inside it.
+    let rows_shown = table_area.height.saturating_sub(1) as usize; // minus header
+    let len = view.visible.len();
+    let offset = scroll_to(view.offset.get(), pos.unwrap_or(0), rows_shown, len);
+    view.offset.set(offset);
+    view.height.set(rows_shown);
+    let end = (offset + rows_shown).min(len);
 
     // Click targets: header cells sort, rows select.
     let selection_w = HIGHLIGHT_SYMBOL.len() as u16;
@@ -291,7 +365,7 @@ pub fn render_suggestions(
             register_hit(*r, HitTarget::SortTab(mode));
         }
     }
-    for (slot, i) in (offset..end).enumerate() {
+    for (slot, &i) in view.visible[offset..end].iter().enumerate() {
         let row_y = table_area.y + 1 + slot as u16;
         register_hit(
             Rect::new(area.x, row_y, area.width, 1),
@@ -299,7 +373,7 @@ pub fn render_suggestions(
         );
     }
 
-    let hdr_style = Style::new().fg(theme::TEXT_DIM);
+    let hdr_style = Style::new().fg(theme::current().text_dim);
     let header = Row::new(cols.iter().map(|c| {
         let line = Line::from(c.title);
         let line = if c.right {
@@ -313,28 +387,40 @@ pub fn render_suggestions(
     let right = |text: String, style: Style| -> Cell<'static> {
         Cell::from(Line::from(text).alignment(Alignment::Right)).style(style)
     };
-    let dash = || right("\u{2013}".to_string(), Style::new().fg(theme::TEXT_DIM));
+    let dash = || {
+        right(
+            "\u{2013}".to_string(),
+            Style::new().fg(theme::current().text_dim),
+        )
+    };
 
-    let rows: Vec<Row> = moves[offset..end]
+    let rows: Vec<Row> = view.visible[offset..end]
         .iter()
-        .map(|mv| {
+        .map(|&i| {
+            let mv = &moves[i];
             let sim = lookup.get(mv).filter(|r| r.is_simulated());
             let cells: Vec<Cell> = cols
                 .iter()
                 .map(|c| match c.title {
-                    "Pos" => Cell::from(mv.coords()).style(Style::new().fg(theme::TEXT_DIM)),
+                    "Pos" => {
+                        Cell::from(mv.coords()).style(Style::new().fg(theme::current().text_dim))
+                    }
                     "Word" => {
+                        let word = display_word(mv);
                         let text = if mv.is_bingo {
-                            format!("{} \u{2605}", mv.word)
+                            format!("{} {}", word, theme::current().glyphs.bingo)
                         } else {
-                            mv.word.clone()
+                            word
                         };
                         Cell::from(text).style(Style::new().bold())
                     }
-                    "Score" => right(mv.score.to_string(), Style::new().fg(theme::SCORE_FG)),
+                    "Score" => right(
+                        mv.score.to_string(),
+                        Style::new().fg(theme::current().score_fg),
+                    ),
                     "Equity" => right(
                         format!("{:.0}", mv.equity),
-                        Style::new().fg(theme::EQUITY_FG),
+                        Style::new().fg(theme::current().equity_fg),
                     ),
                     "Leave" => {
                         let tiles: String = mv
@@ -348,12 +434,12 @@ pub fn render_suggestions(
                         } else {
                             format!("{} ({:+.0})", tiles, value)
                         };
-                        Cell::from(text).style(Style::new().fg(theme::leave_color(value)))
+                        Cell::from(text).style(Style::new().fg(theme::current().leave_color(value)))
                     }
                     "Spread" => match sim {
                         Some(r) => right(
                             with_se(r.sim_equity, r.spread_se, wide, true),
-                            Style::new().fg(theme::SIM_EQUITY_FG),
+                            Style::new().fg(theme::current().sim_equity_fg),
                         ),
                         None => dash(),
                     },
@@ -364,20 +450,22 @@ pub fn render_suggestions(
                             } else {
                                 format!("{:.0}%", r.win_pct)
                             };
-                            right(text, Style::new().fg(theme::win_color(r.win_pct)))
+                            right(text, Style::new().fg(theme::current().win_color(r.win_pct)))
                         }
                         None => dash(),
                     },
                     "\u{0394}" => match sim {
-                        Some(r) if r.delta == 0.0 && r.delta_se == 0.0 && !r.is_endgame => {
-                            right("best".to_string(), Style::new().fg(theme::WIN_GOOD))
-                        }
-                        Some(r) if r.is_endgame && r.delta == 0.0 => {
-                            right("best".to_string(), Style::new().fg(theme::WIN_GOOD))
-                        }
+                        Some(r) if r.delta == 0.0 && r.delta_se == 0.0 && !r.is_endgame => right(
+                            "best".to_string(),
+                            Style::new().fg(theme::current().win_good),
+                        ),
+                        Some(r) if r.is_endgame && r.delta == 0.0 => right(
+                            "best".to_string(),
+                            Style::new().fg(theme::current().win_good),
+                        ),
                         Some(r) => right(
                             with_se(r.delta, r.delta_se, wide, true),
-                            Style::new().fg(theme::TEXT_PRIMARY),
+                            Style::new().fg(theme::current().text_primary),
                         ),
                         None => dash(),
                     },
@@ -385,18 +473,18 @@ pub fn render_suggestions(
                         Some(r) if r.is_endgame => dash(),
                         Some(r) => right(
                             group_thousands(r.iterations as u64),
-                            Style::new().fg(theme::TEXT_DIM),
+                            Style::new().fg(theme::current().text_dim),
                         ),
                         None => dash(),
                     },
                     "Bingo" => match sim {
                         Some(r) if !r.is_endgame => {
                             let color = if r.ply2_bingo_pct >= 20.0 {
-                                theme::WIN_GOOD
+                                theme::current().win_good
                             } else if r.ply2_bingo_pct >= 10.0 {
-                                theme::EQUITY_FG
+                                theme::current().equity_fg
                             } else {
-                                theme::TEXT_DIM
+                                theme::current().text_dim
                             };
                             right(
                                 format!("{:.0}/{:.0}", r.ply2_bingo_pct, r.ply1_bingo_pct),
@@ -411,9 +499,9 @@ pub fn render_suggestions(
                             None => "\u{2013}".to_string(),
                         };
                         let color = match lookup.get(mv).map(|r| r.status) {
-                            Some(SimStatus::Racing) => theme::SIM_EQUITY_FG,
-                            Some(SimStatus::Exact) => theme::WIN_GOOD,
-                            _ => theme::TEXT_DIM,
+                            Some(SimStatus::Racing) => theme::current().sim_equity_fg,
+                            Some(SimStatus::Exact) => theme::current().win_good,
+                            _ => theme::current().text_dim,
                         };
                         Cell::from(text).style(Style::new().fg(color))
                     }
@@ -430,7 +518,7 @@ pub fn render_suggestions(
         .highlight_symbol(HIGHLIGHT_SYMBOL);
 
     let mut state = TableState::default();
-    state.select(Some(selected.saturating_sub(offset)));
+    state.select(pos.and_then(|p| p.checked_sub(offset)));
     frame.render_stateful_widget(table, table_area, &mut state);
 }
 
@@ -442,7 +530,7 @@ pub fn render_sort_tabs(
     has_sim: bool,
     is_focused: bool,
 ) {
-    let palette = tailwind::VIOLET;
+    let t = theme::current();
 
     let modes: Vec<SortMode> = if has_sim {
         vec![
@@ -472,16 +560,16 @@ pub fn render_sort_tabs(
         .iter()
         .map(|m| {
             format!(" {} ", m.label())
-                .fg(tailwind::SLATE.c200)
-                .bg(palette.c900)
+                .fg(t.tab_fg)
+                .bg(t.sort_tab_bg)
                 .into()
         })
         .collect();
 
     let highlight_color: Color = if is_focused {
-        palette.c700
+        t.sort_tab_hl_focused
     } else {
-        palette.c800
+        t.sort_tab_hl
     };
 
     let tabs = Tabs::new(titles)
@@ -502,4 +590,24 @@ pub fn render_sort_tabs(
     }
 
     frame.render_widget(tabs, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrolling_keeps_a_margin_and_stays_put() {
+        // Moving down inside the window does not scroll.
+        assert_eq!(scroll_to(0, 5, 20, 100), 0);
+        // Near the bottom edge it scrolls by just enough.
+        assert_eq!(scroll_to(0, 18, 20, 100), 1);
+        assert_eq!(scroll_to(0, 30, 20, 100), 13);
+        // Moving up keeps the margin above.
+        assert_eq!(scroll_to(13, 14, 20, 100), 12);
+        // Never past the end, never negative.
+        assert_eq!(scroll_to(90, 99, 20, 100), 80);
+        assert_eq!(scroll_to(5, 0, 20, 100), 0);
+        assert_eq!(scroll_to(0, 3, 20, 5), 0);
+    }
 }

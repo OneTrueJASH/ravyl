@@ -11,6 +11,7 @@ pub mod layout;
 pub mod log_viewer;
 pub mod menu_popup;
 pub mod popup_frame;
+pub mod prompts;
 pub mod stats_view;
 pub mod status_bar;
 pub mod suggestions;

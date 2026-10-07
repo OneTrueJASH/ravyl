@@ -28,7 +28,10 @@ use std::time::Duration;
 use anyhow::Result;
 use ratatui::crossterm::{
     cursor::Show,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -44,6 +47,7 @@ fn restore_terminal() {
     let _ = disable_raw_mode();
     let _ = execute!(
         io::stdout(),
+        DisableBracketedPaste,
         LeaveAlternateScreen,
         DisableMouseCapture,
         Show
@@ -61,7 +65,12 @@ impl TerminalGuard {
         // From here on the guard owns the cleanup, even if the next call
         // fails half-way.
         let guard = TerminalGuard;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )?;
         Ok(guard)
     }
 }
@@ -107,16 +116,9 @@ fn main() -> ExitCode {
         }
     };
     let (settings, settings_warning) = settings::Settings::load_or_recover();
-    let mut app = App::with_settings(settings);
-    app.set_dictionary(dict);
-    if let Some(warning) = datafiles::lfs_warning() {
-        app.message = Some(warning);
-    }
-    if let Some(warning) = settings_warning {
-        app.message = Some(warning);
-    }
+    ui::theme::init(settings.display.theme);
 
-    let res = run_tui(&mut app);
+    let res = run_tui(settings, settings_warning, dict);
     if let Err(err) = res {
         eprintln!("cpsolver2: {err:#}");
         return ExitCode::FAILURE;
@@ -124,48 +126,104 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_tui(app: &mut App) -> Result<()> {
+fn run_tui(
+    settings: settings::Settings,
+    settings_warning: Option<String>,
+    dict: dictionary::Dictionary,
+) -> Result<()> {
     let _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    run_app(&mut terminal, app)
+
+    // A frame before the rest of startup (RefEngine, the saved session), so
+    // the terminal never sits blank.
+    terminal.draw(|f| {
+        let area = f.area();
+        let y = area.y + area.height / 2;
+        f.render_widget(
+            ratatui::widgets::Paragraph::new("Loading\u{2026}").centered(),
+            Rect::new(area.x, y, area.width, 1),
+        );
+    })?;
+
+    let mut app = App::with_settings(settings);
+    app.set_dictionary(dict);
+    app.restore_session();
+    if let Some(warning) = datafiles::lfs_warning() {
+        app.set_message(app::MessageKind::Error, warning);
+    }
+    if let Some(warning) = settings_warning {
+        app.set_message(app::MessageKind::Error, warning);
+    }
+    let res = run_app(&mut terminal, &mut app);
+    app.autosave();
+    res
+}
+
+/// Copy `text` to the system clipboard with an OSC 52 escape (works over
+/// SSH in most terminals).
+fn write_clipboard(text: &str) {
+    use std::io::Write;
+    let mut out = io::stdout();
+    let _ = write!(out, "\x1b]52;c;{}\x07", app::base64(text.as_bytes()));
+    let _ = out.flush();
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     B::Error: Send + Sync + 'static,
 {
+    // Draw only when something changed: an input event, a result arriving,
+    // or (while an evaluation runs) the spinner.
+    let mut dirty = true;
     loop {
-        if let Ok(size) = terminal.size() {
-            app.terminal_size = Some((size.width, size.height));
+        if dirty {
+            if let Ok(size) = terminal.size() {
+                app.terminal_size = Some((size.width, size.height));
+                app.ensure_focus_visible();
+            }
+            terminal.draw(|f| draw_ui(f, app))?;
+            dirty = false;
         }
-        terminal.draw(|f| draw_ui(f, app))?;
+        if let Some(text) = app.pending_clipboard.take() {
+            write_clipboard(&text);
+        }
 
-        // Poll for evaluation and inference results.
-        if app.has_background_work() {
-            app.poll_mcts();
+        if app.has_background_work() && app.poll_mcts() {
+            dirty = true;
         }
 
         let timeout = if app.is_mcts_running() {
             Duration::from_millis(100)
+        } else if app.has_background_work() {
+            Duration::from_millis(200)
         } else {
-            Duration::from_millis(500)
+            Duration::from_secs(1)
         };
 
         if event::poll(timeout)? {
-            let action = match event::read()? {
-                Event::Key(key) => app.handle_key(key),
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
-                _ => AppAction::Nothing,
-            };
-
-            match action {
-                AppAction::Quit => return Ok(()),
-                AppAction::Redraw => {} // Next loop iteration redraws.
-                AppAction::Nothing => {}
+            // Handle every pending event before drawing again, so a burst
+            // of keys or wheel ticks costs one frame.
+            loop {
+                let action = match event::read()? {
+                    Event::Key(key) => app.handle_key(key),
+                    Event::Mouse(mouse) => app.handle_mouse(mouse),
+                    Event::Paste(text) => app.handle_paste(&text),
+                    Event::Resize(..) => AppAction::Redraw,
+                    _ => AppAction::Nothing,
+                };
+                match action {
+                    AppAction::Quit => return Ok(()),
+                    AppAction::Redraw => dirty = true,
+                    AppAction::Nothing => {}
+                }
+                if !event::poll(Duration::ZERO)? {
+                    break;
+                }
             }
         } else if app.is_mcts_running() {
-            app.tick_spinner();
+            // The spinner and the live progress line.
+            dirty = true;
         }
     }
 }
@@ -177,6 +235,10 @@ fn draw_ui(frame: &mut Frame, app: &App) {
     clear_hits();
 
     let layout = AppLayout::compute(size, app.sidebar_visible);
+    if let Some((w, h)) = layout.too_small {
+        ui::status_bar::render_too_small(frame, size, (w, h));
+        return;
+    }
 
     // Title bar.
     ui::status_bar::render_title(frame, layout.title_bar);
@@ -227,6 +289,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
         frame,
         layout.message_area,
         app.message.as_deref(),
+        app.message_kind,
         app.mcts_progress.as_ref(),
     );
 
@@ -245,6 +308,15 @@ fn draw_ui(frame: &mut Frame, app: &App) {
             app.inference_note(),
         );
     }
+    if let Some(rack_line) = layout.rack_line {
+        ui::stats_view::render_rack_line(
+            frame,
+            rack_line,
+            &app.state,
+            app.focus == Focus::Rack,
+            (app.our_score, app.opp_score),
+        );
+    }
 
     // Sort-mode tabs.
     if let Some(tab_area) = layout.suggestions_tab_area {
@@ -260,11 +332,19 @@ fn draw_ui(frame: &mut Frame, app: &App) {
 
     // Suggestions panel.
     if let Some(suggestions_area) = layout.suggestions_area {
+        let visible = app.visible_suggestions();
         ui::suggestions::render_suggestions(
             frame,
             suggestions_area,
-            &app.suggestions,
-            app.selected_suggestion,
+            ui::suggestions::ListView {
+                moves: &app.suggestions,
+                visible: &visible,
+                selected: app.selected_suggestion,
+                offset: &app.list_offset,
+                height: &app.list_height,
+                filter: app.filter.as_deref(),
+                filter_editing: app.filter_editing,
+            },
             app.focus == Focus::Suggestions,
             app.sim_results.as_deref(),
             app.sim_progress.as_ref(),
@@ -273,14 +353,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
     }
 
     // Hint bar.
-    ui::status_bar::render_hints(
-        frame,
-        layout.status_bar,
-        app.focus,
-        !app.suggestions.is_empty(),
-        app.is_mcts_running(),
-        app.state.is_endgame(),
-    );
+    ui::status_bar::render_hints(frame, layout.status_bar, app);
 
     // Dialog popups on top.
     match app.dialog {
@@ -288,7 +361,7 @@ fn draw_ui(frame: &mut Frame, app: &App) {
 
         DialogState::Help => {
             let popup_area = ui::help_popup::HelpPopup::area(size);
-            frame.render_widget(ui::help_popup::HelpPopup::new(), popup_area);
+            frame.render_widget(ui::help_popup::HelpPopup::new(app.help_scroll), popup_area);
         }
 
         DialogState::EscapeMenu(selected) => {
@@ -323,48 +396,10 @@ fn draw_ui(frame: &mut Frame, app: &App) {
         DialogState::ScoreInput {
             ref target,
             ref buffer,
-        } => {
-            use ratatui::style::{Modifier, Style};
-            use ratatui::text::{Line, Span};
-            use ratatui::widgets::Paragraph;
+        } => ui::prompts::render_score_input(frame, size, *target, buffer),
 
-            let title = match target {
-                app::ScoreTarget::Player => "Set Your Score",
-                app::ScoreTarget::Opponent => "Set Opponent Score",
-            };
-            let popup_area = ui::popup_frame::centered_rect(size, 36, 6);
-            ui::hit::register_hit(popup_area, ui::hit::HitTarget::DialogArea);
-            let inner = ui::popup_frame::render_popup_frame(
-                popup_area,
-                frame.buffer_mut(),
-                title,
-                ui::theme::POPUP_BORDER,
-            );
-
-            let display = if buffer.is_empty() {
-                "0".to_string()
-            } else {
-                buffer.clone()
-            };
-
-            let content = vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("  Score: ", Style::default().fg(ui::theme::TEXT_PRIMARY)),
-                    Span::styled(
-                        &display,
-                        Style::default()
-                            .fg(ui::theme::SCORE_FG)
-                            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                    ),
-                ]),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "  Type digits, Enter to set, Esc to cancel",
-                    Style::default().fg(ui::theme::TEXT_DIM),
-                )),
-            ];
-            Paragraph::new(content).render(inner, frame.buffer_mut());
+        DialogState::QuickEntry { ref buffer } => {
+            ui::prompts::render_quick_entry(frame, size, buffer, app.parse_quick_entry(buffer))
         }
     }
 }
@@ -584,6 +619,109 @@ mod ui_tests {
         let (x, y) = find_text(&lines, "Quit Game");
         click(&mut app, x, y);
         assert_eq!(app.dialog, DialogState::ConfirmQuit(false));
+    }
+
+    /// Snapshots of the whole UI at three terminal sizes, as text. The
+    /// position and messages are fixed so the renders are deterministic;
+    /// they need the real leave table (static equity is on screen), so
+    /// builds without RefEngine or LFS data skip them.
+    #[cfg(feature = "refengine")]
+    #[test]
+    fn draw_ui_snapshots() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        if crate::datafiles::test_data::refengine_data().is_none() {
+            return;
+        }
+        let Some(mut app) = sample_app() else {
+            return;
+        };
+        app.set_message(app::MessageKind::Info, "Found 6,862 moves");
+        for (w, h) in [(80, 24), (120, 40), (200, 60)] {
+            let text = render_at(&app, w, h)
+                .iter()
+                .map(|l| l.trim_end())
+                .collect::<Vec<_>>()
+                .join("\n");
+            insta::assert_snapshot!(format!("draw_ui_{}x{}", w, h), text);
+        }
+    }
+
+    /// A narrow but tall terminal stacks a one-line rack and a short list
+    /// under the board; a tiny one says how big it needs to be.
+    #[test]
+    fn narrow_and_tiny_terminals() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(app) = sample_app() else {
+            return;
+        };
+        let text = render_at(&app, 80, 44).join("\n");
+        assert!(text.contains(" Rack "), "one-line rack\n{text}");
+        assert!(text.contains("Suggestions"), "short list\n{text}");
+
+        let tiny = render_at(&app, 40, 12).join("\n");
+        assert!(tiny.contains("terminal too small"), "{tiny}");
+        assert!(tiny.contains("need 50"), "{tiny}");
+    }
+
+    /// The help is two columns when wide and scrolls when narrow.
+    #[test]
+    fn help_layout() {
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let mut app = App::with_settings(settings::Settings::default());
+        app.dialog = DialogState::Help;
+        let wide = render_at(&app, 140, 50);
+        let row = wide
+            .iter()
+            .find(|l| l.contains("EVERYWHERE"))
+            .expect("first section");
+        assert!(row.contains("RACK"), "two columns side by side\n{row}");
+
+        let narrow = render_at(&app, 70, 24).join("\n");
+        assert!(narrow.contains("EVERYWHERE"));
+        assert!(!narrow.contains("MOUSE"), "the end needs scrolling");
+        app.help_scroll = 60;
+        let scrolled = render_at(&app, 70, 24).join("\n");
+        assert!(scrolled.contains("MOUSE"), "{scrolled}");
+    }
+
+    /// The wheel scrolls the pane under the pointer and stops at the ends.
+    #[test]
+    fn wheel_scrolls_the_pane_under_the_pointer() {
+        use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        let _lock = crate::datafiles::test_data::refengine_lock();
+        let Some(mut app) = sample_app() else {
+            return;
+        };
+        app.focus = Focus::Board;
+        app.selected_suggestion = 0;
+        let lines = render_at(&app, 200, 50);
+        let (x, y) = find_text(&lines, "Suggestions");
+        let wheel = |app: &mut App, kind, column, row| {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        wheel(&mut app, MouseEventKind::ScrollDown, x, y + 4);
+        assert_eq!(
+            app.selected_suggestion, 3,
+            "list under the pointer scrolled"
+        );
+        wheel(&mut app, MouseEventKind::ScrollUp, x, y + 4);
+        wheel(&mut app, MouseEventKind::ScrollUp, x, y + 4);
+        assert_eq!(app.selected_suggestion, 0, "stops at the top");
+        // Over the board (board tab) the wheel does nothing.
+        let (bx, by) = find_text(&lines, "3W");
+        assert!(matches!(
+            wheel(&mut app, MouseEventKind::ScrollDown, bx, by),
+            AppAction::Nothing
+        ));
+        assert!(matches!(
+            wheel(&mut app, MouseEventKind::Moved, bx, by),
+            AppAction::Nothing
+        ));
     }
 
     /// Dump renders for eyeballing. Run with

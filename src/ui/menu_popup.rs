@@ -87,11 +87,11 @@ impl EscapeMenuPopup {
         let is_selected = self.selected == option;
         let style = if is_selected {
             Style::default()
-                .fg(theme::BTN_SELECTED_FG)
-                .bg(theme::POPUP_BORDER)
+                .fg(theme::current().btn_selected_fg)
+                .bg(theme::current().popup_border)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::TEXT_PRIMARY)
+            Style::default().fg(theme::current().text_primary)
         };
 
         let prefix = if is_selected { " > " } else { "   " };
@@ -107,7 +107,7 @@ impl EscapeMenuPopup {
 
 impl Widget for EscapeMenuPopup {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let inner = render_popup_frame(area, buf, "Menu", theme::POPUP_BORDER);
+        let inner = render_popup_frame(area, buf, "Menu", theme::current().popup_border);
         register_hit(area, HitTarget::DialogArea);
 
         let content = vec![
@@ -118,7 +118,7 @@ impl Widget for EscapeMenuPopup {
             Line::from(""),
             Line::from(Span::styled(
                 "↑/↓ select, Enter confirm",
-                Style::default().fg(theme::TEXT_DIM),
+                Style::default().fg(theme::current().text_dim),
             )),
         ];
         let paragraph = Paragraph::new(content).centered();

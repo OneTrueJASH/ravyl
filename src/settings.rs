@@ -21,6 +21,8 @@ pub struct DisplaySettings {
     pub default_sort: DefaultSort,
     /// Show sidebar by default
     pub sidebar_visible: bool,
+    /// Color theme: auto, dark, light, ansi16 or nocolor.
+    pub theme: crate::ui::theme::ThemeChoice,
 }
 
 /// Sort mode options for settings (maps to app::SortMode)
@@ -73,6 +75,7 @@ impl Default for DisplaySettings {
         Self {
             default_sort: DefaultSort::default(),
             sidebar_visible: true,
+            theme: crate::ui::theme::ThemeChoice::default(),
         }
     }
 }
