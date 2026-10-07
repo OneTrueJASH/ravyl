@@ -104,6 +104,24 @@ pub fn refengine_data_dir() -> Result<PathBuf, String> {
     }
 }
 
+/// A user-facing warning when the RefEngine lexicon files are Git LFS pointer
+/// stubs (so neither the leave table nor inference can be used), or `None`
+/// when real files are present or nothing is there at all.
+pub fn lfs_warning() -> Option<String> {
+    let stubbed = [LEXICON_KWG, LEAVES_KLV2].iter().any(|rel| {
+        find_data_file(rel).is_none()
+            && data_roots()
+                .iter()
+                .any(|root| is_lfs_pointer(&root.join(rel)))
+    });
+    stubbed.then(|| {
+        format!(
+            "NWL23 data files are Git LFS pointers (no leave table or inference): {}",
+            LFS_HINT
+        )
+    })
+}
+
 /// Helpers for tests that need the checked-in data files. Each returns
 /// `None` (after printing why) when the files are missing or are LFS
 /// pointer stubs, so the calling test can skip instead of failing.
