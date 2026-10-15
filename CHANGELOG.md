@@ -6,6 +6,14 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The word list now matches Crossplay's: the 182 words Crossplay removes
+  from the tournament list (almost all trademarks, such as BRILLO, VELCRO
+  and TASER) are gone from `data/words.fst`, `AMERICAN.kwg` and
+  `AMERICAN.wmp`, so they are never suggested or played by the simulated
+  opponent. The list is in `data/crossplay-removed.txt` (196,419 words
+  remain).
+
 ### Added
 - Named saved games: one file per game (`games/<name>.toml` in the user
   data directory), saved as you play (at most about once a second) and on

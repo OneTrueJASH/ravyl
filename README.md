@@ -50,6 +50,8 @@ git lfs install && git lfs pull   # if the lexicon files are ~130-byte pointer s
 
 `AMERICAN.klv2` also supplies the leave values; a per-letter heuristic is used if it is missing or still an LFS pointer.
 
+The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst`, `AMERICAN.kwg` and `AMERICAN.wmp` are built without them; `AMERICAN.klv2` holds leave values only and is unchanged.
+
 ### Build and run
 
 ```bash
