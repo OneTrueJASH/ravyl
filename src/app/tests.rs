@@ -1,5 +1,19 @@
+use super::engine::spawn_worker;
 use super::*;
+use crate::board::{Direction, BOARD_SIZE};
 use crate::game::SolverState;
+use crate::refengine_mcts::InferenceResult;
+use crate::settings::Settings;
+use crate::sim::{ArmStatus, ArmSummary, SimSnapshot};
+use crate::solver::Move;
+use crate::tile::Tile;
+use crate::ui::events::AppAction;
+use crate::ui::hit::HitTarget;
+use crate::ui::menu_popup::EscapeMenuOption;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Build an App without touching the user's settings file. Callers
 /// must hold `RefEngine test lock for as long as the App may use RefEngine

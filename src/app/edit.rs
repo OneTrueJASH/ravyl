@@ -1,7 +1,12 @@
 //! Editing the position: board and rack entry, applying moves, undo and
 //! redo, the coordinate prompt, the clipboard and the CGP position.
 
-use super::*;
+use crate::board::{Board, Direction, BOARD_SIZE};
+use crate::game::SolverState;
+use crate::solver::Solver;
+use crate::tile::Tile;
+
+use super::state::{App, FinalTurn, Focus, MessageKind, ScoreTarget, UndoState};
 
 /// A play entered by coordinates (`:` then `8D QUIXOTIC`), checked against
 /// the board and the dictionary.

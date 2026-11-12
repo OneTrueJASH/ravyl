@@ -1,7 +1,18 @@
 //! Keyboard, mouse and paste input: global keys, per-pane keys, dialogs,
 //! the list filter and focus cycling.
 
-use super::*;
+use std::time::{Duration, Instant};
+
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+
+use crate::ui::events::AppAction;
+use crate::ui::hit::{resolve_click, HitTarget};
+use crate::ui::menu_popup::EscapeMenuOption;
+
+use super::session::SaveAsPurpose;
+use super::state::{App, BoardTab, DialogState, Focus, MessageKind, ScoreTarget};
 
 /// Two clicks on the same suggestion row within this window apply it.
 pub(super) const DOUBLE_CLICK: Duration = Duration::from_millis(400);

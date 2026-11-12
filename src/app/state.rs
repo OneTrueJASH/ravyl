@@ -1,7 +1,25 @@
 //! App state: the `App` struct, its enums and records, construction,
 //! and the small state toggles.
 
-use super::*;
+use std::cell::Cell;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crate::board::{Board, Direction};
+use crate::dictionary::Dictionary;
+use crate::endgame::EndgameMove;
+use crate::game::SolverState;
+use crate::logging::log;
+use crate::refengine_mcts::{InferenceResult, RefSimulator};
+use crate::settings::{self, Settings};
+use crate::sim::{ArmStatus, ArmSummary, SimSnapshot, SimState};
+use crate::solver::Move;
+use crate::ui::menu_popup::EscapeMenuOption;
+
+use super::session::SaveAsPurpose;
 
 /// Which player's score is being edited
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

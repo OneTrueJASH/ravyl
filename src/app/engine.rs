@@ -1,7 +1,22 @@
 //! Solving and evaluation: move generation, the simulation and endgame
 //! jobs, their cancellation, and polling their results.
 
-use super::*;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::endgame::EndgameSolver;
+use crate::game::observed_move_loss;
+use crate::logging::log;
+use crate::sim::{SimSettings, SimSnapshot, Simulation};
+use crate::solver::Move;
+
+use super::format::group_thousands;
+use super::opponent::OPP_LOSS_SAMPLES;
+use super::state::{
+    App, Focus, Job, MctsProgress, MessageKind, SimJob, SimProgress, SimResult, SimStatus, SortMode,
+};
 
 /// Run `f` on a new thread, catching a panic so it cannot take the app
 /// down. A panicking worker sends nothing: its receiver reports

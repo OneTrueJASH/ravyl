@@ -1,7 +1,19 @@
 //! The opponent: detecting and scoring their move from the board,
 //! measuring how strongly they play, and rack inference.
 
-use super::*;
+use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc};
+
+use crate::board::{Board, Direction, BOARD_SIZE};
+use crate::game::SolverState;
+use crate::logging::log;
+use crate::refengine_mcts::InferenceResult;
+use crate::mcts::{OpponentModel, TilePool};
+use crate::solver::Solver;
+use crate::tile::Tile;
+
+use super::engine::spawn_worker;
+use super::state::App;
 
 /// An opponent move found by board diff: word, score, and placed tiles.
 pub(super) type DetectedOpponentMove = (String, u32, Vec<(usize, usize, Tile)>);

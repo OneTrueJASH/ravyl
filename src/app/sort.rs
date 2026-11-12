@@ -1,6 +1,9 @@
 //! Sorting the suggestions list.
 
-use super::*;
+use crate::board::Direction;
+use crate::solver::Move;
+
+use super::state::{App, MessageKind, SimResult, SimStatus, SortMode};
 
 impl App {
     /// Identity of a move in the list (its word and where it goes).
