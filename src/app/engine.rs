@@ -6,7 +6,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::endgame::EndgameSolver;
+use crate::endgame::{EndgameSolver, FinalTurn};
 use crate::game::observed_move_loss;
 use crate::logging::log;
 use crate::sim::{SimSettings, SimSnapshot, Simulation};
@@ -532,7 +532,7 @@ impl App {
                     &state.board,
                     &our_rack,
                     &opp_rack,
-                    true,
+                    FinalTurn::Opponent,
                     Some(&cancel),
                 ) {
                     let _ = tx.send(results);
@@ -620,7 +620,7 @@ impl App {
             let resume = cache.lock().ok().and_then(|mut c| c.take());
             let mut sim =
                 Simulation::new(settings, &dict, &state, &candidates, model.as_ref(), resume);
-            let resumed = sim.snapshot(Duration::ZERO, false).playouts;
+            let resumed = sim.snapshot(Duration::ZERO, /* done= */ false).playouts;
             if resumed > 0 {
                 log(&format!("Resuming a simulation with {} playouts", resumed));
             }

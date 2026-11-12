@@ -34,7 +34,7 @@ impl App {
         if key.code == KeyCode::Char('c') && ctrl {
             if matches!(
                 self.dialog,
-                DialogState::ConfirmQuit(_)
+                DialogState::ConfirmQuit { .. }
                     | DialogState::SaveAs {
                         purpose: SaveAsPurpose::Quit,
                         ..
@@ -173,11 +173,11 @@ impl App {
         }
         match resolve_click(mouse.column, mouse.row) {
             Some(HitTarget::DialogYes) => match self.dialog {
-                DialogState::ConfirmQuit(_) => {
+                DialogState::ConfirmQuit { .. } => {
                     self.close_dialog();
                     return AppAction::Quit;
                 }
-                DialogState::ConfirmReset(_) => {
+                DialogState::ConfirmReset { .. } => {
                     self.close_dialog();
                     self.reset();
                 }
@@ -217,7 +217,7 @@ impl App {
                 self.new_game();
             }
             EscapeMenuOption::Quit => self.request_quit(),
-            EscapeMenuOption::Reset => self.dialog = DialogState::ConfirmReset(false),
+            EscapeMenuOption::Reset => self.dialog = DialogState::ConfirmReset { yes: false },
             EscapeMenuOption::Cancel => self.close_dialog(),
         }
     }
@@ -418,9 +418,9 @@ impl App {
                 _ => {}
             },
 
-            DialogState::ConfirmQuit(yes_selected) => match key.code {
+            DialogState::ConfirmQuit { yes: yes_selected } => match key.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                    self.dialog = DialogState::ConfirmQuit(!yes_selected);
+                    self.dialog = DialogState::ConfirmQuit { yes: !yes_selected };
                 }
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.should_quit = true;
@@ -438,9 +438,9 @@ impl App {
                 _ => {}
             },
 
-            DialogState::ConfirmReset(yes_selected) => match key.code {
+            DialogState::ConfirmReset { yes: yes_selected } => match key.code {
                 KeyCode::Left | KeyCode::Right | KeyCode::Tab => {
-                    self.dialog = DialogState::ConfirmReset(!yes_selected);
+                    self.dialog = DialogState::ConfirmReset { yes: !yes_selected };
                 }
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.close_dialog();
@@ -650,7 +650,7 @@ impl App {
         ) {
             return AppAction::Nothing;
         }
-        match self.load_position(text, true) {
+        match self.load_position(text, /* undoable= */ true) {
             Ok(()) => self.set_message(MessageKind::Success, "Loaded the pasted position"),
             Err(e) => self.set_message(
                 MessageKind::Error,

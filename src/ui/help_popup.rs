@@ -1,13 +1,11 @@
 //! Help popup: keyboard and mouse reference. Two columns on wide
 //! terminals; one scrollable column (↑/↓, PgUp/PgDn) on narrow ones.
 
-use ratatui::{
-    buffer::Buffer,
-    layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::ui::popup_frame::{centered_rect, render_popup_frame};
 use crate::ui::theme;

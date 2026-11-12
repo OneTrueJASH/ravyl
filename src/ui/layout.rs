@@ -213,7 +213,7 @@ mod tests {
     /// board; short ones show just the board; tiny ones show nothing.
     #[test]
     fn narrow_terminals_stack_or_shrink() {
-        let stacked = AppLayout::compute(Rect::new(0, 0, 80, 40), true);
+        let stacked = AppLayout::compute(Rect::new(0, 0, 80, 40), /* sidebar_visible= */ true);
         assert!(stacked.rack_area.is_none());
         assert!(stacked.rack_line.is_some());
         let list = stacked.suggestions_area.expect("short list");
@@ -221,12 +221,13 @@ mod tests {
         assert!(list.y > stacked.board_area.y + stacked.board_area.height);
         assert!(stacked.shows_rack());
 
-        let board_only = AppLayout::compute(Rect::new(0, 0, 80, 24), true);
+        let board_only =
+            AppLayout::compute(Rect::new(0, 0, 80, 24), /* sidebar_visible= */ true);
         assert!(!board_only.shows_rack());
         assert!(board_only.suggestions_area.is_none());
         assert!(board_only.too_small.is_none());
 
-        let tiny = AppLayout::compute(Rect::new(0, 0, 40, 15), true);
+        let tiny = AppLayout::compute(Rect::new(0, 0, 40, 15), /* sidebar_visible= */ true);
         assert_eq!(tiny.too_small, Some((MIN_WIDTH, MIN_HEIGHT)));
     }
 }

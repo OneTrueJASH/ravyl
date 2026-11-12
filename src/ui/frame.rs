@@ -154,7 +154,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             );
         }
 
-        DialogState::ConfirmQuit(yes_selected) => {
+        DialogState::ConfirmQuit { yes: yes_selected } => {
             let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
             frame.render_widget(
                 crate::ui::confirm_popup::ConfirmPopup::new(
@@ -166,7 +166,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             );
         }
 
-        DialogState::ConfirmReset(yes_selected) => {
+        DialogState::ConfirmReset { yes: yes_selected } => {
             let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
             frame.render_widget(
                 crate::ui::confirm_popup::ConfirmPopup::new(
@@ -359,24 +359,24 @@ mod tests {
         let (w, h) = (120, 40);
 
         // "No" closes the quit dialog without quitting.
-        app.dialog = DialogState::ConfirmQuit(false);
+        app.dialog = DialogState::ConfirmQuit { yes: false };
         let lines = render_at(&app, w, h);
         let (x, y) = find_text(&lines, " No ");
         assert!(matches!(click(&mut app, x + 1, y), AppAction::Redraw));
         assert_eq!(app.dialog, DialogState::None);
 
         // "Yes" quits.
-        app.dialog = DialogState::ConfirmQuit(false);
+        app.dialog = DialogState::ConfirmQuit { yes: false };
         let lines = render_at(&app, w, h);
         let (x, y) = find_text(&lines, " Yes ");
         assert!(matches!(click(&mut app, x + 2, y), AppAction::Quit));
 
         // Inside the dialog but off the buttons: nothing happens.
-        app.dialog = DialogState::ConfirmReset(false);
+        app.dialog = DialogState::ConfirmReset { yes: false };
         let lines = render_at(&app, w, h);
         let (x, y) = find_text(&lines, "Reset the board");
         click(&mut app, x, y);
-        assert_eq!(app.dialog, DialogState::ConfirmReset(false));
+        assert_eq!(app.dialog, DialogState::ConfirmReset { yes: false });
 
         // Outside: the dialog is cancelled and the board cursor below the
         // click does not move.
@@ -438,13 +438,13 @@ mod tests {
         let lines = render_at(&app, 100, 30);
         let (x, y) = find_text(&lines, "Reset Board");
         click(&mut app, x, y);
-        assert_eq!(app.dialog, DialogState::ConfirmReset(false));
+        assert_eq!(app.dialog, DialogState::ConfirmReset { yes: false });
 
         app.dialog = DialogState::EscapeMenu(crate::ui::menu_popup::EscapeMenuOption::Quit);
         let lines = render_at(&app, 100, 30);
         let (x, y) = find_text(&lines, "Quit Game");
         click(&mut app, x, y);
-        assert_eq!(app.dialog, DialogState::ConfirmQuit(false));
+        assert_eq!(app.dialog, DialogState::ConfirmQuit { yes: false });
     }
 
     /// The picker draws its games (locked ones marked), a click selects a
@@ -468,7 +468,7 @@ mod tests {
         std::fs::write(games::lock_path(&dir, "alice"), "1\n").unwrap();
         let mut app = App::with_settings(crate::settings::Settings::default());
         app.games_dir = Some(dir.clone());
-        app.show_game_picker(true);
+        app.show_game_picker(/* startup= */ true);
         let lines = render_at(&app, 120, 40);
         let text = lines.join("\n");
         assert!(text.contains("Saved games"), "{text}");

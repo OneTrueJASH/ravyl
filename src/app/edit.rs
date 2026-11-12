@@ -2,11 +2,12 @@
 //! redo, the coordinate prompt, the clipboard and the CGP position.
 
 use crate::board::{Board, Direction, BOARD_SIZE};
+use crate::endgame::FinalTurn;
 use crate::game::SolverState;
 use crate::solver::Solver;
 use crate::tile::Tile;
 
-use super::state::{App, FinalTurn, Focus, MessageKind, ScoreTarget, UndoState};
+use super::state::{App, Focus, MessageKind, ScoreTarget, UndoState};
 
 /// A play entered by coordinates (`:` then `8D QUIXOTIC`), checked against
 /// the board and the dictionary.
@@ -124,12 +125,19 @@ impl App {
                 self.message = None;
                 return;
             }
-            self.state.place_tile(row, col, 'A', true);
+            self.state.place_tile(row, col, Tile::blank('A'));
         } else {
             match self.state.get_tile(row, col).copied() {
                 Some(existing) if existing.letter == letter && !blank => {}
                 Some(existing) if existing.letter == letter && existing.is_blank => {}
-                _ => self.state.place_tile(row, col, letter, blank),
+                _ => {
+                    let tile = if blank {
+                        Tile::blank(letter)
+                    } else {
+                        Tile::new(letter)
+                    };
+                    self.state.place_tile(row, col, tile);
+                }
             }
         }
 

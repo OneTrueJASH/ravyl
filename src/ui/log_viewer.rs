@@ -1,12 +1,10 @@
 //! Log viewer and tab bar rendering.
 
-use ratatui::{
-    layout::Rect,
-    style::{Color, Style, Stylize},
-    symbols,
-    text::{Line, Span},
-    widgets::{Block, Padding, Paragraph, Tabs, Wrap},
-};
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::symbols;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Padding, Paragraph, Tabs, Wrap};
 
 use crate::app::BoardTab;
 use crate::logging::{log_path_str, with_section_lines};

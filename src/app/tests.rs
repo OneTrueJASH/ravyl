@@ -1,6 +1,7 @@
 use super::engine::spawn_worker;
 use super::*;
 use crate::board::{Direction, BOARD_SIZE};
+use crate::endgame::FinalTurn;
 use crate::game::SolverState;
 use crate::refengine_mcts::InferenceResult;
 use crate::settings::Settings;
@@ -90,7 +91,7 @@ fn state_with(on_board: usize, in_rack: usize) -> SolverState {
     let mut state = SolverState::new();
     let tiles: Vec<char> = TILE_SET.chars().collect();
     for (i, &ch) in tiles.iter().take(on_board).enumerate() {
-        state.place_tile(i / BOARD_SIZE, i % BOARD_SIZE, ch, false);
+        state.place_tile(i / BOARD_SIZE, i % BOARD_SIZE, Tile::new(ch));
     }
     for &ch in tiles.iter().skip(on_board).take(in_rack) {
         assert!(state.add_to_rack(ch));
@@ -173,9 +174,9 @@ fn opponent_moves_are_measured_and_undone() {
     // auto-scores and measures them. A 3-tile word for a handful of
     // points is far below the best completions can do, so the measured
     // loss is reliably positive.
-    app.state.place_tile(0, 0, 'C', false);
-    app.state.place_tile(0, 1, 'A', false);
-    app.state.place_tile(0, 2, 'T', false);
+    app.state.place_tile(0, 0, Tile::new('C'));
+    app.state.place_tile(0, 1, Tile::new('A'));
+    app.state.place_tile(0, 2, Tile::new('T'));
     app.clear_rack();
     for ch in ['R', 'E', 'T', 'I', 'N', 'A', 'S'] {
         app.state.add_to_rack(ch);
@@ -219,7 +220,7 @@ fn inference_is_polled_after_ranking() {
         SolverState::from_cgp("15/15/15/15/15/15/15/3ANESTRI5/15/15/15/15/15/15/15 DEGILOU")
             .unwrap();
     app.last_applied_board = Some(app.state.board.clone());
-    app.state.place_tile(7, 10, 'S', false);
+    app.state.place_tile(7, 10, Tile::new('S'));
     app.find_moves();
     app.run_mcts_evaluation();
     let started = std::time::Instant::now();
@@ -332,7 +333,8 @@ fn stale_results_are_dropped() {
     // The position moves on without going through the usual paths
     // (which would also cancel the job), then the old result arrives.
     app.position_stamp += 1;
-    tx.send(fake_snapshot(&[(99.0, 10)], true)).unwrap();
+    tx.send(fake_snapshot(&[(99.0, 10)], /* done= */ true))
+        .unwrap();
     app.poll_mcts();
     assert!(app.sim_job.is_none());
     assert!(app.sim_results.is_none(), "stale result was applied");
@@ -570,7 +572,10 @@ fn live_snapshots_update_and_resort_the_table() {
     let (job, tx, live) = fake_sim_job(&app, moves.clone());
     app.sim_job = Some(job);
 
-    *live.lock().unwrap() = Some(fake_snapshot(&[(1.0, 16), (9.0, 16), (5.0, 16)], false));
+    *live.lock().unwrap() = Some(fake_snapshot(
+        &[(1.0, 16), (9.0, 16), (5.0, 16)],
+        /* done= */ false,
+    ));
     assert!(app.poll_mcts());
     assert!(
         app.is_mcts_running(),
@@ -585,8 +590,11 @@ fn live_snapshots_update_and_resort_the_table() {
     // A later snapshot changes the order again (the final one ends the
     // run); the selection follows its move.
     app.selected_suggestion = 1; // row 2
-    tx.send(fake_snapshot(&[(20.0, 32), (9.0, 32), (5.0, 32)], true))
-        .unwrap();
+    tx.send(fake_snapshot(
+        &[(20.0, 32), (9.0, 32), (5.0, 32)],
+        /* done= */ true,
+    ))
+    .unwrap();
     app.poll_mcts();
     assert!(!app.is_mcts_running());
     assert_eq!(app.suggestions[0].row, 0);
@@ -778,7 +786,7 @@ fn escape_order_and_quit_confirmation() {
     assert_eq!(app.dialog, DialogState::None);
 
     assert!(matches!(app.handle_key(ctrl('c')), AppAction::Redraw));
-    assert!(matches!(app.dialog, DialogState::ConfirmQuit(_)));
+    assert!(matches!(app.dialog, DialogState::ConfirmQuit { .. }));
     assert!(matches!(app.handle_key(ctrl('c')), AppAction::Quit));
 }
 
@@ -978,7 +986,7 @@ fn clipboard_paste_and_session_round_trip() {
     assert!(cgp.contains(" 120/95 0"), "{cgp}");
 
     let mut other = test_app();
-    other.load_position(&cgp, false).unwrap();
+    other.load_position(&cgp, /* undoable= */ false).unwrap();
     assert_eq!(other.state.board_cgp(), app.state.board_cgp());
     assert_eq!((other.our_score, other.opp_score), (120, 95));
     assert_eq!(other.final_turn, FinalTurn::Us);
@@ -1113,7 +1121,7 @@ fn a_game_opens_in_one_window_only() {
     assert_eq!(second.game_name, None);
 
     // Picker: dimmed and refused.
-    second.show_game_picker(false);
+    second.show_game_picker(/* startup= */ false);
     assert!(second.picker_games[0].locked);
     second.handle_key(key(KeyCode::Enter));
     assert!(matches!(second.dialog, DialogState::GamePicker { .. }));
@@ -1281,7 +1289,7 @@ fn quitting_an_untitled_game_offers_a_name() {
     // Named: the usual confirmation.
     app.should_quit = false;
     app.handle_key(ctrl('c'));
-    assert_eq!(app.dialog, DialogState::ConfirmQuit(false));
+    assert_eq!(app.dialog, DialogState::ConfirmQuit { yes: false });
     app.shutdown();
     let _ = std::fs::remove_dir_all(&dir);
 }

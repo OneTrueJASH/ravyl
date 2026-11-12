@@ -3,11 +3,9 @@
 //! are clickable (a double-click opens one); games open in another window
 //! are dimmed.
 
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::app::{App, MessageKind};
 use crate::games::{self, GameEntry};

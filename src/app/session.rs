@@ -8,11 +8,12 @@ use std::time::{Duration, Instant};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::board::{Direction, BOARD_SIZE};
+use crate::endgame::FinalTurn;
 use crate::games::{self, GameEntry, OppLosses, SavedGame};
 use crate::logging::log;
 
 use super::input::DOUBLE_CLICK;
-use super::state::{App, DialogState, FinalTurn, Focus, MessageKind};
+use super::state::{App, DialogState, Focus, MessageKind};
 
 /// Autosaves are at most this often while the position keeps changing.
 pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(1);
@@ -181,7 +182,7 @@ impl App {
             return Ok(());
         }
         if games::list(&dir).iter().any(|g| !g.locked) {
-            self.show_game_picker(true);
+            self.show_game_picker(/* startup= */ true);
         }
         Ok(())
     }
@@ -244,7 +245,7 @@ impl App {
         }
         self.shutdown();
         self.clear_game_state();
-        if let Err(e) = self.load_position(&game.cgp, false) {
+        if let Err(e) = self.load_position(&game.cgp, /* undoable= */ false) {
             log(&format!("Saved game {} unreadable: {}", game.name, e));
             self.set_message(
                 MessageKind::Error,
@@ -390,7 +391,7 @@ impl App {
         if self.needs_name_before_quit() {
             self.show_save_as(SaveAsPurpose::Quit);
         } else {
-            self.dialog = DialogState::ConfirmQuit(false);
+            self.dialog = DialogState::ConfirmQuit { yes: false };
         }
     }
 
@@ -426,7 +427,7 @@ impl App {
             }
             KeyCode::Enter => {
                 let (text, purpose) = (buffer.clone(), purpose.clone());
-                self.commit_save_as(&text, purpose, false);
+                self.commit_save_as(&text, purpose, /* overwrite= */ false);
             }
             KeyCode::Esc => match purpose.clone() {
                 SaveAsPurpose::Rename { slug, startup } => {
@@ -687,7 +688,7 @@ impl App {
         };
         let (name, purpose) = (name.clone(), purpose.clone());
         if yes {
-            self.commit_save_as(&name, purpose, true);
+            self.commit_save_as(&name, purpose, /* overwrite= */ true);
         } else {
             self.dialog = DialogState::SaveAs {
                 buffer: name,

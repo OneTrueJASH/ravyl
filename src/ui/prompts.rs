@@ -1,12 +1,10 @@
 //! Small input dialogs: the score prompt, the coordinate quick-entry
 //! prompt (`:` then `8D QUIXOTIC`) and "Save game as".
 
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget, Wrap},
-};
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::{QuickPlay, SaveAsPurpose, ScoreTarget};
 use crate::ui::hit::{register_hit, HitTarget};

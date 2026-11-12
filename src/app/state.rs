@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::board::{Board, Direction};
 use crate::dictionary::Dictionary;
-use crate::endgame::EndgameMove;
+use crate::endgame::{EndgameMove, FinalTurn};
 use crate::game::SolverState;
 use crate::logging::log;
 use crate::refengine_mcts::{InferenceResult, RefSimulator};
@@ -137,40 +137,6 @@ pub struct SimProgress {
     pub done: bool,
 }
 
-/// Who plays the very last move of the game.
-///
-/// Crossplay's equal-turn rule: when a player draws the last tile from the
-/// bag, the other player gets one more turn and then the player who emptied
-/// the bag plays the final move. So when the bag is empty on our turn, the
-/// opponent only gets to reply if *they* emptied the bag. The app infers
-/// this from moves applied through the suggestions list and the user can
-/// override it with Ctrl+E.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FinalTurn {
-    /// The opponent emptied the bag: we play our last turn, they reply.
-    #[default]
-    Opponent,
-    /// We emptied the bag: the opponent has already played their last
-    /// turn, so our next move ends the game.
-    Us,
-}
-
-impl FinalTurn {
-    pub fn toggle(self) -> Self {
-        match self {
-            FinalTurn::Opponent => FinalTurn::Us,
-            FinalTurn::Us => FinalTurn::Opponent,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            FinalTurn::Opponent => "OPP",
-            FinalTurn::Us => "YOU",
-        }
-    }
-}
-
 /// Dialog state for popup interactions
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DialogState {
@@ -178,8 +144,12 @@ pub enum DialogState {
     None,
     Help,
     EscapeMenu(EscapeMenuOption),
-    ConfirmQuit(bool),
-    ConfirmReset(bool),
+    ConfirmQuit {
+        yes: bool,
+    },
+    ConfirmReset {
+        yes: bool,
+    },
     /// Numeric input for setting a player's cumulative score
     ScoreInput {
         target: ScoreTarget,
@@ -625,7 +595,7 @@ impl App {
 
     /// Open the board-reset confirmation dialog.
     pub fn show_reset_confirm(&mut self) {
-        self.dialog = DialogState::ConfirmReset(false);
+        self.dialog = DialogState::ConfirmReset { yes: false };
     }
 
     /// Close any open dialog.

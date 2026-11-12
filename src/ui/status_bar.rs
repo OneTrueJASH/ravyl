@@ -3,12 +3,10 @@
 //! Line 1 (top/title_bar): App title + RefEngine status.
 //! Line 2 (bottom/status_bar): Context-sensitive keyboard hints.
 
-use ratatui::{
-    layout::Rect,
-    style::{Style, Stylize},
-    text::{Line, Span},
-    widgets::Paragraph,
-};
+use ratatui::layout::Rect;
+use ratatui::style::{Style, Stylize};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{group_thousands, App, BoardTab, Focus, MctsProgress, MessageKind};
 use crate::ui::theme;

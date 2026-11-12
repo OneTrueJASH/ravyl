@@ -2,14 +2,13 @@
 
 use std::collections::HashMap;
 
-use ratatui::{
-    buffer::Buffer,
-    layout::{Alignment, Rect},
-    style::{Color, Style},
-    symbols::{self, merge::MergeStrategy},
-    text::Line,
-    widgets::{Block, BorderType, Padding, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::symbols;
+use ratatui::symbols::merge::MergeStrategy;
+use ratatui::text::Line;
+use ratatui::widgets::{Block, BorderType, Padding, Widget};
 
 use crate::board::{Direction, Premium, BOARD_SIZE};
 use crate::game::SolverState;
@@ -482,7 +481,8 @@ impl Widget for BoardWidget<'_> {
                         label
                     };
                     self.draw_cell(
-                        buf, cell_x, cell_y, cell_w, cell_h, border, None, fg, label, false, None,
+                        buf, cell_x, cell_y, cell_w, cell_h, border, None, fg, label,
+                        /* show_direction= */ false, None,
                     );
                 }
             }

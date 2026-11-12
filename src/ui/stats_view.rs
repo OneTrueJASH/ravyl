@@ -1,14 +1,12 @@
 //! Combined rack tiles + game stats + opponent inference widget.
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Color, Style},
-    symbols,
-    widgets::{Block, Padding, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::symbols;
+use ratatui::widgets::{Block, Padding, Widget};
 
-use crate::app::FinalTurn;
+use crate::endgame::FinalTurn;
 use crate::game::SolverState;
 use crate::refengine_mcts::InferenceResult;
 use crate::stats::{GamePhase, GameStats};

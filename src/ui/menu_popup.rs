@@ -1,12 +1,10 @@
 //! Escape menu popup with mouse-clickable options.
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Paragraph, Widget};
 
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::popup_frame::{centered_rect, centered_x, render_popup_frame};

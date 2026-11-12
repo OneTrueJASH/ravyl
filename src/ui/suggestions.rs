@@ -3,13 +3,11 @@
 
 use std::collections::HashMap;
 
-use ratatui::{
-    layout::{Alignment, Constraint, Flex, Layout, Rect},
-    style::{Color, Style, Stylize},
-    symbols,
-    text::Line,
-    widgets::{Block, Cell, LineGauge, Padding, Paragraph, Row, Table, TableState, Tabs},
-};
+use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::symbols;
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Cell, LineGauge, Padding, Paragraph, Row, Table, TableState, Tabs};
 
 use crate::app::{group_thousands, SimProgress, SimResult, SimStatus, SortMode};
 use crate::board::Direction;
@@ -81,34 +79,44 @@ struct Column {
     title: &'static str,
     width: Constraint,
     sort: Option<SortMode>,
-    right: bool,
+    align: Alignment,
 }
 
 /// Which columns fit in `width` (the table's inner width).
 fn columns(has_sim: bool, width: u16) -> Vec<Column> {
-    let col = |title, width, sort, right| Column {
+    let col = |title, width, sort, align| Column {
         title,
         width,
         sort,
-        right,
+        align,
     };
     let mut cols = vec![
-        col("Pos", Constraint::Length(4), None, false),
-        col("Word", Constraint::Min(10), Some(SortMode::Alpha), false),
-        col("Score", Constraint::Length(5), Some(SortMode::Score), true),
+        col("Pos", Constraint::Length(4), None, Alignment::Left),
+        col(
+            "Word",
+            Constraint::Min(10),
+            Some(SortMode::Alpha),
+            Alignment::Left,
+        ),
+        col(
+            "Score",
+            Constraint::Length(5),
+            Some(SortMode::Score),
+            Alignment::Right,
+        ),
     ];
     if !has_sim {
         cols.push(col(
             "Equity",
             Constraint::Length(6),
             Some(SortMode::Equity),
-            true,
+            Alignment::Right,
         ));
         cols.push(col(
             "Leave",
             Constraint::Fill(1),
             Some(SortMode::Leave),
-            false,
+            Alignment::Left,
         ));
         return cols;
     }
@@ -117,20 +125,20 @@ fn columns(has_sim: bool, width: u16) -> Vec<Column> {
         "Spread",
         Constraint::Length(if wide { 11 } else { 6 }),
         Some(SortMode::MctsEquity),
-        true,
+        Alignment::Right,
     ));
     cols.push(col(
         "Win%",
         Constraint::Length(if wide { 8 } else { 5 }),
         Some(SortMode::WinPct),
-        true,
+        Alignment::Right,
     ));
     if width >= 52 {
         cols.push(col(
             "\u{0394}",
             Constraint::Length(if wide { 10 } else { 6 }),
             Some(SortMode::MctsEquity),
-            true,
+            Alignment::Right,
         ));
     }
     if width >= 64 {
@@ -138,18 +146,18 @@ fn columns(has_sim: bool, width: u16) -> Vec<Column> {
             "n",
             Constraint::Length(6),
             Some(SortMode::Playouts),
-            true,
+            Alignment::Right,
         ));
     }
     if width >= 76 {
-        cols.push(col("Status", Constraint::Length(11), None, false));
+        cols.push(col("Status", Constraint::Length(11), None, Alignment::Left));
     }
     if width >= 84 {
         cols.push(col(
             "Bingo",
             Constraint::Length(5),
             Some(SortMode::Bingo),
-            true,
+            Alignment::Right,
         ));
     }
     if width >= 92 {
@@ -157,19 +165,15 @@ fn columns(has_sim: bool, width: u16) -> Vec<Column> {
             "Leave",
             Constraint::Fill(1),
             Some(SortMode::Leave),
-            false,
+            Alignment::Left,
         ));
     }
     cols
 }
 
-/// `value` with its standard error when there is a meaningful one.
-fn with_se(value: f32, se: f32, wide: bool, signed: bool) -> String {
-    let v = if signed {
-        format!("{:+.1}", value)
-    } else {
-        format!("{:.1}", value)
-    };
+/// `value`, signed, with its standard error when there is a meaningful one.
+fn with_se(value: f32, se: f32, wide: bool) -> String {
+    let v = format!("{value:+.1}");
     if wide && se.is_finite() && se > 0.0 {
         format!("{}\u{00b1}{:.1}", v, se)
     } else {
@@ -375,12 +379,7 @@ pub fn render_suggestions(
 
     let hdr_style = Style::new().fg(theme::current().text_dim);
     let header = Row::new(cols.iter().map(|c| {
-        let line = Line::from(c.title);
-        let line = if c.right {
-            line.alignment(Alignment::Right)
-        } else {
-            line
-        };
+        let line = Line::from(c.title).alignment(c.align);
         Cell::from(line).style(hdr_style)
     }));
 
@@ -438,7 +437,7 @@ pub fn render_suggestions(
                     }
                     "Spread" => match sim {
                         Some(r) => right(
-                            with_se(r.sim_equity, r.spread_se, wide, true),
+                            with_se(r.sim_equity, r.spread_se, wide),
                             Style::new().fg(theme::current().sim_equity_fg),
                         ),
                         None => dash(),
@@ -464,7 +463,7 @@ pub fn render_suggestions(
                             Style::new().fg(theme::current().win_good),
                         ),
                         Some(r) => right(
-                            with_se(r.delta, r.delta_se, wide, true),
+                            with_se(r.delta, r.delta_se, wide),
                             Style::new().fg(theme::current().text_primary),
                         ),
                         None => dash(),

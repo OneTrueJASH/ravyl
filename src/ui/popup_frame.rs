@@ -1,11 +1,9 @@
 //! Shared popup frame rendering used by all dialog widgets.
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::{Modifier, Style},
-    widgets::{Block, Borders, Clear, Widget},
-};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, Borders, Clear, Widget};
 
 /// Render a popup frame: clears background, draws bordered block, returns inner area.
 pub fn render_popup_frame(
