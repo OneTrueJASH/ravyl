@@ -9,7 +9,8 @@
 
 use std::sync::OnceLock;
 
-use ratatui::style::{palette::tailwind, Color, Modifier, Style};
+use ratatui::style::palette::tailwind;
+use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 
 /// Which theme to use (the `display.theme` setting).

@@ -306,6 +306,8 @@ fn local_civil(secs: u64) -> (i64, u32, u32, u32, u32) {
     let t = secs as libc::time_t;
     // SAFETY: `tm` is plain data, and localtime_r only writes into it.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers come from live locals; localtime_r is the
+    // reentrant variant, so it touches no shared static buffer.
     if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
         return utc_civil(secs);
     }
