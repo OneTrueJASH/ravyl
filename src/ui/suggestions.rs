@@ -90,14 +90,47 @@ fn columns(has_sim: bool, width: u16) -> Vec<Column> {
         sort,
         align,
     };
+    // Positions are at most three characters (H15, 15H). The word takes
+    // what is left on a narrow pane, and no more than its longest form
+    // (15 letters and the bingo mark) on a wide one, where Leave gets the
+    // rest.
+    let word_width = if width >= 60 {
+        Constraint::Length(17)
+    } else {
+        Constraint::Min(7)
+    };
+    let pos = col("Pos", Constraint::Length(3), None, Alignment::Left);
+    let word = col("Word", word_width, Some(SortMode::Alpha), Alignment::Left);
+    // Narrow panes (the compact sidebar at 80 columns) keep the columns
+    // that rank: equity before simulating, spread and win% after.
+    if width < 34 {
+        let mut cols = vec![pos, word];
+        if has_sim {
+            cols.push(col(
+                "Spread",
+                Constraint::Length(6),
+                Some(SortMode::MctsEquity),
+                Alignment::Right,
+            ));
+            cols.push(col(
+                "Win%",
+                Constraint::Length(4),
+                Some(SortMode::WinPct),
+                Alignment::Right,
+            ));
+        } else {
+            cols.push(col(
+                "Equity",
+                Constraint::Length(6),
+                Some(SortMode::Equity),
+                Alignment::Right,
+            ));
+        }
+        return cols;
+    }
     let mut cols = vec![
-        col("Pos", Constraint::Length(4), None, Alignment::Left),
-        col(
-            "Word",
-            Constraint::Min(10),
-            Some(SortMode::Alpha),
-            Alignment::Left,
-        ),
+        pos,
+        word,
         col(
             "Score",
             Constraint::Length(5),
@@ -311,12 +344,18 @@ pub fn render_suggestions(
     let title = if moves.is_empty() {
         " Suggestions ".to_string()
     } else {
-        format!(
-            " Suggestions {}/{}{} ",
+        let count = format!(
+            " Suggestions {}/{}",
             pos.map_or(0, |p| p + 1),
             group_thousands(view.visible.len() as u64),
-            if has_sim { " \u{00b7} simulated" } else { "" }
-        )
+        );
+        // "· simulated" only where it fits beside the count.
+        let suffix = " \u{00b7} simulated ";
+        if has_sim && count.chars().count() + suffix.chars().count() + 3 <= area.width as usize {
+            format!("{count}{suffix}")
+        } else {
+            format!("{count} ")
+        }
     };
     let filter_title = view.filter.map(|f| {
         let cursor = if view.filter_editing { "_" } else { "" };
@@ -350,6 +389,7 @@ pub fn render_suggestions(
         };
         let paragraph = Paragraph::new(lines)
             .style(Style::new().fg(theme::current().text_dim))
+            .wrap(ratatui::widgets::Wrap { trim: false })
             .block(block);
         frame.render_widget(paragraph, area);
         return;

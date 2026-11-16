@@ -735,7 +735,7 @@ impl App {
         self.set_message(
             MessageKind::Info,
             format!(
-                "Loaded {} words. Place tiles on board, set rack, Ctrl+S to solve.",
+                "Loaded {} words \u{00b7} F1 for help",
                 group_thousands(count as u64)
             ),
         );

@@ -64,6 +64,58 @@ impl<'a> RackStatsWidget<'a> {
         self
     }
 
+    /// Rows the pane needs to show everything at `width` columns (its
+    /// outer width), borders included. Mirrors `render`, line for line.
+    pub fn rows_needed(&self, width: u16) -> u16 {
+        let inner_w = width.saturating_sub(4); // border and padding
+        let stats = GameStats::compute(self.state);
+        let mut rows = TILE_HEIGHT; // the rack tiles
+        rows += 2; // score, separator
+        rows += 2; // rack line, separator
+        rows += 1; // bag
+        if stats.game_phase == GamePhase::Endgame {
+            rows += 1; // final move
+        }
+        rows += 1; // power tiles
+        match self.inferred_rack {
+            Some(infer) => {
+                if !infer.letter_marginals.is_empty() || !infer.top_leaves.is_empty() {
+                    rows += 1; // separator
+                }
+                if !infer.letter_marginals.is_empty() {
+                    if infer
+                        .letter_marginals
+                        .iter()
+                        .any(|m| m.p_at_least_one >= 1.0)
+                    {
+                        rows += 1; // kept letters
+                    }
+                    rows += 1; // played
+                } else if !infer.top_leaves.is_empty() {
+                    rows += 2; // likely rack, played / kept
+                }
+            }
+            None if self.inference_note.is_some() => rows += 1,
+            None => {}
+        }
+        if self.opp_skill.is_some() {
+            rows += 1;
+        }
+        rows += 1; // unseen heading
+        let unseen = self.state.unseen_tiles();
+        let letters: Vec<u32> = ('A'..='Z')
+            .filter_map(|c| unseen.get(&c).copied().filter(|&n| n > 0))
+            .collect();
+        let widest = letters
+            .iter()
+            .map(|n| n.to_string().len())
+            .max()
+            .unwrap_or(1) as u16;
+        let cols = (inner_w / (3 + widest)).max(1) as usize;
+        rows += letters.len().div_ceil(cols) as u16;
+        rows + 2 // borders
+    }
+
     fn render_text(buf: &mut Buffer, x: u16, y: u16, max_x: u16, text: &str, style: Style) {
         for (i, ch) in text.chars().enumerate() {
             let px = x + i as u16;
@@ -735,4 +787,95 @@ fn fit<'s>(width: usize, long: &'s str, short: &'s str) -> &'s str {
 /// "1 vowel", "3 vowels".
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// Rows the full stats pane needs at `width` columns, for the layout.
+#[allow(clippy::too_many_arguments)]
+pub fn rack_stats_rows(
+    width: u16,
+    state: &SolverState,
+    inferred_rack: Option<&InferenceResult>,
+    scores: (u32, u32),
+    final_turn: (FinalTurn, bool),
+    opp_skill: Option<(f32, u32)>,
+    inference_note: Option<&str>,
+) -> u16 {
+    RackStatsWidget::new(state, false, inferred_rack, scores, final_turn, opp_skill)
+        .with_inference_note(inference_note)
+        .rows_needed(width)
+}
+
+/// Three-line rack summary for the compact sidebar beside a mini board:
+/// the rack, the score, and the bag with the unseen blanks and S's.
+pub fn render_rack_summary(
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    state: &SolverState,
+    is_focused: bool,
+    scores: (u32, u32),
+) {
+    let t = theme::current();
+    let stats = GameStats::compute(state);
+    let tiles: Vec<String> = state
+        .rack
+        .tiles()
+        .iter()
+        .map(|t| {
+            if t.is_blank {
+                "?".to_string()
+            } else {
+                t.letter.to_string()
+            }
+        })
+        .collect();
+    let label_style = if is_focused {
+        Style::new().fg(t.pane_rack).bold()
+    } else {
+        Style::new().fg(t.text_dim)
+    };
+    let rack = if tiles.is_empty() {
+        ratatui::text::Span::styled(
+            fit(
+                area.width.saturating_sub(6) as usize,
+                "empty: Tab, type tiles",
+                "empty",
+            ),
+            Style::new().fg(t.text_dim),
+        )
+    } else {
+        ratatui::text::Span::styled(tiles.join(" "), Style::new().fg(t.text_primary).bold())
+    };
+    let diff = scores.0 as i32 - scores.1 as i32;
+    let lines = vec![
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(" Rack ", label_style),
+            rack,
+        ]),
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled(
+                format!(" You {} \u{2013} Opp {}", scores.0, scores.1),
+                Style::new().fg(t.text_primary),
+            ),
+            ratatui::text::Span::styled(
+                if diff == 0 {
+                    String::new()
+                } else {
+                    format!("  ({:+})", diff)
+                },
+                Style::new().fg(if diff > 0 { Color::Green } else { Color::Red }),
+            ),
+        ]),
+        ratatui::text::Line::from(ratatui::text::Span::styled(
+            format!(
+                " Bag ~{} \u{00b7} {} \u{00b7} ?{} S{}",
+                stats.estimated_bag,
+                stats.game_phase.label(),
+                stats.blanks_unseen,
+                stats.s_unseen
+            ),
+            Style::new().fg(t.text_dim),
+        )),
+    ];
+    register_hit(area, HitTarget::FocusPane(crate::app::Focus::Rack));
+    frame.render_widget(ratatui::widgets::Paragraph::new(lines), area);
 }

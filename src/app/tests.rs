@@ -493,9 +493,19 @@ fn focus_skips_hidden_panes() {
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Board, "nothing else is visible");
 
-    // Too narrow for a sidebar at all.
+    // 80x24 keeps a compact sidebar beside a mini board: Tab reaches the
+    // rack and the list.
     app.sidebar_visible = true;
     app.terminal_size = Some((80, 24));
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Rack);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Suggestions);
+    app.handle_key(key(KeyCode::Tab));
+    assert_eq!(app.focus, Focus::Board);
+
+    // Too narrow for a sidebar at all.
+    app.terminal_size = Some((70, 24));
     app.handle_key(key(KeyCode::Tab));
     assert_eq!(app.focus, Focus::Board);
 }

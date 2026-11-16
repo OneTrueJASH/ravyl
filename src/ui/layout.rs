@@ -2,10 +2,12 @@
 //!
 //! The board always gets priority (sized from terminal height). With room
 //! for both, the sidebar (rack + stats, sort tabs, suggestions) sits to its
-//! right, unless hidden with the `\` toggle. On terminals too narrow for
-//! that, a stacked layout puts a one-line rack and a short suggestion list
-//! under the board. Below the minimum size nothing is laid out and the UI
-//! says how big the terminal needs to be.
+//! right, unless hidden with the `\` toggle. Narrower terminals (from 80
+//! columns) keep a mini board, one row per board row, with a compact
+//! sidebar beside it: a three-line rack summary, the sort row and the
+//! list. Narrower still, a stacked layout puts a one-line rack and a short
+//! list under the board when the height allows. Below the minimum size
+//! nothing is laid out and the UI says how big the terminal needs to be.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 
@@ -33,6 +35,18 @@ const SUGGESTIONS_MIN_WIDTH: u16 = 30;
 /// suggestion list with border, header and at least three rows.
 const STACKED_EXTRA_ROWS: u16 = 1 + 6;
 
+/// Narrowest sidebar worth showing beside a mini board: the list then has
+/// room for the position, a short word and a number or two.
+const COMPACT_SIDEBAR_MIN: u16 = 30;
+/// Width the compact sidebar would like before the board takes 4-column
+/// squares instead of 3.
+const COMPACT_SIDEBAR_COMFORT: u16 = 38;
+/// Rows of the compact sidebar's rack summary (rack, score, bag).
+pub const RACK_SUMMARY_ROWS: u16 = 3;
+/// Stats pane height when its content is not known (input's visibility
+/// checks); the drawn frame sizes it to what it shows.
+const DEFAULT_RACK_ROWS: u16 = 19;
+
 /// Computed layout areas for a single frame.
 #[derive(Debug, Clone, Default)]
 pub struct AppLayout {
@@ -46,6 +60,8 @@ pub struct AppLayout {
     pub message_area: Rect,
     /// Rack + stats area (side-by-side layout).
     pub rack_area: Option<Rect>,
+    /// Three-line rack, score and bag summary (compact sidebar layout).
+    pub rack_summary: Option<Rect>,
     /// One-line rack (stacked layout).
     pub rack_line: Option<Rect>,
     /// Sort-mode tab bar above suggestions.
@@ -74,9 +90,20 @@ impl AppLayout {
         15 + AXIS_H + 2
     }
 
+    /// Board pane width of the mini form with `cell_w` columns per square.
+    fn mini_board_width(cell_w: u16) -> u16 {
+        cell_w * 15 + AXIS_W + 2
+    }
+
     /// Compute layout from terminal size. `sidebar_visible` is the `\`
     /// toggle: when false the board pane takes the whole terminal.
     pub fn compute(area: Rect, sidebar_visible: bool) -> Self {
+        Self::compute_with(area, sidebar_visible, DEFAULT_RACK_ROWS)
+    }
+
+    /// As [`Self::compute`], with the stats pane `rack_rows` tall (its
+    /// content) in the side-by-side layout; the list takes the rest.
+    pub fn compute_with(area: Rect, sidebar_visible: bool, rack_rows: u16) -> Self {
         if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
             return AppLayout {
                 too_small: Some((MIN_WIDTH, MIN_HEIGHT)),
@@ -96,13 +123,34 @@ impl AppLayout {
         // both fit, and never while the user has toggled it away.
         let side_by_side =
             sidebar_visible && area.width >= BOARD_MIN_WIDTH + GAP + MIN_SIDEBAR_WIDTH;
-        // Too narrow for that: stack a one-line rack and a short list
-        // under a mini board when the height allows.
+        // Too narrow for that: a mini board with a compact sidebar beside
+        // it, which fits the classic 80x24 terminal.
+        let compact_side = sidebar_visible
+            && !side_by_side
+            && area.width >= Self::mini_board_width(3) + COMPACT_SIDEBAR_MIN
+            && content.height >= 2 + Self::mini_board_height();
+        // Narrower still: stack a one-line rack and a short list under a
+        // mini board when the height allows.
         let stacked = sidebar_visible
             && !side_by_side
+            && !compact_side
             && content.height >= 2 + Self::mini_board_height() + STACKED_EXTRA_ROWS;
 
-        let (board_section, sidebar, below) = if side_by_side {
+        let (board_section, sidebar, below) = if compact_side {
+            // Four columns per square once the sidebar keeps a comfortable
+            // width; no gap, the panes' own borders separate them.
+            let cell_w = if area.width >= Self::mini_board_width(4) + COMPACT_SIDEBAR_COMFORT {
+                4
+            } else {
+                3
+            };
+            let [board, side] = Layout::horizontal([
+                Constraint::Length(Self::mini_board_width(cell_w)),
+                Constraint::Fill(1),
+            ])
+            .areas(content);
+            (board, side, Rect::default())
+        } else if side_by_side {
             let ideal_bw = Self::ideal_board_width(area.height)
                 .max(BOARD_MIN_WIDTH)
                 .min(area.width - (MIN_SIDEBAR_WIDTH + GAP));
@@ -154,12 +202,36 @@ impl AppLayout {
             return layout;
         }
 
+        if compact_side {
+            // The board pane is narrow here; messages use the full width
+            // (the sidebar's bottom row beside them is empty padding).
+            layout.message_area = Rect {
+                x: content.x,
+                width: content.width,
+                ..layout.message_area
+            };
+            // top_pad(1) | rack summary | sort_tabs | suggestions | bottom_pad(1)
+            let [_, summary, tabs, list, _] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Length(RACK_SUMMARY_ROWS),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+                Constraint::Length(1),
+            ])
+            .areas(sidebar);
+            layout.rack_summary = Some(summary);
+            layout.suggestions_tab_area = Some(tabs);
+            layout.suggestions_area = Some(list);
+            return layout;
+        }
+
         // Sidebar split: top_pad(1) | rack | sort_tabs | suggestions | bottom_pad(1)
         // The padding rows align with the tab bar and message bar on the left.
+        // The stats pane is as tall as what it shows; the list gets the rest.
         if sidebar.width >= SUGGESTIONS_MIN_WIDTH {
             let [_, rack, tabs, list, _] = Layout::vertical([
                 Constraint::Length(1), // aligns with tab bar
-                Constraint::Length(19),
+                Constraint::Length(rack_rows),
                 Constraint::Length(1),
                 Constraint::Min(8),
                 Constraint::Length(1), // aligns with message bar
@@ -182,7 +254,7 @@ impl AppLayout {
 
     /// Whether the rack is shown in any form.
     pub fn shows_rack(&self) -> bool {
-        self.rack_area.is_some() || self.rack_line.is_some()
+        self.rack_area.is_some() || self.rack_line.is_some() || self.rack_summary.is_some()
     }
 }
 
@@ -209,11 +281,42 @@ mod tests {
         );
     }
 
+    /// From 80 columns a mini board keeps a compact sidebar beside it, so
+    /// the classic 80x24 terminal shows the rack and the list.
+    #[test]
+    fn eighty_columns_keep_rack_and_list_beside_a_mini_board() {
+        for (w, h) in [(80, 24), (100, 30), (108, 36)] {
+            let layout =
+                AppLayout::compute(Rect::new(0, 0, w, h), /* sidebar_visible= */ true);
+            let summary = layout.rack_summary.expect("rack summary");
+            let list = layout.suggestions_area.expect("list");
+            assert!(layout.shows_rack());
+            assert!(summary.x >= layout.board_area.x + layout.board_area.width);
+            assert!(list.width >= COMPACT_SIDEBAR_MIN, "{w}x{h}");
+            assert!(list.height >= 8, "{w}x{h}: list {}", list.height);
+            assert!(layout.board_area.height >= AppLayout::mini_board_height());
+        }
+    }
+
+    /// The stats pane takes the rows its content needs and the list gets
+    /// the rest.
+    #[test]
+    fn stats_pane_height_follows_its_content() {
+        let area = Rect::new(0, 0, 160, 45);
+        let short = AppLayout::compute_with(area, true, 12);
+        let tall = AppLayout::compute_with(area, true, 19);
+        assert_eq!(short.rack_area.unwrap().height, 12);
+        assert_eq!(
+            short.suggestions_area.unwrap().height,
+            tall.suggestions_area.unwrap().height + 7
+        );
+    }
+
     /// Narrow but tall terminals stack the rack and a short list under the
     /// board; short ones show just the board; tiny ones show nothing.
     #[test]
     fn narrow_terminals_stack_or_shrink() {
-        let stacked = AppLayout::compute(Rect::new(0, 0, 80, 40), /* sidebar_visible= */ true);
+        let stacked = AppLayout::compute(Rect::new(0, 0, 70, 40), /* sidebar_visible= */ true);
         assert!(stacked.rack_area.is_none());
         assert!(stacked.rack_line.is_some());
         let list = stacked.suggestions_area.expect("short list");
@@ -222,7 +325,7 @@ mod tests {
         assert!(stacked.shows_rack());
 
         let board_only =
-            AppLayout::compute(Rect::new(0, 0, 80, 24), /* sidebar_visible= */ true);
+            AppLayout::compute(Rect::new(0, 0, 70, 24), /* sidebar_visible= */ true);
         assert!(!board_only.shows_rack());
         assert!(board_only.suggestions_area.is_none());
         assert!(board_only.too_small.is_none());

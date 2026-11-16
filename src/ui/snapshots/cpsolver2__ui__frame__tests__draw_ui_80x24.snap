@@ -4,25 +4,25 @@ expression: text
 ---
  Crossplay Solver
    Board     Logs
-█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ H8 → █
-█                                                                              █
-█           A   B   C   D   E   F   G   H   I   J   K   L   M   N   O          █
-█        1 3L   ·   ·  3W   ·   ·   ·  2L   ·   ·   ·  3W   ·   ·  3L          █
-█        2  ·  2W   ·   ·   ·   ·  3L   ·  3L   ·   ·   ·   ·  2W   ·          █
-█        3  ·   ·   ·   ·  2L   ·   ·   ·   ·   ·  2L   ·   ·   ·   ·          █
-█        4 3W   ·   ·  2L   ·   ·   ·  2W   ·   ·   ·  2L   ·   ·  3W          █
-█        5  ·   ·  2L   ·   ·  3L   ·   ·   ·  3L   ·   ·  2L   ·   ·          █
-█        6  ·   ·   ·   ·  3L   ·   ·  2L   ·   ·  3L   ·   ·   ·   ·          █
-█        7  ·  3L   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·  3L   ·          █
-█        8 2L   ·   ·  B 4 E 1 E 1 C 3 H 3  ·  2L   ·  2W   ·   ·  2L          █
-█        9  ·  3L   ·   ·   ·   ·   ·  I 1  ·   ·   ·   ·   ·  3L   ·          █
-█       10  ·   ·   ·   ·  3L   ·   ·  K 6  ·   ·  3L   ·   ·   ·   ·          █
-█       11  ·   ·  2L   ·   ·  3L   ·  E 1  ·  3L   ·   ·  2L   ·   ·          █
-█       12 I 1 n 0 S 1 N 1 A 1 R 1 E 1 r 0  ·   ·   ·  2L   ·   ·  3W          █
-█       13  ·   ·   ·   ·  2L   ·   ·   ·   ·   ·  2L   ·   ·   ·   ·          █
-█       14  ·  2W   ·   ·   ·   ·  3L   ·  3L   ·   ·   ·   ·  2W   ·          █
-█       15 3L   ·   ·  3W   ·   ·   ·  2L   ·   ·   ·  3W   ·   ·  3L          █
-█                                                                              █
-█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█
+█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀ H8 → █ Rack A E I N R S ?
+█                                                █ You 42 – Opp 57  (-15)
+█   A  B  C  D  E  F  G  H  I  J  K  L  M  N  O  █ Bag ~77 · Early · ?1 S4
+█ 1 3L ·  ·  3W ·  ·  ·  2L ·  ·  ·  3W ·  ·  3L █ Sort:  Equity   s to change
+█ 2 ·  2W ·  ·  ·  ·  3L ·  3L ·  ·  ·  ·  2W ·  ██ Suggestions 10/14,194 ▀▀▀▀▀█
+█ 3 ·  ·  ·  ·  2L ·  ·  ·  ·  ·  2L ·  ·  ·  ·  ██   Pos Word          Equity █
+█ 4 3W ·  ·  2L ·  ·  ·  2W ·  ·  ·  2L ·  ·  3W ██   D8  BANIShER ★        73 █
+█ 5 ·  ·  2L ·  ·  3L ·  ·  ·  3L ·  ·  2L ·  ·  ██   D8  BANIStER ★        73 █
+█ 6 ·  ·  ·  ·  3L ·  ·  2L ·  ·  3L ·  ·  ·  ·  ██   D8  BARNIESt ★        73 █
+█ 7 ·  3L ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  ·  3L ·  ██   D8  BARoNIES ★        73 █
+█ 8 2L ·  ·  B4 E1 E1 C3 H3 ·  2L ·  2W ·  ·  2L ██   D8  BEARINgS ★        73 █
+█ 9 ·  3L ·  ·  ·  ·  ·  I1 ·  ·  ·  ·  ·  3L ·  ██   D8  BEARSkIN ★        73 █
+█10 ·  ·  ·  ·  3L ·  ·  K6 ·  ·  3L ·  ·  ·  ·  ██   D8  BINARiES ★        73 █
+█11 ·  ·  2L ·  ·  3L ·  E1 ·  3L ·  ·  2L ·  ·  ██   D8  BRISANcE ★        73 █
+█12 I1 n0 S1 N1 A1 R1 E1 r0 ·  ·  ·  2L ·  ·  3W ██   D8  BRANdIES ★        70 █
+█13 ·  ·  ·  ·  2L ·  ·  ·  ·  ·  2L ·  ·  ·  ·  ██ > 12A InSNARER ★        61 █
+█14 ·  2W ·  ·  ·  ·  3L ·  3L ·  ·  ·  ·  2W ·  ██   12A SNARkIER ★        61 █
+█15 3L ·  ·  3W ·  ·  ·  2L ·  ·  ·  3W ·  ·  3L ██   12A SNARlIER ★        61 █
+█                                                ██   12A StRAINER ★        61 █
+█▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄██▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄█
                                 Found 6,862 moves
  Enter Apply M Simulate s Sort / Filter y Copy Esc Board ^Z Undo F1 Help

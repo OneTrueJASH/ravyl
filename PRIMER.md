@@ -29,7 +29,7 @@ Everything lives in the library crate (`src/lib.rs`); the `cpsolver2` binary (`s
 | `ui::hit` | Thread-local hit map for mouse click resolution (`HitTarget`, `register_hit()`, `resolve_click()`) |
 | `ui::frame` | `draw_ui`: lays out and draws a whole frame (and the UI snapshot tests) |
 | `ui::events` | `AppAction` enum (`Quit`, `Redraw`, `Nothing`) |
-| `ui::layout` | `AppLayout` from terminal size: board + sidebar side by side when both fit; otherwise, if tall enough, a stacked layout (mini board, one-line rack, short list); below `MIN_WIDTH`×`MIN_HEIGHT` (50×22) `too_small` and nothing else |
+| `ui::layout` | `AppLayout` from terminal size: board + sidebar side by side when both fit (the stats pane as tall as its content, `compute_with`); from 80 columns a mini board with a compact sidebar (three-line rack summary, sort row, list); otherwise, if tall enough, a stacked layout (mini board, one-line rack, short list); below `MIN_WIDTH`×`MIN_HEIGHT` (50×22) `too_small` and nothing else |
 | `ui::board_view` | Board widget with A–O / 1–15 axes, premium squares, cursor (dim when the board is not focused), blanks in lowercase, preview tiles, and the cursor readout (`H8 →`) in the title; `BoardGeometry` picks full (4-row cells), compact (3-row) or borderless mini cells to fit the pane |
 | `ui::stats_view` | Rack tiles + game stats + opponent inference widget (likely kept letters with the blank promoted, played tiles, measured error rate) |
 | `ui::suggestions` | Suggestions table: `ListView` (visible indices under the filter, scroll offset kept between frames with a 2-row scroll-off, `12/340` position), only visible rows built; columns adapt to the width; clickable headers sort |
@@ -99,4 +99,4 @@ The `Settings` struct contains only `DisplaySettings`:
 - No leftover tile penalty — unplayed rack tiles don't affect scoring
 - No go-out bonus — emptying your rack gives no extra points
 - A turn may also be used to pass, or to exchange any number of tiles (the turn is forfeited; assumed to require at least 7 tiles in the bag)
-- Consequence for the solver: with the bag empty, the opponent only replies to our play if *they* emptied the bag. `App.final_turn` tracks this (inferred from moves applied through the app; Ctrl+E overrides it for hand-entered positions; the stats pane shows `last:OPP?` while it is only assumed)
+- Consequence for the solver: with the bag empty, the opponent only replies to our play if *they* emptied the bag. `App.final_turn` tracks this (inferred from moves applied through the app; Ctrl+E overrides it for hand-entered positions; the stats pane shows `Final move: opponent?` while it is only assumed)

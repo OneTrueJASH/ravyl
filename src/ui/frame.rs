@@ -13,7 +13,24 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
     // Clear hit map for this frame.
     clear_hits();
 
-    let layout = AppLayout::compute(size, app.sidebar_visible);
+    // The stats pane is as tall as its content, which depends on its width:
+    // lay out once to learn the width, then again with that height.
+    let rack_rows = |width: u16| {
+        crate::ui::stats_view::rack_stats_rows(
+            width,
+            &app.state,
+            app.inferred_opponent_rack.as_ref(),
+            (app.our_score, app.opp_score),
+            (app.final_turn, app.final_turn_known),
+            app.opp_error_estimate(),
+            app.inference_note(),
+        )
+    };
+    let first = AppLayout::compute(size, app.sidebar_visible);
+    let layout = match first.rack_area {
+        Some(r) => AppLayout::compute_with(size, app.sidebar_visible, rack_rows(r.width)),
+        None => first,
+    };
     if let Some((w, h)) = layout.too_small {
         crate::ui::status_bar::render_too_small(frame, size, (w, h));
         return;
@@ -85,6 +102,15 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             (app.final_turn, app.final_turn_known),
             opp_skill,
             app.inference_note(),
+        );
+    }
+    if let Some(summary) = layout.rack_summary {
+        crate::ui::stats_view::render_rack_summary(
+            frame,
+            summary,
+            &app.state,
+            app.focus == Focus::Rack,
+            (app.our_score, app.opp_score),
         );
     }
     if let Some(rack_line) = layout.rack_line {
