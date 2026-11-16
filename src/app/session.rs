@@ -210,7 +210,7 @@ impl App {
         self.pending_opponent_score = 0;
         self.awaiting_opp_reply = false;
         if let Ok(mut cache) = self.sim_cache.lock() {
-            *cache = None;
+            cache.clear();
         }
         self.cursor = (7, 7);
         self.typing_direction = Direction::Horizontal;

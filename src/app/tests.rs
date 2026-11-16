@@ -643,7 +643,7 @@ fn esc_stops_and_m_resumes_the_simulation() {
     // The worker saves its state when it notices the cancel.
     let started = Instant::now();
     let saved = loop {
-        let saved = app.sim_cache.lock().unwrap().as_ref().map(|s| s.playouts());
+        let saved = app.sim_cache.lock().unwrap().state().map(|s| s.playouts());
         if saved.is_some() || started.elapsed() > Duration::from_secs(20) {
             break saved.unwrap_or(0);
         }
@@ -1413,7 +1413,21 @@ fn switching_games_clears_the_old_games_state() {
     assert!(app.undo_stack.is_empty() && app.redo_stack.is_empty());
     assert!(app.inferred_opponent_rack.is_none());
     assert!(app.suggestions.is_empty() && app.sim_results.is_none());
-    assert!(app.sim_cache.lock().unwrap().is_none());
+    // The cancelled worker stores its run on the way out; that must not
+    // land in the new game's cache. Its clone of the cache is dropped when
+    // it finishes, so wait for that rather than racing it.
+    let started = Instant::now();
+    while Arc::strong_count(&app.sim_cache) > 1 {
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the cancelled simulation worker never finished"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        app.sim_cache.lock().unwrap().state().is_none(),
+        "the old game's simulation run reached the new game's cache"
+    );
     assert_eq!(app.opp_moves_measured, 0);
     // The game left behind was saved with its own measurement.
     let saved: Vec<SavedGame> = files_in(&dir)

@@ -137,6 +137,54 @@ pub struct SimProgress {
     pub done: bool,
 }
 
+/// The simulation resume cache, tagged with a generation so a worker can
+/// only store a run for the game it was started in.
+///
+/// Cancelling a run does not wait for its worker: the worker notices the
+/// flag, leaves `Simulation::run` and stores its state on the way out. When
+/// the open game is cleared in between, that late store would put the old
+/// game's run into the new game's cache. `clear` bumps the generation and
+/// workers store only under the generation they started with; both happen
+/// under the cache's mutex, so no clear can slip between check and store.
+#[derive(Debug, Default)]
+pub struct SimCache {
+    generation: u64,
+    state: Option<SimState>,
+}
+
+impl SimCache {
+    /// The generation a worker started now belongs to.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The saved run, if one was stored in `generation`.
+    pub fn take(&mut self, generation: u64) -> Option<SimState> {
+        if generation == self.generation {
+            self.state.take()
+        } else {
+            None
+        }
+    }
+
+    /// Save a worker's run unless the cache was cleared since it started.
+    pub fn store(&mut self, generation: u64, state: SimState) {
+        if generation == self.generation {
+            self.state = Some(state);
+        }
+    }
+
+    /// Drop the saved run and refuse stores from workers started earlier.
+    pub fn clear(&mut self) {
+        self.generation += 1;
+        self.state = None;
+    }
+
+    pub fn state(&self) -> Option<&SimState> {
+        self.state.as_ref()
+    }
+}
+
 /// Dialog state for popup interactions
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DialogState {
@@ -398,7 +446,7 @@ pub struct App {
     pub(super) sim_job: Option<SimJob>,
     /// Saved state of the last simulation run, so M on the same position
     /// continues where it stopped.
-    pub(super) sim_cache: Arc<Mutex<Option<SimState>>>,
+    pub(super) sim_cache: Arc<Mutex<SimCache>>,
     /// The in-flight inference, tagged with the opponent-move stamp it was
     /// started for so a late result for an old move is dropped.
     pub(super) inference_receiver: Option<(u64, Receiver<Option<InferenceResult>>)>,
@@ -519,7 +567,7 @@ impl App {
             help_scroll: 0,
             sim_results: None,
             sim_job: None,
-            sim_cache: Arc::new(Mutex::new(None)),
+            sim_cache: Arc::new(Mutex::new(SimCache::default())),
             inference_receiver: None,
             endgame_job: None,
             position_stamp: 0,

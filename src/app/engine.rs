@@ -598,6 +598,7 @@ impl App {
             first: true,
         });
         let cache = Arc::clone(&self.sim_cache);
+        let generation = cache.lock().map_or(0, |c| c.generation());
         spawn_worker(move || {
             let inference = fresh_inference
                 .and_then(|rx| rx.recv_timeout(Duration::from_secs(3)).ok())
@@ -617,7 +618,7 @@ impl App {
             }
             // A saved run for this same position and model continues;
             // anything else starts afresh.
-            let resume = cache.lock().ok().and_then(|mut c| c.take());
+            let resume = cache.lock().ok().and_then(|mut c| c.take(generation));
             let mut sim =
                 Simulation::new(settings, &dict, &state, &candidates, model.as_ref(), resume);
             let resumed = sim.snapshot(Duration::ZERO, /* done= */ false).playouts;
@@ -631,7 +632,7 @@ impl App {
                 }
             });
             if let Ok(mut c) = cache.lock() {
-                *c = Some(sim.into_state(started.elapsed()));
+                c.store(generation, sim.into_state(started.elapsed()));
             }
             let _ = tx.send(last);
         });
