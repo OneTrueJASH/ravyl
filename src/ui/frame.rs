@@ -123,6 +123,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
                 height: &app.list_height,
                 filter: app.filter.as_deref(),
                 filter_editing: app.filter_editing,
+                sort: app.sort_mode,
             },
             app.focus == Focus::Suggestions,
             app.sim_results.as_deref(),

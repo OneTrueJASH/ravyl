@@ -185,7 +185,7 @@ fn status_text(r: &SimResult) -> String {
     match r.status {
         SimStatus::Exact => "exact".to_string(),
         SimStatus::Racing => "racing".to_string(),
-        SimStatus::Stopped => format!("stopped @{}", r.iterations),
+        SimStatus::Stopped => format!("out @{}", r.iterations),
         SimStatus::Capped => "capped".to_string(),
         SimStatus::Pending if r.iterations > 0 => "floor".to_string(),
         SimStatus::Pending => "\u{2013}".to_string(),
@@ -195,20 +195,35 @@ fn status_text(r: &SimResult) -> String {
 /// One line above the table while (or after) simulating: coverage,
 /// playouts, time, and a gauge of the run's budget.
 fn render_progress(frame: &mut ratatui::Frame, area: Rect, progress: &SimProgress, running: bool) {
-    let text = format!(
-        "simulated {}/{} plays \u{00b7} {} playouts \u{00b7} {:.1}s{}",
+    // The longest form that fits; dropping words, not clipping mid-word.
+    let coverage = format!(
+        "{}/{}",
         group_thousands(progress.simulated as u64),
-        group_thousands(progress.total as u64),
-        group_thousands(progress.playouts),
-        progress.elapsed.as_secs_f32(),
-        if progress.done {
-            " \u{00b7} M continues"
-        } else {
-            ""
-        }
+        group_thousands(progress.total as u64)
     );
-    let gauge_w = if running && area.width > text.len() as u16 + 12 {
-        (area.width - text.len() as u16 - 2).min(24)
+    let playouts = group_thousands(progress.playouts);
+    let secs = progress.elapsed.as_secs_f32();
+    let more = if progress.done {
+        " \u{00b7} M continues"
+    } else {
+        ""
+    };
+    let forms = [
+        format!(
+            "simulated {coverage} plays \u{00b7} {playouts} playouts \u{00b7} {secs:.1}s{more}"
+        ),
+        format!("{coverage} plays \u{00b7} {playouts} playouts \u{00b7} {secs:.1}s{more}"),
+        format!("{coverage} \u{00b7} {playouts} playouts \u{00b7} {secs:.1}s"),
+        format!("{coverage} \u{00b7} {secs:.1}s"),
+    ];
+    let text = forms
+        .iter()
+        .find(|f| f.chars().count() <= area.width as usize)
+        .unwrap_or(&forms[forms.len() - 1])
+        .clone();
+    let text_w = text.chars().count() as u16;
+    let gauge_w = if running && area.width > text_w + 12 {
+        (area.width - text_w - 2).min(24)
     } else {
         0
     };
@@ -247,6 +262,8 @@ pub struct ListView<'a> {
     pub height: &'a std::cell::Cell<usize>,
     pub filter: Option<&'a str>,
     pub filter_editing: bool,
+    /// What the list is sorted by; its column is marked in the header.
+    pub sort: SortMode,
 }
 
 /// Scroll `offset` just enough that `pos` sits at least `SCROLL_OFF` rows
@@ -296,7 +313,7 @@ pub fn render_suggestions(
             " Suggestions {}/{}{} ",
             pos.map_or(0, |p| p + 1),
             group_thousands(view.visible.len() as u64),
-            if has_sim { "*" } else { "" }
+            if has_sim { " \u{00b7} simulated" } else { "" }
         )
     };
     let filter_title = view.filter.map(|f| {
@@ -377,10 +394,22 @@ pub fn render_suggestions(
         );
     }
 
+    // The column the list is sorted by stands out (bold, underlined), so
+    // the order is readable from the table itself. Spread and the
+    // difference column share a sort; the first of them is marked.
     let hdr_style = Style::new().fg(theme::current().text_dim);
-    let header = Row::new(cols.iter().map(|c| {
+    let sorted_col = cols.iter().position(|c| c.sort == Some(view.sort));
+    let header = Row::new(cols.iter().enumerate().map(|(i, c)| {
         let line = Line::from(c.title).alignment(c.align);
-        Cell::from(line).style(hdr_style)
+        let style = if Some(i) == sorted_col {
+            Style::new()
+                .fg(theme::current().hint_key)
+                .bold()
+                .underlined()
+        } else {
+            hdr_style
+        };
+        Cell::from(line).style(style)
     }));
 
     let right = |text: String, style: Style| -> Cell<'static> {
@@ -576,6 +605,45 @@ pub fn render_sort_tabs(
         .highlight_style((Color::default(), highlight_color))
         .padding("", "")
         .divider(" ");
+
+    // When every mode does not fit, name the current one and the key that
+    // changes it rather than clipping the row mid-label.
+    let full_w: u16 = 6 + modes
+        .iter()
+        .map(|m| m.label().len() as u16 + 3)
+        .sum::<u16>()
+        - 1;
+    if full_w > area.width {
+        let line = Line::from(vec![
+            " Sort: ".fg(t.text_dim),
+            format!(" {} ", selected.label())
+                .fg(t.tab_fg)
+                .bg(highlight_color),
+            "  s to change".fg(t.text_dim),
+        ]);
+        let current_w = selected.label().len() as u16 + 2;
+        register_hit(
+            Rect::new(
+                area.x + 7,
+                area.y,
+                current_w.min(area.width.saturating_sub(7)),
+                1,
+            ),
+            HitTarget::SortTab(selected),
+        );
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
+    // A label, so the row reads as the sort control it is.
+    const LABEL: &str = " Sort:";
+    let label_w = LABEL.len() as u16;
+    let [label_area, area] =
+        Layout::horizontal([Constraint::Length(label_w), Constraint::Fill(1)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(LABEL).style(Style::new().fg(t.text_dim)),
+        label_area,
+    );
 
     // Register hit targets for each tab.
     let mut x = area.x;
