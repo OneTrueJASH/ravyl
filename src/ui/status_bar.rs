@@ -136,17 +136,27 @@ pub fn render_hints(frame: &mut ratatui::Frame, area: Rect, app: &App) {
         ("Tab", "Focus"),
         ("`", "Logs"),
         ("\\", "Sidebar"),
-        ("F1", "Help"),
     ]);
 
-    let mut spans = vec![Span::raw(" ")];
-    let mut width = 1usize;
-    for (key, desc) in keys {
-        let w = key.chars().count() + desc.chars().count() + 2;
-        if width + w > area.width as usize {
+    // F1 leads to every other key, so it always keeps its place at the end;
+    // the others fill what is left, most important first.
+    const HELP: (&str, &str) = ("F1", "Help");
+    let hint_width = |(key, desc): (&str, &str)| key.chars().count() + desc.chars().count() + 2;
+    let budget = (area.width as usize).saturating_sub(1 + hint_width(HELP));
+    let mut used = 0usize;
+    let mut shown: Vec<(&str, &str)> = Vec::new();
+    for hint in keys {
+        let w = hint_width(hint);
+        if used + w > budget {
             break;
         }
-        width += w;
+        used += w;
+        shown.push(hint);
+    }
+    shown.push(HELP);
+
+    let mut spans = vec![Span::raw(" ")];
+    for (key, desc) in shown {
         spans.push(Span::styled(
             key.to_string(),
             Style::default().fg(t.hint_key),

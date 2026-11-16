@@ -19,6 +19,7 @@ use crate::sim::{ArmStatus, ArmSummary, SimSnapshot, SimState};
 use crate::solver::Move;
 use crate::ui::menu_popup::EscapeMenuOption;
 
+use super::format::group_thousands;
 use super::session::SaveAsPurpose;
 
 /// Which player's score is being edited
@@ -728,7 +729,7 @@ impl App {
             MessageKind::Info,
             format!(
                 "Loaded {} words. Place tiles on board, set rack, Ctrl+S to solve.",
-                count
+                group_thousands(count as u64)
             ),
         );
     }
