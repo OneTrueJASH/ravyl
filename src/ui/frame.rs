@@ -124,6 +124,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
                 filter: app.filter.as_deref(),
                 filter_editing: app.filter_editing,
                 sort: app.sort_mode,
+                rack_empty: app.state.rack.tiles().is_empty(),
             },
             app.focus == Focus::Suggestions,
             app.sim_results.as_deref(),
@@ -156,25 +157,19 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
         }
 
         DialogState::ConfirmQuit { yes: yes_selected } => {
-            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
+            let message = "Are you sure you want to quit?";
+            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size, message);
             frame.render_widget(
-                crate::ui::confirm_popup::ConfirmPopup::new(
-                    "Confirm Quit",
-                    "Are you sure you want to quit?",
-                    yes_selected,
-                ),
+                crate::ui::confirm_popup::ConfirmPopup::new("Confirm Quit", message, yes_selected),
                 popup_area,
             );
         }
 
         DialogState::ConfirmReset { yes: yes_selected } => {
-            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
+            let message = "Reset the board and clear all tiles?";
+            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size, message);
             frame.render_widget(
-                crate::ui::confirm_popup::ConfirmPopup::new(
-                    "Confirm Reset",
-                    "Reset the board and clear all tiles?",
-                    yes_selected,
-                ),
+                crate::ui::confirm_popup::ConfirmPopup::new("Confirm Reset", message, yes_selected),
                 popup_area,
             );
         }
@@ -205,7 +200,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
 
         DialogState::ConfirmOverwrite { ref name, yes, .. } => {
             let message = format!("Replace the saved game {}?", name);
-            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
+            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size, &message);
             frame.render_widget(
                 crate::ui::confirm_popup::ConfirmPopup::new("Game exists", &message, yes),
                 popup_area,
@@ -214,7 +209,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
 
         DialogState::ConfirmDelete { ref name, yes, .. } => {
             let message = format!("Delete {}? This cannot be undone.", name);
-            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size);
+            let popup_area = crate::ui::confirm_popup::ConfirmPopup::area(size, &message);
             frame.render_widget(
                 crate::ui::confirm_popup::ConfirmPopup::new("Delete game", &message, yes),
                 popup_area,

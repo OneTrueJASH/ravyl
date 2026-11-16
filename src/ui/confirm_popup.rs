@@ -31,8 +31,12 @@ impl<'a> ConfirmPopup<'a> {
         }
     }
 
-    pub fn area(terminal_area: Rect) -> Rect {
-        centered_rect(terminal_area, 40, 7)
+    /// Wide enough for `message` (a game's name can make it long), at
+    /// least 40 columns and at most the terminal's width.
+    pub fn area(terminal_area: Rect, message: &str) -> Rect {
+        let want = (message.chars().count() as u16 + 6).max(40);
+        let width = want.min(terminal_area.width.saturating_sub(2).max(40));
+        centered_rect(terminal_area, width, 7)
     }
 
     /// Screen rectangles of the Yes and No buttons for a dialog whose

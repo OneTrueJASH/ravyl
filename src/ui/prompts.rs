@@ -23,7 +23,8 @@ pub fn render_score_input(
         ScoreTarget::Player => "Set Your Score",
         ScoreTarget::Opponent => "Set Opponent Score",
     };
-    let popup_area = centered_rect(size, 36, 6);
+    // Wide enough for the hint line, which used to lose "Esc to cancel".
+    let popup_area = centered_rect(size, 46, 6);
     register_hit(popup_area, HitTarget::DialogArea);
     let inner = render_popup_frame(popup_area, frame.buffer_mut(), title, t.popup_border);
     let display = if buffer.is_empty() { "0" } else { buffer };
@@ -122,15 +123,20 @@ pub fn render_save_as(
     error: Option<&str>,
 ) {
     let t = theme::current();
-    let (title, hint) = match purpose {
-        SaveAsPurpose::Save => ("Save game as", "Enter saves, Esc cancels"),
+    // Each hint line fits the popup's width; the quit prompt has two
+    // (on one line its last words, what Esc does, were cut off).
+    let (title, hints): (&str, &[&str]) = match purpose {
+        SaveAsPurpose::Save => ("Save game as", &["Enter saves, Esc cancels"]),
         SaveAsPurpose::Quit => (
             "Name this game before quitting",
-            "Enter saves and quits \u{00b7} ^C quits keeping this name \u{00b7} Esc cancels",
+            &[
+                "Enter saves and quits \u{00b7} Esc cancels",
+                "^C quits keeping this name",
+            ],
         ),
-        SaveAsPurpose::Rename { .. } => ("Rename game", "Enter renames, Esc cancels"),
+        SaveAsPurpose::Rename { .. } => ("Rename game", &["Enter renames, Esc cancels"]),
     };
-    let popup_area = centered_rect(size, 64, 8);
+    let popup_area = centered_rect(size, 64, 7 + hints.len() as u16);
     register_hit(popup_area, HitTarget::DialogArea);
     let inner = render_popup_frame(popup_area, frame.buffer_mut(), title, t.popup_border);
     // A pristine automatic name is shown dimmed: typing replaces it.
@@ -151,7 +157,7 @@ pub fn render_save_as(
             Style::default().fg(t.text_dim),
         )),
     };
-    let content = vec![
+    let mut content = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("  Name: ", Style::default().fg(t.popup_key)),
@@ -161,8 +167,12 @@ pub fn render_save_as(
         Line::from(""),
         status,
         Line::from(""),
-        Line::from(Span::styled(hint, Style::default().fg(t.text_dim))),
     ];
+    content.extend(
+        hints
+            .iter()
+            .map(|h| Line::from(Span::styled(*h, Style::default().fg(t.text_dim)))),
+    );
     Paragraph::new(content)
         .wrap(Wrap { trim: false })
         .centered()

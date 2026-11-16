@@ -264,6 +264,8 @@ pub struct ListView<'a> {
     pub filter_editing: bool,
     /// What the list is sorted by; its column is marked in the header.
     pub sort: SortMode,
+    /// No rack entered yet: the empty list explains how to start.
+    pub rack_empty: bool,
 }
 
 /// Scroll `offset` just enough that `pos` sits at least `SCROLL_OFF` rows
@@ -334,7 +336,19 @@ pub fn render_suggestions(
     register_hit(area, HitTarget::FocusPane(crate::app::Focus::Suggestions));
 
     if moves.is_empty() {
-        let paragraph = Paragraph::new("Ctrl+S to find moves")
+        // The next step, not just the last one: Ctrl+S with no rack only
+        // reports an error.
+        let lines: Vec<Line> = if view.rack_empty {
+            vec![
+                Line::from("To analyze a position:"),
+                Line::from(" 1. Board: type tiles, : or paste CGP"),
+                Line::from(" 2. Tab to the rack and type your tiles"),
+                Line::from(" 3. Ctrl+S finds every move"),
+            ]
+        } else {
+            vec![Line::from("Ctrl+S (or Enter on the rack) finds every move")]
+        };
+        let paragraph = Paragraph::new(lines)
             .style(Style::new().fg(theme::current().text_dim))
             .block(block);
         frame.render_widget(paragraph, area);
