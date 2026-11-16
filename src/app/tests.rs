@@ -587,9 +587,12 @@ fn live_snapshots_update_and_resort_the_table() {
     assert_eq!(app.selected_suggestion, 0, "first results start at the top");
     assert_eq!(app.sim_progress.map(|p| p.playouts), Some(48));
 
-    // A later snapshot changes the order again (the final one ends the
-    // run); the selection follows its move.
-    app.selected_suggestion = 1; // row 2
+    // The user picks the second row; a later snapshot changes the order
+    // again (the final one ends the run) and the selection follows the
+    // move they picked.
+    app.focus = Focus::Suggestions;
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.suggestions[app.selected_suggestion].row, 2);
     tx.send(fake_snapshot(
         &[(20.0, 32), (9.0, 32), (5.0, 32)],
         /* done= */ true,
@@ -607,6 +610,53 @@ fn live_snapshots_update_and_resort_the_table() {
         .as_deref()
         .unwrap()
         .starts_with("Simulated 3/3 plays"));
+}
+
+/// Until the user moves the selection, a live simulation keeps it on the
+/// leader as the order changes, so the top of the table stays in view
+/// instead of following an early leader down the list.
+#[test]
+fn live_snapshots_keep_the_selection_on_the_leader_until_the_user_moves_it() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let mut app = test_app();
+    let mut moves: Vec<Move> = (1..=3).map(fake_move).collect();
+    for (i, m) in moves.iter_mut().enumerate() {
+        m.row = i;
+    }
+    app.suggestions = moves.clone();
+    let (job, tx, live) = fake_sim_job(&app, moves.clone());
+    app.sim_job = Some(job);
+
+    *live.lock().unwrap() = Some(fake_snapshot(
+        &[(1.0, 16), (9.0, 16), (5.0, 16)],
+        /* done= */ false,
+    ));
+    app.poll_mcts();
+    assert_eq!(
+        app.suggestions[app.selected_suggestion].row, 1,
+        "the leader"
+    );
+
+    // The leader changes; nobody touched the list, so row 1 stays selected.
+    *live.lock().unwrap() = Some(fake_snapshot(
+        &[(20.0, 32), (9.0, 32), (5.0, 32)],
+        /* done= */ false,
+    ));
+    app.poll_mcts();
+    assert_eq!(app.selected_suggestion, 0);
+    assert_eq!(app.suggestions[0].row, 0, "the new leader");
+
+    // Once the user moves, their move stays selected as the order changes.
+    app.focus = Focus::Suggestions;
+    app.handle_key(key(KeyCode::Down));
+    let picked = app.suggestions[app.selected_suggestion].row;
+    tx.send(fake_snapshot(
+        &[(1.0, 48), (2.0, 48), (30.0, 48)],
+        /* done= */ true,
+    ))
+    .unwrap();
+    app.poll_mcts();
+    assert_eq!(app.suggestions[app.selected_suggestion].row, picked);
 }
 
 /// Esc stops a running simulation and M continues it from the saved

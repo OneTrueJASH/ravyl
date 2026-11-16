@@ -93,10 +93,14 @@ impl App {
             self.sort_mode = SortMode::MctsEquity;
         }
         self.apply_sort();
-        // The first results re-rank the list: start at the top. Later
-        // snapshots keep the selection on the same move.
+        // The first results re-rank the list: start at the top, on the
+        // leader, and stay on whichever move leads as results come in. Once
+        // the user picks a row, later snapshots keep that move selected.
+        if first {
+            self.follow_leader = true;
+        }
         self.selected_suggestion = selected
-            .filter(|_| !first)
+            .filter(|_| !self.follow_leader)
             .and_then(|k| self.suggestions.iter().position(|m| Self::move_key(m) == k))
             .unwrap_or(0);
         let progress = SimProgress {

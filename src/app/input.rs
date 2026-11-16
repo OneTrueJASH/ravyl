@@ -22,6 +22,22 @@ impl App {
 
     /// Handle a keyboard event and return the action for the main loop.
     pub fn handle_key(&mut self, key: KeyEvent) -> AppAction {
+        let before = self.selected_suggestion;
+        let action = self.dispatch_key(key);
+        self.note_selection_moved(before);
+        action
+    }
+
+    /// A selection changed by the user (not by arriving results) stops a
+    /// live simulation from keeping the cursor on the leader: from then on
+    /// it stays on the move the user picked.
+    fn note_selection_moved(&mut self, before: usize) {
+        if self.selected_suggestion != before {
+            self.follow_leader = false;
+        }
+    }
+
+    fn dispatch_key(&mut self, key: KeyEvent) -> AppAction {
         // Terminals that report releases send every key twice.
         if key.kind == KeyEventKind::Release {
             return AppAction::Nothing;
@@ -110,6 +126,13 @@ impl App {
 
     /// Handle a mouse event and return the action for the main loop.
     pub fn handle_mouse(&mut self, mouse: MouseEvent) -> AppAction {
+        let before = self.selected_suggestion;
+        let action = self.dispatch_mouse(mouse);
+        self.note_selection_moved(before);
+        action
+    }
+
+    fn dispatch_mouse(&mut self, mouse: MouseEvent) -> AppAction {
         if self.has_dialog() {
             return self.handle_dialog_mouse(mouse);
         }

@@ -422,6 +422,9 @@ pub struct App {
     pub typing_direction: Direction,
     pub suggestions: Vec<Move>,
     pub selected_suggestion: usize,
+    /// While a simulation runs, keep the selection on the leader (row 1)
+    /// until the user moves it; then it follows the move they picked.
+    pub(super) follow_leader: bool,
     pub sort_mode: SortMode,
     pub message: Option<String>,
     /// How the message bar colors `message`.
@@ -555,6 +558,7 @@ impl App {
             typing_direction: Direction::Horizontal,
             suggestions: Vec::new(),
             selected_suggestion: 0,
+            follow_leader: false,
             sort_mode,
             message: Some("Loading dictionary...".to_string()),
             message_kind: MessageKind::Progress,
