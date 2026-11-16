@@ -192,10 +192,19 @@ impl Widget for RackStatsWidget<'_> {
         }
 
         // === Score line ===
-        if row < inner.y + inner.height && (self.our_score > 0 || self.opp_score > 0) {
+        // Always shown, so whose number is whose (and how to set them) is
+        // never a guess.
+        if row < inner.y + inner.height {
             let diff = self.our_score as i32 - self.opp_score as i32;
-            let score_text = format!("{}\u{2013}{}", self.our_score, self.opp_score);
-            let diff_text = if diff > 0 {
+            let score_text = format!("You {} \u{2013} Opp {}", self.our_score, self.opp_score);
+            let diff_text = if self.our_score == 0 && self.opp_score == 0 {
+                fit(
+                    (inner.width as usize).saturating_sub(score_text.chars().count()),
+                    "   + / = to set",
+                    "",
+                )
+                .to_string()
+            } else if diff > 0 {
                 format!("  (+{})", diff)
             } else if diff < 0 {
                 format!("  ({})", diff)
@@ -233,43 +242,75 @@ impl Widget for RackStatsWidget<'_> {
         // === Rack analysis ===
         if row < inner.y + inner.height {
             let stats = GameStats::compute(self.state);
+            let width = inner.width as usize;
 
-            let rack_text = if stats.rack_blanks > 0 {
-                format!(
-                    "{}V {}C {}? ({} pts)",
-                    stats.rack_vowels, stats.rack_consonants, stats.rack_blanks, stats.rack_value
-                )
-            } else if stats.rack_value > 0 {
-                format!(
-                    "{}V {}C ({} pts)",
-                    stats.rack_vowels, stats.rack_consonants, stats.rack_value
-                )
+            // With no rack yet, say how to enter one; the rest of the pane
+            // (bag, unseen tiles, the opponent) still applies.
+            if stats.rack_value == 0 && stats.rack_blanks == 0 {
+                let hint = fit(
+                    width,
+                    "Rack empty: Tab, then type (? = blank)",
+                    "Rack empty: type your tiles",
+                );
+                Self::render_text(
+                    buf,
+                    inner.x,
+                    row,
+                    max_x,
+                    hint,
+                    Style::new().fg(theme::current().text_dim),
+                );
             } else {
-                return;
-            };
-
-            let mut x = inner.x;
-            Self::render_text(
-                buf,
-                x,
-                row,
-                max_x,
-                &rack_text,
-                Style::new().fg(theme::current().text_primary),
-            );
-            x += rack_text.len() as u16;
-
-            if !stats.rack_duplicates.is_empty() {
-                let dupes: String = stats.rack_duplicates.iter().collect();
-                let dupe_text = format!("  dup: {}", dupes);
+                let mut parts = vec![
+                    plural(stats.rack_vowels, "vowel", "vowels"),
+                    plural(stats.rack_consonants, "consonant", "consonants"),
+                ];
+                if stats.rack_blanks > 0 {
+                    parts.push(plural(stats.rack_blanks, "blank", "blanks"));
+                }
+                parts.push(format!("{} pts", stats.rack_value));
+                let long = parts.join(" \u{00b7} ");
+                let short = format!(
+                    "{}V {}C{} \u{00b7} {} pts",
+                    stats.rack_vowels,
+                    stats.rack_consonants,
+                    if stats.rack_blanks > 0 {
+                        format!(" {}?", stats.rack_blanks)
+                    } else {
+                        String::new()
+                    },
+                    stats.rack_value
+                );
+                let rack_text = if long.chars().count() <= width {
+                    long
+                } else {
+                    short
+                };
+                let mut x = inner.x;
                 Self::render_text(
                     buf,
                     x,
                     row,
                     max_x,
-                    &dupe_text,
-                    Style::new().fg(theme::current().score_fg),
+                    &rack_text,
+                    Style::new().fg(theme::current().text_primary),
                 );
+                x += rack_text.chars().count() as u16;
+
+                if !stats.rack_duplicates.is_empty() {
+                    let dupes: String = stats.rack_duplicates.iter().collect();
+                    let dupe_text = format!(" \u{00b7} dup {}", dupes);
+                    if rack_text.chars().count() + dupe_text.chars().count() <= width {
+                        Self::render_text(
+                            buf,
+                            x,
+                            row,
+                            max_x,
+                            &dupe_text,
+                            Style::new().fg(theme::current().score_fg),
+                        );
+                    }
+                }
             }
             row += 1;
 
@@ -282,10 +323,11 @@ impl Widget for RackStatsWidget<'_> {
             if row < inner.y + inner.height {
                 let pc = theme::current().phase_color(&stats.game_phase);
 
-                let bag_text = format!("~{}", stats.estimated_bag);
-                let phase_label = format!(" [{}]", stats.game_phase.label());
-                let blank_text = format!("  ?:{}", stats.blanks_unseen);
-                let s_text = format!(" S:{}", stats.s_unseen);
+                let bag_text = format!("Bag ~{}", stats.estimated_bag);
+                let phase_label = format!(" \u{00b7} {}", stats.game_phase.label());
+                let unseen_label = " \u{00b7} unseen";
+                let blank_text = format!(" ?{}", stats.blanks_unseen);
+                let s_text = format!(" S{}", stats.s_unseen);
 
                 let mut x = inner.x;
                 Self::render_text(
@@ -296,9 +338,18 @@ impl Widget for RackStatsWidget<'_> {
                     &bag_text,
                     Style::new().fg(theme::current().text_primary),
                 );
-                x += bag_text.len() as u16;
+                x += bag_text.chars().count() as u16;
                 Self::render_text(buf, x, row, max_x, &phase_label, Style::new().fg(pc));
-                x += phase_label.len() as u16;
+                x += phase_label.chars().count() as u16;
+                Self::render_text(
+                    buf,
+                    x,
+                    row,
+                    max_x,
+                    unseen_label,
+                    Style::new().fg(theme::current().text_dim),
+                );
+                x += unseen_label.chars().count() as u16;
 
                 let blank_style = if stats.blanks_unseen > 0 {
                     Style::new().fg(Color::Cyan).bold()
@@ -306,7 +357,7 @@ impl Widget for RackStatsWidget<'_> {
                     Style::new().fg(theme::current().text_dim)
                 };
                 Self::render_text(buf, x, row, max_x, &blank_text, blank_style);
-                x += blank_text.len() as u16;
+                x += blank_text.chars().count() as u16;
 
                 let s_style = if stats.s_unseen > 0 {
                     Style::new().fg(Color::Green)
@@ -314,52 +365,91 @@ impl Widget for RackStatsWidget<'_> {
                     Style::new().fg(theme::current().text_dim)
                 };
                 Self::render_text(buf, x, row, max_x, &s_text, s_style);
-                x += s_text.len() as u16;
-
-                // Bag empty: show who plays the final move (Ctrl+E toggles);
-                // a trailing ? means the app is assuming, not inferring.
-                if stats.game_phase == GamePhase::Endgame {
-                    let mark = if self.final_turn_known { "" } else { "?" };
-                    let last_text = format!("  last:{}{}", self.final_turn.label(), mark);
-                    Self::render_text(buf, x, row, max_x, &last_text, Style::new().fg(pc).bold());
-                }
                 row += 1;
+
+                // Bag empty: who plays the final move (Ctrl+E toggles); an
+                // unconfirmed guess says so.
+                if stats.game_phase == GamePhase::Endgame && row < inner.y + inner.height {
+                    let who = match self.final_turn {
+                        FinalTurn::Us => "you",
+                        FinalTurn::Opponent => "opponent",
+                    };
+                    let long = if self.final_turn_known {
+                        format!("Final move: {who}  (^E to change)")
+                    } else {
+                        format!("Final move: {who}? (assumed, ^E to change)")
+                    };
+                    let short = format!(
+                        "Final: {}{}  ^E",
+                        who,
+                        if self.final_turn_known { "" } else { "?" }
+                    );
+                    let text = if long.chars().count() <= width {
+                        long
+                    } else {
+                        short
+                    };
+                    Self::render_text(buf, inner.x, row, max_x, &text, Style::new().fg(pc).bold());
+                    row += 1;
+                }
             }
 
-            // === Power tiles (Q, Z, J, X) ===
+            // === Power tiles (Q, Z, J, X), grouped by where they are ===
             if row < inner.y + inner.height {
-                let mut x = inner.x;
-                for letter in ['Q', 'Z', 'J', 'X'] {
-                    if let Some(loc) = stats.power_tiles.get(&letter) {
-                        let (text, style) = match loc {
-                            crate::stats::TileLocation::InBag(n) if *n > 0 => (
-                                format!("{}:{}", letter, n),
-                                Style::new().fg(theme::current().text_primary),
-                            ),
-                            crate::stats::TileLocation::OnBoard => (
-                                format!("{}:B", letter),
-                                Style::new().fg(theme::current().text_dim),
-                            ),
-                            crate::stats::TileLocation::InRack => (
-                                format!("{}:R", letter),
-                                Style::new().fg(theme::current().phase_endgame).bold(),
-                            ),
-                            crate::stats::TileLocation::BoardAndRack => (
-                                format!("{}:BR", letter),
-                                Style::new().fg(theme::current().score_fg),
-                            ),
-                            crate::stats::TileLocation::Split => (
-                                format!("{}:?", letter),
-                                Style::new().fg(theme::current().score_fg),
-                            ),
-                            _ => (
-                                format!("{}:-", letter),
-                                Style::new().fg(theme::current().text_dim),
-                            ),
-                        };
-                        Self::render_text(buf, x, row, max_x, &text, style);
-                        x += text.len() as u16 + 1;
+                let t = theme::current();
+                let groups: [(&str, Style, Vec<char>); 4] = {
+                    let mut unseen = Vec::new();
+                    let mut yours = Vec::new();
+                    let mut mixed = Vec::new();
+                    let mut played = Vec::new();
+                    for letter in ['Q', 'Z', 'J', 'X'] {
+                        match stats.power_tiles.get(&letter) {
+                            Some(crate::stats::TileLocation::InBag(n)) if *n > 0 => {
+                                unseen.push(letter)
+                            }
+                            Some(crate::stats::TileLocation::InRack) => yours.push(letter),
+                            Some(
+                                crate::stats::TileLocation::BoardAndRack
+                                | crate::stats::TileLocation::Split,
+                            ) => mixed.push(letter),
+                            Some(_) => played.push(letter),
+                            None => {}
+                        }
                     }
+                    [
+                        ("unseen", Style::new().fg(t.text_primary), unseen),
+                        ("yours", Style::new().fg(t.phase_endgame).bold(), yours),
+                        ("split", Style::new().fg(t.score_fg), mixed),
+                        ("played", Style::new().fg(t.text_dim), played),
+                    ]
+                };
+                let segments: Vec<(String, Style)> = groups
+                    .iter()
+                    .filter(|(_, _, letters)| !letters.is_empty())
+                    .map(|(what, style, letters)| {
+                        let letters: Vec<String> = letters.iter().map(|c| c.to_string()).collect();
+                        (format!("{} {}", letters.join(" "), what), *style)
+                    })
+                    .collect();
+                let sep = " \u{00b7} ";
+                let body_width: usize = segments
+                    .iter()
+                    .map(|(text, _)| text.chars().count())
+                    .sum::<usize>()
+                    + sep.chars().count() * segments.len().saturating_sub(1);
+                let label = "Power tiles: ";
+                let mut x = inner.x;
+                if label.chars().count() + body_width <= width {
+                    Self::render_text(buf, x, row, max_x, label, Style::new().fg(t.text_dim));
+                    x += label.chars().count() as u16;
+                }
+                for (i, (text, style)) in segments.iter().enumerate() {
+                    if i > 0 {
+                        Self::render_text(buf, x, row, max_x, sep, Style::new().fg(t.text_dim));
+                        x += sep.chars().count() as u16;
+                    }
+                    Self::render_text(buf, x, row, max_x, text, *style);
+                    x += text.chars().count() as u16;
                 }
                 row += 1;
             }
@@ -495,7 +585,7 @@ impl Widget for RackStatsWidget<'_> {
             // === Measured opponent strength ===
             if let Some((mean_loss, moves)) = self.opp_skill {
                 if row < inner.y + inner.height {
-                    let text = format!("Opp err: {:.1} pts/move ({} measured)", mean_loss, moves);
+                    let text = format!("Opp error: {:.1} pts/move ({} measured)", mean_loss, moves);
                     Self::render_text(
                         buf,
                         inner.x,
@@ -508,18 +598,31 @@ impl Widget for RackStatsWidget<'_> {
                 }
             }
 
-            // === Separator before unseen grid ===
+            // === Unseen letter grid, under a heading with the total ===
+            let unseen = self.state.unseen_tiles();
             if row < inner.y + inner.height {
+                let total: u32 = unseen.values().sum();
                 Self::render_separator(buf, inner.x, row, inner.width);
+                Self::render_text(
+                    buf,
+                    inner.x + 2,
+                    row,
+                    max_x,
+                    &format!(" Unseen tiles: {total} "),
+                    Style::new().fg(theme::current().text_dim),
+                );
                 row += 1;
             }
-
-            // === Unseen letter grid ===
-            let unseen = self.state.unseen_tiles();
             let letters: Vec<char> = ('A'..='Z')
                 .filter(|c| unseen.get(c).copied().unwrap_or(0) > 0)
                 .collect();
-            let col_width = 4u16;
+            // Wide enough for "E:12" plus a space when any count has two digits.
+            let widest = letters
+                .iter()
+                .map(|c| unseen.get(c).copied().unwrap_or(0).to_string().len())
+                .max()
+                .unwrap_or(1) as u16;
+            let col_width = 3 + widest;
             let cols = (inner.width / col_width).max(1) as usize;
 
             let mut col = 0usize;
@@ -618,4 +721,18 @@ pub fn render_rack_stats(
     )
     .with_inference_note(inference_note);
     frame.render_widget(widget, area);
+}
+
+/// `long` when it fits in `width` columns, otherwise `short`.
+fn fit<'s>(width: usize, long: &'s str, short: &'s str) -> &'s str {
+    if long.chars().count() <= width {
+        long
+    } else {
+        short
+    }
+}
+
+/// "1 vowel", "3 vowels".
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
