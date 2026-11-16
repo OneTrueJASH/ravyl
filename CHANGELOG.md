@@ -7,6 +7,8 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- Two-digit counts in the unseen-tile grid ran into the next letter
+  (`E:12F:2`).
 - The word list now matches Crossplay's: the 182 words Crossplay removes
   from the tournament list (almost all trademarks, such as BRILLO, VELCRO
   and TASER) are gone from `data/words.fst`, `AMERICAN.kwg` and
@@ -60,6 +62,27 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   cargo-deny; a release workflow (dist) that runs only by hand.
 
 ### Changed
+- Works on an 80×24 terminal: from 80 columns a mini board keeps a
+  compact sidebar beside it (rack, score and bag, the sort row and the
+  move list). Before, only the board was drawn and Tab focused panes that
+  were not on screen. Between 80 and 111 columns this also replaces the
+  stacked layout, whose list had four rows at 100×30.
+- The stats pane labels every line (`You 42 – Opp 57`, `3 vowels ·
+  3 consonants · 1 blank · 6 pts`, `Bag ~77 · Early · unseen ?1 S4`,
+  `Final move: opponent? (assumed, ^E to change)`, power tiles grouped
+  by where they are, the unseen grid under a heading with its total), is
+  as tall as its content so the list gets the rest, and no longer goes
+  blank while the rack is empty.
+- During a simulation the selection stays on the leader until you move
+  it, instead of following an early leader down the list.
+- The sorted column is marked in the table header and the sort row is
+  labelled; a candidate dropped from the race reads `out @n` (was
+  `stopped @n`), and the title says `· simulated` (was `*`).
+- Help (F1) explains the table columns and the stats pane, and scrolls
+  at every size with a hint while there is more below.
+- With no moves yet, the list says how to start; the hint bar always
+  keeps F1 Help; dialogs fit their text (the quit prompt's Esc hint, the
+  score prompt, and confirmations naming a long game).
 - Licensed under GPL-3.0-or-later (was MIT), since the binary links
   GPL-3.0 RefEngine; copyright holder corrected to OneTrueJASH.
 - `--data-dir` now takes precedence over `$CPSOLVER_DATA_DIR`.
