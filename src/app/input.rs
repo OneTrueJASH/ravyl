@@ -411,7 +411,7 @@ impl App {
             DialogState::None => {}
 
             DialogState::Help => {
-                let max = crate::ui::help_popup::HelpPopup::line_count();
+                let max = self.help_max_scroll.get();
                 match key.code {
                     KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('q') => self.close_dialog(),
                     KeyCode::Up | KeyCode::Char('k') => {

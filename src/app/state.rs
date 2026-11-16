@@ -445,6 +445,8 @@ pub struct App {
     pub pending_clipboard: Option<String>,
     /// First line shown of the one-column help.
     pub help_scroll: u16,
+    /// How far the help can scroll at the current size (set while drawing).
+    pub help_max_scroll: Cell<u16>,
     /// Evaluation results for the current suggestions (playouts or endgame).
     pub sim_results: Option<Vec<SimResult>>,
     pub(super) sim_job: Option<SimJob>,
@@ -570,6 +572,7 @@ impl App {
             list_height: Cell::new(10),
             pending_clipboard: None,
             help_scroll: 0,
+            help_max_scroll: Cell::new(0),
             sim_results: None,
             sim_job: None,
             sim_cache: Arc::new(Mutex::new(SimCache::default())),

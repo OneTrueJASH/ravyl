@@ -142,7 +142,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
         DialogState::Help => {
             let popup_area = crate::ui::help_popup::HelpPopup::area(size);
             frame.render_widget(
-                crate::ui::help_popup::HelpPopup::new(app.help_scroll),
+                crate::ui::help_popup::HelpPopup::new(app.help_scroll, &app.help_max_scroll),
                 popup_area,
             );
         }
