@@ -82,6 +82,15 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- RefEngine is out of the repository: its source submodule, the build
+  script, the C bindings, the `refengine` feature and its unused data files
+  (lexicon, layouts, letter distribution) are gone, so cloning needs no
+  submodule and building no C compiler. Its answers on the reference
+  positions (move generation on 32 positions, static equity, rack
+  inference) are recorded as fixtures, and the engine is still checked
+  against them. Only its leave table (`AMERICAN.klv2`) remains, as data.
+- The engine's integration, property and RefEngine-reference tests and its
+  fuzz targets moved into `crates/ravyn` with the benchmarks.
 - Exact pre-endgame with one tile in the bag: M solves every play against
   each tile that could be the last one (the opponent's best turn, then
   our best final play, with perfect information), giving each play's

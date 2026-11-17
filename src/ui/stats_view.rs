@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, Padding, Widget};
 
 use crate::endgame::FinalTurn;
 use crate::game::SolverState;
-use crate::refengine_mcts::InferenceResult;
+use crate::inference::RackInference as InferenceResult;
 use crate::stats::{GamePhase, GameStats};
 use crate::tile::Rack;
 use crate::ui::hit::{register_hit, HitTarget};

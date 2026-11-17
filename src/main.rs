@@ -326,7 +326,7 @@ fn run_tui(
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    // A frame before the rest of startup (RefEngine, the saved games), so
+    // A frame before the rest of startup (the saved games), so
     // the terminal never sits blank.
     terminal.draw(|f| {
         let area = f.area();

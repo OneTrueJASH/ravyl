@@ -124,7 +124,7 @@ impl App {
 
     /// Poll background channels and incorporate results. Returns true if new results arrived.
     pub fn poll_mcts(&mut self) -> bool {
-        // Opponent-rack inference (RefEngine) finishes independently of ranking.
+        // Opponent-rack inference finishes independently of ranking.
         // A result is only kept if the opponent has not moved again since it
         // was started: a late result describes a rack they no longer hold.
         let mut changed = false;
@@ -269,7 +269,7 @@ impl App {
 
         // Auto-score the opponent's move if new tiles appeared since our last play.
         // Save the opponent tiles and pre-opponent board BEFORE updating the
-        // snapshot, so RefEngine inference can still detect them later.
+        // snapshot, so inference can still detect them later.
         self.pending_opponent_tiles = self.detect_opponent_tiles();
         self.pre_opponent_board = self.last_applied_board.clone();
 
@@ -381,8 +381,9 @@ impl App {
     }
 
     /// Launch the evaluation for the current position on a background
-    /// thread. Every phase is judged under Crossplay rules by the native
-    /// engines; RefEngine only infers the opponent's likely rack.
+    /// thread. Every phase is judged under Crossplay rules: the endgame and
+    /// pre-endgame solvers when the bag is empty or holds one tile, the
+    /// simulation otherwise.
     pub fn run_mcts_evaluation(&mut self) {
         // A new request replaces a running evaluation.
         self.cancel_evaluation();

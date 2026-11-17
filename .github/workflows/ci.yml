@@ -31,7 +31,6 @@ jobs:
       # runs do not spend the repository's LFS bandwidth.
       - uses: actions/checkout@v5
         with:
-          submodules: true
           lfs: false
       - name: List LFS objects
         run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
@@ -45,26 +44,22 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy (all features)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: cargo test --release --all-features
+        run: cargo test --release
 
-  no-refengine:
-    name: Build without RefEngine
+  no-lfs:
+    name: Without LFS data
     runs-on: ubuntu-latest
     steps:
-      # No submodule and no LFS objects: the pure-Rust build must not need
-      # them, and data-dependent tests must skip cleanly on pointer stubs.
+      # No LFS objects: the build must not need them, and data-dependent
+      # tests must skip cleanly on pointer stubs.
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy (no default features)
-        run: cargo clippy --all-targets --no-default-features -- -D warnings
-      - name: Test (no default features, LFS stubs)
-        run: cargo test --release --no-default-features
+      - name: Test (LFS stubs)
+        run: cargo test --release
 
   deny:
     name: Licenses and advisories
@@ -80,8 +75,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: true
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --locked --all-targets --all-features
+      - run: cargo check --locked --all-targets

@@ -271,8 +271,6 @@ mod tests {
             .collect()
     }
 
-    /// Callers hold the RefEngine test lock while the App lives (it may start
-    /// RefEngine inference in the background).
     fn sample_app() -> Option<App> {
         let mut app = App::with_settings(crate::settings::Settings::default());
         let dict = crate::datafiles::test_data::dictionary()?;
@@ -299,7 +297,7 @@ mod tests {
     /// picks a geometry that fits instead of clipping its bottom rows.
     #[test]
     fn board_fits_common_terminal_sizes() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let Some(app) = sample_app() else {
             return;
         };
@@ -375,7 +373,7 @@ mod tests {
     /// on screen; a click outside cancels; nothing reaches the panes below.
     #[test]
     fn dialog_buttons_take_clicks() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let mut app = App::with_settings(crate::settings::Settings::default());
         let (w, h) = (120, 40);
 
@@ -411,7 +409,7 @@ mod tests {
     /// column header sorts by it.
     #[test]
     fn simulation_columns_and_header_sorting() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let Some(mut app) = sample_app() else {
             return;
         };
@@ -453,7 +451,7 @@ mod tests {
     /// Escape-menu options are clickable rows.
     #[test]
     fn menu_options_take_clicks() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let mut app = App::with_settings(crate::settings::Settings::default());
         app.dialog = DialogState::EscapeMenu(crate::ui::menu_popup::EscapeMenuOption::Cancel);
         let lines = render_at(&app, 100, 30);
@@ -474,7 +472,7 @@ mod tests {
     fn game_picker_renders_and_takes_clicks() {
         use crate::games::{self, OppLosses, SavedGame};
         use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let dir = games::test_dir("ui-picker");
         for (name, updated) in [("Alice", 30), ("Bob", 20)] {
             let game = SavedGame {
@@ -536,7 +534,7 @@ mod tests {
     /// checkout without LFS data skips them.
     #[test]
     fn draw_ui_snapshots() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         if crate::datafiles::test_data::file(crate::datafiles::LEAVES_KLV2).is_none() {
             return;
         }
@@ -558,7 +556,7 @@ mod tests {
     /// under the board; a tiny one says how big it needs to be.
     #[test]
     fn narrow_and_tiny_terminals() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let Some(app) = sample_app() else {
             return;
         };
@@ -574,7 +572,7 @@ mod tests {
     /// The help is two columns when wide and scrolls when narrow.
     #[test]
     fn help_layout() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let mut app = App::with_settings(crate::settings::Settings::default());
         app.dialog = DialogState::Help;
         let wide = render_at(&app, 140, 50);
@@ -596,7 +594,7 @@ mod tests {
     #[test]
     fn wheel_scrolls_the_pane_under_the_pointer() {
         use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let Some(mut app) = sample_app() else {
             return;
         };
@@ -637,7 +635,7 @@ mod tests {
     #[test]
     #[ignore]
     fn ui_snapshots() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let Some(mut app) = sample_app() else {
             return;
         };
@@ -666,7 +664,7 @@ mod render_bench {
     #[test]
     #[ignore]
     fn bench_render() {
-        let _lock = crate::datafiles::test_data::refengine_lock();
+        let _lock = crate::datafiles::test_data::app_lock();
         let mut app = App::with_settings(crate::settings::Settings::default());
         let Some(dict) = crate::datafiles::test_data::dictionary() else {
             return;

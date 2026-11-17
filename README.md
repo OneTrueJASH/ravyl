@@ -10,7 +10,7 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 - **Anchor-based move generation** with cross-word validation and FST-backed dictionary lookup
 - **Simulates every candidate**: every legal play, every distinct exchange and passing are played out under Crossplay rules, with an anytime scheduler (every candidate gets a playout floor, then the contenders race) that streams results into the table live. For each candidate the table shows playouts, mean final spread ± standard error, win% ± standard error, the paired difference to the best candidate, bingo rates and a status (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
 - **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
-- **Move generation checked against RefEngine** play for play, with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
+- **Move generation checked against RefEngine** play for play (its answers on 32 reference positions are kept as test fixtures), with leave values from RefEngine's fitted leave table corrected for the 40-point bingo
 - **Opponent modeling**: rack inference (what the opponent probably kept, given their play; checked against RefEngine's) biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
 - **Mouse support** with clickable board squares, suggestions (double-click applies), dialog buttons and menu options
 - **Fluid layout** that adapts to any terminal size: board and sidebar side by side; from 80 columns (the classic 80×24 included) a mini board with a compact sidebar of rack, score and the move list; a stacked board, one-line rack and short list on narrower but tall terminals; and a clear message below the minimum size (50×22)
@@ -40,19 +40,18 @@ With more tiles in the bag the app plays each candidate out many times under the
 ### Prerequisites
 
 - Rust 1.88+
-- Git LFS: the lexicon files in `external/refengine/data/lexica/` (the leave table among them) are stored in LFS
+- Git LFS: the leave table `external/refengine/data/lexica/AMERICAN.klv2` is stored in LFS
 - FST dictionary file at `data/words.fst`
-- Only for the optional `refengine` feature: a C compiler and the RefEngine source submodule in `external/refengine-src/`
 
 ```bash
-git clone --recurse-submodules https://github.com/OneTrueJASH/cpsolver2
+git clone https://github.com/OneTrueJASH/cpsolver2
 cd cpsolver2
-git lfs install && git lfs pull   # if the lexicon files are ~130-byte pointer stubs
+git lfs install && git lfs pull   # if the leave table is a ~130-byte pointer stub
 ```
 
-`AMERICAN.klv2` also supplies the leave values; a per-letter heuristic is used if it is missing or still an LFS pointer.
+`AMERICAN.klv2` supplies the leave values; a per-letter heuristic is used if it is missing or still an LFS pointer.
 
-The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst`, `AMERICAN.kwg` and `AMERICAN.wmp` are built without them; `AMERICAN.klv2` holds leave values only and is unchanged.
+The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst` is built without them; `AMERICAN.klv2` holds leave values only and is unchanged.
 
 ### Build and run
 
@@ -61,7 +60,7 @@ cargo build --release
 cargo run --release
 ```
 
-RefEngine is linked statically, so the binary has no runtime library dependency. It needs the data files at run time and looks for a directory holding `data/words.fst` and `external/refengine/data/` in this order:
+The binary is pure Rust with no runtime library dependency. It needs the data files at run time and looks for a directory holding `data/words.fst` and `external/refengine/data/` in this order:
 
 1. `--data-dir <DIR>`
 2. `$CPSOLVER_DATA_DIR`
@@ -91,14 +90,6 @@ cargo run --release --example selfplay -- <phase|pass|sim|same> [pairs] [seed]
 ```
 
 Plays two engine variants against each other over paired, fixed-seed games (each seed twice, with the racks swapped) and reports engine A's score and mean spread with 95% confidence intervals.
-
-### Building with RefEngine
-
-The app is pure Rust. The `refengine` cargo feature (off by default) compiles the vendored RefEngine C engine as a reference for tests, which check the move generator and rack inference against it:
-
-```bash
-cargo test --release --features refengine
-```
 
 ## Usage
 
@@ -221,6 +212,6 @@ Copyright (C) 2026 OneTrueJASH.
 
 cpsolver2 is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
 
-It vendors RefEngine (GPL-3.0) in `external/refengine-src` and links it in test builds with the `refengine` feature; see [`external/refengine/NOTICE`](external/refengine/NOTICE) for the RefEngine data files and the ones modified for Crossplay. Anyone you give a binary to is entitled to the matching source.
+The leave table it reads (`external/refengine/data/lexica/AMERICAN.klv2`) is a data file from RefEngine (GPL-3.0); see [`external/refengine/NOTICE`](external/refengine/NOTICE). No RefEngine code is part of the repository. Anyone you give a binary to is entitled to the matching source.
 
-The engine in `crates/ravyn` (RAVYN) is separately licensed under the [MIT License](crates/ravyn/LICENSE). It does not use RefEngine.
+The engine in `crates/ravyn` (RAVYN) is separately licensed under the [MIT License](crates/ravyn/LICENSE).

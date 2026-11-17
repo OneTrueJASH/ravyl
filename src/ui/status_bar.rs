@@ -1,6 +1,6 @@
 //! Unified status bar: title + message + context-sensitive hints.
 //!
-//! Line 1 (top/title_bar): App title + RefEngine status.
+//! Line 1 (top/title_bar): App title and the open game.
 //! Line 2 (bottom/status_bar): Context-sensitive keyboard hints.
 
 use ratatui::layout::Rect;

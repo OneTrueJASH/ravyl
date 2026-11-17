@@ -9,11 +9,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::SortMode;
 
-/// The lexicon used by Crossplay (fixed, not user-configurable).
-/// RefEngine picks the letter distribution from the lexicon name's prefix and
-/// rejects names it does not know; `America…` maps to English.
-pub const LEXICON: &str = "AMERICAN";
-
 /// Display preferences. Missing keys take their defaults, so a file
 /// written by an older version still loads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,10 +258,5 @@ mod tests {
         let leftovers = fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(leftovers, 1);
         let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn test_lexicon_constant() {
-        assert_eq!(LEXICON, "AMERICAN");
     }
 }

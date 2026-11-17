@@ -234,7 +234,7 @@ impl App {
         self.sim_progress = None;
         // Intentionally preserve inferred_opponent_rack: inference results
         // are expensive to compute and should persist until replaced by new
-        // inference from the next RefEngine simulation.
+        // inference after the opponent's next move.
     }
 
     /// Apply the currently selected suggestion to the board.

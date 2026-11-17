@@ -10,13 +10,6 @@ categories = ["command-line-utilities", "games"]
 rust-version = "1.88"
 publish = false
 
-[features]
-default = []
-# The RefEngine C engine, compiled from external/refengine-src, as a reference
-# for tests: its move generator and rack inference are checked against the
-# engine's. The app itself does not use it.
-refengine = ["dep:cc"]
-
 [workspace]
 members = ["crates/ravyn"]
 # Plain `cargo build/test/clippy` at the root cover the engine too.
@@ -42,10 +35,7 @@ signal-hook = "0.3"
 
 [dev-dependencies]
 insta = "1"
-proptest = "1"
 
-[build-dependencies]
-cc = { version = "1.2", optional = true }
 
 [profile.release]
 lto = "fat"

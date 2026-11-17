@@ -1,22 +1,18 @@
-//! Locating the data files (dictionary FST, RefEngine lexica) and telling a
-//! real file from a Git LFS pointer stub.
+//! Locating the data files (dictionary FST and the leave table, a RefEngine
+//! data file) and telling a real file from a Git LFS pointer stub.
 //!
-//! The `external/refengine/data/lexica/AMERICAN.*` files are stored in Git LFS.
-//! A checkout without `git lfs pull` leaves ~130-byte text pointers in
-//! their place; handing one of those to RefEngine or the leave parser fails
-//! with an unhelpful error, so callers check here first.
+//! The leave table (`external/refengine/data/lexica/AMERICAN.klv2`) is stored
+//! in Git LFS. A checkout without `git lfs pull` leaves a ~130-byte text
+//! pointer in its place; handing that to the leave parser fails with an
+//! unhelpful error, so callers check here first.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Relative location of the dictionary FST under a data root.
 pub const WORDS_FST: &str = "data/words.fst";
-/// Relative location of RefEngine's data directory under a data root.
-pub const REF_ENGINE_DATA: &str = "external/refengine/data";
 /// Relative location of the leave table under a data root.
 pub const LEAVES_KLV2: &str = "external/refengine/data/lexica/AMERICAN.klv2";
-/// Relative location of RefEngine's lexicon under a data root.
-pub const LEXICON_KWG: &str = "external/refengine/data/lexica/AMERICAN.kwg";
 
 /// Hint shown whenever an LFS pointer stub is found instead of data.
 pub const LFS_HINT: &str = "run `git lfs install && git lfs pull`";
@@ -123,33 +119,11 @@ pub fn find_data_file(relative: &str) -> Option<PathBuf> {
         .find(|p| file_status(p) == FileStatus::Present)
 }
 
-/// RefEngine's data directory, if one with a usable lexicon exists. On failure
-/// the error says why (missing, or LFS pointer stubs).
-pub fn refengine_data_dir() -> Result<PathBuf, String> {
-    let mut saw_pointer = false;
-    for root in data_roots() {
-        let kwg = root.join(LEXICON_KWG);
-        match file_status(&kwg) {
-            FileStatus::Present => return Ok(root.join(REF_ENGINE_DATA)),
-            FileStatus::LfsPointer => saw_pointer = true,
-            FileStatus::Missing => {}
-        }
-    }
-    if saw_pointer {
-        Err(format!(
-            "RefEngine lexicon files are Git LFS pointers; {}",
-            LFS_HINT
-        ))
-    } else {
-        Err(format!("RefEngine lexicon not found ({})", LEXICON_KWG))
-    }
-}
-
-/// A user-facing warning when the RefEngine lexicon files are Git LFS pointer
-/// stubs (so neither the leave table nor inference can be used), or `None`
-/// when real files are present or nothing is there at all.
+/// A user-facing warning when the leave table is a Git LFS pointer stub
+/// (so leave values fall back to the heuristic), or `None` when the real
+/// file is present or nothing is there at all.
 pub fn lfs_warning() -> Option<String> {
-    let stubbed = [LEXICON_KWG, LEAVES_KLV2].iter().any(|rel| {
+    let stubbed = [LEAVES_KLV2].iter().any(|rel| {
         find_data_file(rel).is_none()
             && data_roots()
                 .iter()
@@ -157,7 +131,7 @@ pub fn lfs_warning() -> Option<String> {
     });
     stubbed.then(|| {
         format!(
-            "Lexicon data files are Git LFS pointers (no leave table or inference): {}",
+            "The leave table is a Git LFS pointer (heuristic leave values): {}",
             LFS_HINT
         )
     })
@@ -172,14 +146,14 @@ pub(crate) mod test_data {
     use crate::dictionary::Dictionary;
     use std::sync::{Mutex, MutexGuard};
 
-    /// RefEngine's C library has global state that is not thread-safe, and an
-    /// `App` may start RefEngine inference in the background. Tests that create
-    /// a RefEngine handle or an `App` hold this lock while it lives.
-    static REF_ENGINE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    /// App tests that start background evaluations (simulations with a
+    /// time budget, inference, exact solvers) hold this lock, so they run
+    /// one at a time: run together, they starve each other's time budgets.
+    static APP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    /// Take the RefEngine test lock, ignoring poisoning from a failed test.
-    pub fn refengine_lock() -> MutexGuard<'static, ()> {
-        REF_ENGINE_TEST_LOCK
+    /// Take the app test lock, ignoring poisoning from a failed test.
+    pub fn app_lock() -> MutexGuard<'static, ()> {
+        APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -219,14 +193,6 @@ pub(crate) mod test_data {
                 None
             }
         }
-    }
-
-    /// RefEngine's data directory as a string, when the lexicon is real data.
-    #[cfg_attr(not(feature = "refengine"), allow(dead_code))]
-    pub fn refengine_data() -> Option<String> {
-        file(LEXICON_KWG)?;
-        file(LEAVES_KLV2)?;
-        Some(root().join(REF_ENGINE_DATA).to_string_lossy().into_owned())
     }
 }
 

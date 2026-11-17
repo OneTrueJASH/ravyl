@@ -12,8 +12,8 @@ use crate::board::{Board, Direction};
 use crate::dictionary::Dictionary;
 use crate::endgame::FinalTurn;
 use crate::game::SolverState;
+use crate::inference::RackInference as InferenceResult;
 use crate::logging::log;
-use crate::refengine_mcts::InferenceResult;
 use crate::settings::Settings;
 use crate::sim::{ArmStatus, ArmSummary, SimSnapshot, SimState};
 use crate::solver::Move;
@@ -485,7 +485,7 @@ pub struct App {
     pub inferred_opponent_rack: Option<InferenceResult>,
     pub(super) last_applied_board: Option<Board>,
     /// Opponent tiles detected during auto-scoring in find_moves(), saved for
-    /// RefEngine inference which runs after the board snapshot is updated.
+    /// inference, which runs after the board snapshot is updated.
     pub(super) pending_opponent_tiles: Option<String>,
     /// Board state before the opponent played, saved alongside pending_opponent_tiles.
     pub(super) pre_opponent_board: Option<Board>,

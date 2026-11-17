@@ -3,7 +3,7 @@ use super::*;
 use crate::board::{Direction, BOARD_SIZE};
 use crate::endgame::FinalTurn;
 use crate::game::SolverState;
-use crate::refengine_mcts::InferenceResult;
+use crate::inference::RackInference as InferenceResult;
 use crate::settings::Settings;
 use crate::sim::{ArmStatus, ArmSummary, SimSnapshot};
 use crate::solver::Move;
@@ -16,9 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Build an App without touching the user's settings file. Callers
-/// must hold `RefEngine test lock for as long as the App may use RefEngine
-/// (construction and any inference it starts).
+/// Build an App without touching the user's settings file.
 fn test_app() -> App {
     let mut settings = Settings::default();
     // Keep simulations short in tests.
@@ -116,7 +114,7 @@ fn fake_move(tiles: usize) -> Move {
 
 #[test]
 fn final_turn_inferred_from_applied_move() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(dict) = crate::datafiles::test_data::dictionary() else {
         return;
     };
@@ -154,7 +152,7 @@ fn final_turn_inferred_from_applied_move() {
 /// the auto-score rolls the measurement back too.
 #[test]
 fn opponent_moves_are_measured_and_undone() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(dict) = crate::datafiles::test_data::dictionary() else {
         return;
     };
@@ -209,7 +207,7 @@ fn opponent_moves_are_measured_and_undone() {
 /// the next evaluation would pick up a stale result.
 #[test]
 fn inference_is_polled_after_ranking() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(dict) = crate::datafiles::test_data::dictionary() else {
         return;
     };
@@ -238,7 +236,7 @@ fn inference_is_polled_after_ranking() {
 
 #[test]
 fn our_move_ends_game_depends_on_final_turn() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     app.state = state_with(90, 3);
     assert_eq!(app.state.unseen_tile_count(), 7);
@@ -299,7 +297,7 @@ fn finish_evaluation(app: &mut App) {
 /// position.
 #[test]
 fn edits_cancel_a_running_evaluation() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -322,7 +320,7 @@ fn edits_cancel_a_running_evaluation() {
 /// A result stamped for an older position is dropped on receipt.
 #[test]
 fn stale_results_are_dropped() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     app.suggestions = vec![fake_move(2)];
     let before = app.suggestions.clone();
@@ -347,7 +345,7 @@ fn stale_results_are_dropped() {
 /// solve still scores their move.
 #[test]
 fn opponent_tiles_typed_during_evaluation_are_scored() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -393,7 +391,7 @@ fn opponent_tiles_typed_during_evaluation_are_scored() {
 /// M while an evaluation runs restarts it instead of being ignored.
 #[test]
 fn rerunning_restarts_the_evaluation() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -411,7 +409,7 @@ fn rerunning_restarts_the_evaluation() {
 /// every simulated one, whatever their placeholder values say.
 #[test]
 fn unsimulated_candidates_sort_last() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     let mut moves: Vec<Move> = (1..=3).map(fake_move).collect();
     for (i, m) in moves.iter_mut().enumerate() {
@@ -450,7 +448,7 @@ fn unsimulated_candidates_sort_last() {
 /// same row within the double-click window applies it.
 #[test]
 fn applying_from_the_list_needs_a_real_double_click() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     app.suggestions = vec![fake_move(2), fake_move(3)];
     app.focus = Focus::Suggestions;
@@ -476,7 +474,7 @@ fn applying_from_the_list_needs_a_real_double_click() {
 /// takes focus back to the board.
 #[test]
 fn focus_skips_hidden_panes() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     app.terminal_size = Some((200, 50));
     assert!(app.sidebar_visible);
@@ -512,7 +510,7 @@ fn focus_skips_hidden_panes() {
 /// stored rack inference no longer applies and is cleared.
 #[test]
 fn opponent_pass_or_exchange_clears_inference() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -547,7 +545,7 @@ fn opponent_pass_or_exchange_clears_inference() {
 /// taking the app down.
 #[test]
 fn panicking_worker_reports_failure() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     let (job, tx, _live) = fake_sim_job(&app, vec![fake_move(2)]);
     app.sim_job = Some(job);
@@ -569,7 +567,7 @@ fn panicking_worker_reports_failure() {
 /// stays on the same move.
 #[test]
 fn live_snapshots_update_and_resort_the_table() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     let mut moves: Vec<Move> = (1..=3).map(fake_move).collect();
     for (i, m) in moves.iter_mut().enumerate() {
@@ -625,7 +623,7 @@ fn live_snapshots_update_and_resort_the_table() {
 /// instead of following an early leader down the list.
 #[test]
 fn live_snapshots_keep_the_selection_on_the_leader_until_the_user_moves_it() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     let mut moves: Vec<Move> = (1..=3).map(fake_move).collect();
     for (i, m) in moves.iter_mut().enumerate() {
@@ -671,7 +669,7 @@ fn live_snapshots_keep_the_selection_on_the_leader_until_the_user_moves_it() {
 /// state instead of starting over.
 #[test]
 fn esc_stops_and_m_resumes_the_simulation() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -738,7 +736,7 @@ fn shift(c: char) -> KeyEvent {
 /// and the cursor stops at the edge.
 #[test]
 fn board_typing_skips_tiles_and_places_blanks() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let mut app = test_app();
     app.state = SolverState::from_cgp("15/15/15/15/15/15/15/3BeECH7/15/15/15/15/15/15/15").unwrap();
     app.focus = Focus::Board;
@@ -782,7 +780,7 @@ fn board_typing_skips_tiles_and_places_blanks() {
 /// ignored, and score entry opens from any pane.
 #[test]
 fn keymap_consistency() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -826,7 +824,7 @@ fn keymap_consistency() {
 /// menu; Ctrl+C asks before quitting and a second Ctrl+C confirms.
 #[test]
 fn escape_order_and_quit_confirmation() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -851,7 +849,7 @@ fn escape_order_and_quit_confirmation() {
 /// List navigation: paging, Home/End, j/k, digits, and the filter.
 #[test]
 fn suggestion_list_navigation_and_filter() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -914,7 +912,7 @@ fn suggestion_list_navigation_and_filter() {
 /// rack can be undone; a new change drops the redo history.
 #[test]
 fn undo_redo_reset_and_rack_clear() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -958,7 +956,7 @@ fn undo_redo_reset_and_rack_clear() {
 /// replacement tiles.
 #[test]
 fn exchange_focuses_the_rack() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -976,7 +974,7 @@ fn exchange_focuses_the_rack() {
 /// `:` then a square and a word previews the play and places it.
 #[test]
 fn quick_entry_validates_previews_and_places() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(dict) = crate::datafiles::test_data::dictionary() else {
         return;
     };
@@ -1025,7 +1023,7 @@ fn quick_entry_validates_previews_and_places() {
 /// CGP loads it (undoably); the session text round-trips.
 #[test]
 fn clipboard_paste_and_session_round_trip() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -1114,7 +1112,7 @@ fn files_in(dir: &std::path::Path) -> Vec<String> {
 /// opponent measurement; the lock goes away on exit.
 #[test]
 fn saved_game_round_trip_with_automatic_name() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-roundtrip");
     let mut app = games_app(&dir);
     assert!(!app.autosave(), "nothing entered yet");
@@ -1165,7 +1163,7 @@ fn saved_game_round_trip_with_automatic_name() {
 /// is gone is taken over.
 #[test]
 fn a_game_opens_in_one_window_only() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-lock");
     let mut first = games_app(&dir);
     first.start_session(Some("Alice")).unwrap();
@@ -1212,7 +1210,7 @@ fn a_game_opens_in_one_window_only() {
 /// and the first key typed replaces an automatic name.
 #[test]
 fn save_as_renames_the_file_and_lock() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-rename");
     let mut app = games_app(&dir);
     app.state.add_to_rack('Q');
@@ -1262,7 +1260,7 @@ fn save_as_renames_the_file_and_lock() {
 /// prompt, Yes replaces that game.
 #[test]
 fn save_as_over_another_game_asks_first() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-overwrite");
     store_game(&dir, "Bob", 5);
     let mut app = games_app(&dir);
@@ -1298,7 +1296,7 @@ fn save_as_over_another_game_asks_first() {
 /// game quits as before.
 #[test]
 fn quitting_an_untitled_game_offers_a_name() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-quit");
     let mut app = games_app(&dir);
     app.state.add_to_rack('Q');
@@ -1356,7 +1354,7 @@ fn quitting_an_untitled_game_offers_a_name() {
 /// deletes games, and refuses games open in another window.
 #[test]
 fn game_picker_keys() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-picker");
     store_game(&dir, "Ann", 10);
     store_game(&dir, "Bea", 30);
@@ -1449,7 +1447,7 @@ fn game_picker_keys() {
 /// inference, results and the simulation resume cache.
 #[test]
 fn switching_games_clears_the_old_games_state() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -1503,7 +1501,7 @@ fn switching_games_clears_the_old_games_state() {
 /// in the picker.
 #[test]
 fn old_session_is_imported_at_startup() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let base = games::test_dir("app-migrate");
     std::fs::write(
         base.join("session.cgp"),
@@ -1526,7 +1524,7 @@ fn old_session_is_imported_at_startup() {
 /// interval, and always on exit.
 #[test]
 fn autosave_is_throttled_and_runs_on_exit() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let dir = games::test_dir("app-throttle");
     let mut app = games_app(&dir);
     app.start_session(Some("Eve")).unwrap();
@@ -1568,7 +1566,7 @@ fn autosave_is_throttled_and_runs_on_exit() {
 /// query, or coordinates starting with it, ignoring case.
 #[test]
 fn filter_matches_words_and_coordinates() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(mut app) = solved_app() else {
         return;
     };
@@ -1600,7 +1598,7 @@ fn filter_matches_words_and_coordinates() {
 /// and the best play and the pass are solved.
 #[test]
 fn one_tile_in_the_bag_is_solved_exactly() {
-    let _lock = crate::datafiles::test_data::refengine_lock();
+    let _lock = crate::datafiles::test_data::app_lock();
     let Some(dict) = crate::datafiles::test_data::dictionary() else {
         return;
     };

@@ -6,8 +6,8 @@ use std::sync::{mpsc, Arc};
 
 use crate::board::{Board, Direction, BOARD_SIZE};
 use crate::game::SolverState;
+use crate::inference::RackInference as InferenceResult;
 use crate::logging::log;
-use crate::refengine_mcts::InferenceResult;
 use crate::mcts::{OpponentModel, TilePool};
 use crate::solver::Solver;
 use crate::tile::Tile;
@@ -102,9 +102,9 @@ impl App {
             for col in 0..BOARD_SIZE {
                 if prev.get_tile(row, col).is_none() {
                     if let Some(tile) = self.state.board.get_tile(row, col) {
-                        // RefEngine's `infer` reads played tiles as a rack:
-                        // a lowercase letter would be un-blanked into the
-                        // natural letter, so a played blank must be '?'.
+                        // Inference takes the tiles from their rack: a
+                        // played blank is a blank ('?'), whatever letter
+                        // it stands for.
                         tiles.push(if tile.is_blank { '?' } else { tile.letter });
                     }
                 }
