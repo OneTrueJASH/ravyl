@@ -254,8 +254,10 @@ dependencies = [
  "fst",
  "insta",
  "libc",
+ "log",
  "proptest",
  "ratatui",
+ "ravyn",
  "rayon",
  "serde",
  "signal-hook",
@@ -1336,6 +1338,17 @@ dependencies = [
  "time",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "ravyn"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "fastrand",
+ "fst",
+ "log",
+ "rayon",
 ]
 
 [[package]]

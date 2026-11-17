@@ -220,3 +220,5 @@ Copyright (C) 2026 OneTrueJASH.
 cpsolver2 is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
 
 It is GPL because it links RefEngine (GPL-3.0), vendored in `external/refengine-src`; see [`external/refengine/NOTICE`](external/refengine/NOTICE) for the RefEngine data files and the ones modified for Crossplay. Anyone you give a binary to is entitled to the matching source.
+
+The engine in `crates/ravyn` (RAVYN) is separately licensed under the [MIT License](crates/ravyn/LICENSE). It does not use RefEngine.

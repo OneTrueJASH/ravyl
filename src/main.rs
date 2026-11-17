@@ -293,6 +293,7 @@ fn main() -> ExitCode {
     let exit = Arc::new(ExitState::default());
     watch_signals(&exit);
     install_panic_hook();
+    cpsolver2::logging::install_engine_bridge();
 
     // Data is loaded before the terminal is taken over, so a missing file
     // is reported plainly on stderr with a non-zero exit code.

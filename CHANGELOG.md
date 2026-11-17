@@ -62,6 +62,10 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   cargo-deny; a release workflow (dist) that runs only by hand.
 
 ### Changed
+- The engine (move generation, leaves, simulation, endgame) is now its
+  own crate, RAVYN, in `crates/ravyn`, MIT licensed and free of RefEngine.
+  It logs through the `log` facade; the app forwards those lines to its
+  log. The app re-exports the engine's modules at their old paths.
 - Works on an 80×24 terminal: from 80 columns a mini board keeps a
   compact sidebar beside it (rack, score and bag, the sort row and the
   move list). Before, only the board was drawn and Tab focused panes that

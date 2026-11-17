@@ -11,6 +11,20 @@ git lfs install && git lfs pull   # the lexicon files are in Git LFS
 You need Rust 1.88 or newer and a C compiler (`build.rs` compiles the
 RefEngine submodule). `--no-default-features` builds without RefEngine.
 
+## Layout
+
+The repository is a Cargo workspace:
+
+- `crates/ravyn/`: **RAVYN**, the engine (move generation, leaves,
+  simulation, endgame). MIT licensed, with no dependency on the app or on
+  RefEngine; it logs through the `log` facade.
+- The root package `cpsolver2`: the TUI, saved games, settings and the
+  RefEngine bindings (GPL-3.0). It re-exports the engine's modules at their
+  old paths (`cpsolver2::solver`, ...), so either path works.
+
+Engine changes go in `crates/ravyn`; anything about the terminal, files
+or RefEngine stays in the root package.
+
 ## Before every push
 
 ```bash
@@ -36,7 +50,7 @@ key binding or constant change, and add a line to `CHANGELOG.md`.
   with `INSTA_UPDATE=always` and read the diff).
 - `tests/properties.rs` holds the property tests.
 - Self-play studies that fitted the engine's constants are ignored tests
-  in `src/mcts/studies.rs`; each says how to run it.
+  in `crates/ravyn/src/mcts/studies.rs`; each says how to run it.
 
 ## Measuring
 

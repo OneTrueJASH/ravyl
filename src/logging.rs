@@ -178,6 +178,33 @@ pub fn log(message: &str) {
     }
 }
 
+/// Forwards records from the `log` facade (which the RAVYN engine logs
+/// through) into this log, so they reach the file and the log viewer.
+struct Bridge;
+
+impl ::log::Log for Bridge {
+    fn enabled(&self, metadata: &::log::Metadata) -> bool {
+        metadata.level() <= ::log::Level::Info
+    }
+
+    fn log(&self, record: &::log::Record) {
+        if self.enabled(record.metadata()) {
+            log(&record.args().to_string());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Route the engine's log records into this log. Only the first call
+/// installs the bridge; later calls do nothing.
+pub fn install_engine_bridge() {
+    static BRIDGE: Bridge = Bridge;
+    if ::log::set_logger(&BRIDGE).is_ok() {
+        ::log::set_max_level(::log::LevelFilter::Info);
+    }
+}
+
 /// Start a new section: the log viewer shows only lines logged from here
 /// on (the file keeps everything).
 pub fn start_section() {

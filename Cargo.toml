@@ -16,7 +16,14 @@ default = ["refengine"]
 # the RefEngine C engine, compiled from external/refengine-src.
 refengine = ["dep:cc"]
 
+[workspace]
+members = ["crates/ravyn"]
+# Plain `cargo build/test/clippy` at the root cover the engine too.
+default-members = [".", "crates/ravyn"]
+
 [dependencies]
+ravyn = { path = "crates/ravyn" }
+log = "0.4"
 ratatui = "0.30"
 fst = "0.4"
 anyhow = "1.0"
