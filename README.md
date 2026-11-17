@@ -227,10 +227,8 @@ Each run logs to `cpsolver2-<pid>.log` in `~/.local/state/cpsolver2/` on Linux, 
 
 ## License
 
-Copyright (C) 2026 OneTrueJASH.
+Copyright (c) 2026 OneTrueJASH.
 
-cpsolver2 is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).
+cpsolver2 and its engine, RAVYN (`crates/ravyn`), are licensed under the [MIT License](LICENSE).
 
-Nothing from RefEngine remains in the repository but a record of its move generation on reference positions, kept as test fixtures. Anyone you give a binary to is entitled to the matching source.
-
-The engine in `crates/ravyn` (RAVYN) is separately licensed under the [MIT License](crates/ravyn/LICENSE).
+Versions up to and including 0da908c were GPL-3.0-or-later, because they built on RefEngine; nothing from RefEngine remains in the repository but a record of its move generation on reference positions, kept as test fixtures.

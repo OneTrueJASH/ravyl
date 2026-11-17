@@ -19,7 +19,7 @@ The repository is a Cargo workspace:
   integration, property and RefEngine-reference tests, benchmarks and fuzz
   targets live with it.
 - The root package `cpsolver2`: the TUI, saved games, settings and data
-  file discovery (GPL-3.0). It re-exports the engine's modules at their
+  file discovery (MIT, like the engine). It re-exports the engine's modules at their
   old paths (`cpsolver2::solver`, ...), so either path works.
 
 Engine changes go in `crates/ravyn`; anything about the terminal or files

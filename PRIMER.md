@@ -2,7 +2,7 @@
 
 Complete TUI redesign of my earlier [`crossplay-solver`](https://github.com/OneTrueJASH/crossplay-solver).
 
-The workspace has two crates. `crates/ravyn` is the engine (RAVYN, MIT): rules, tiles, board, dictionary, leaves, move generation, simulation, inference, endgame and pre-endgame. It also builds the `ravyn` command-line tool (`crates/ravyn/src/bin/ravyn.rs`: `gen`, `sim`, `endgame`, `preendgame`, `infer` on CGP positions; standard library only, tested as a process in `tests/cli.rs`). The root package is the app (GPL-3.0): its library (`src/lib.rs`) re-exports the engine's modules at their old paths and adds the TUI; the `cpsolver2` binary (`src/main.rs`) is the terminal setup, a small CLI (`--help`, `--version`, `--data-dir`, `--game`, `--list`), the panic hook, the quit-on-signal flag (SIGHUP, SIGTERM, SIGINT via `signal-hook`) and the event loop. `ui::frame::draw_ui` draws a frame from the `App`.
+The workspace has two crates. `crates/ravyn` is the engine (RAVYN, MIT): rules, tiles, board, dictionary, leaves, move generation, simulation, inference, endgame and pre-endgame. It also builds the `ravyn` command-line tool (`crates/ravyn/src/bin/ravyn.rs`: `gen`, `sim`, `endgame`, `preendgame`, `infer` on CGP positions; standard library only, tested as a process in `tests/cli.rs`). The root package is the app (MIT): its library (`src/lib.rs`) re-exports the engine's modules at their old paths and adds the TUI; the `cpsolver2` binary (`src/main.rs`) is the terminal setup, a small CLI (`--help`, `--version`, `--data-dir`, `--game`, `--list`), the panic hook, the quit-on-signal flag (SIGHUP, SIGTERM, SIGINT via `signal-hook`) and the event loop. `ui::frame::draw_ui` draws a frame from the `App`.
 
 ## Module Layout
 

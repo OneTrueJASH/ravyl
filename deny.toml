@@ -13,8 +13,8 @@ unmaintained = "workspace"
 yanked = "deny"
 
 [licenses]
-# cpsolver2 itself is GPL-3.0-or-later and unpublished; only dependencies
-# are checked against the allow list.
+# cpsolver2 and RAVYN are MIT and unpublished; only dependencies are
+# checked against the allow list.
 private = { ignore = true }
 allow = [
     "MIT",
