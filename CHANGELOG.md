@@ -90,7 +90,9 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   with the new values. Three generations of 500,000 games produced
   `data/leaves.rlv` (all 921,298 leaves, 1.8 MB), which beat RefEngine's
   table by 2.1 +- 0.9 points of spread per game over 20,000 paired games.
-  `ravyn match` compares leave tables.
+  `ravyn match` compares leave tables (`--sim C,P` with both sides
+  choosing moves by simulation, where the gain held: +2.2 +- 2.0 over
+  4,600 games).
 - The last of RefEngine is gone: its leave table (`AMERICAN.klv2`), the KLV2
   reader and Git LFS (nothing is stored in LFS any more). Only a record of
   its move generation remains, as test fixtures.

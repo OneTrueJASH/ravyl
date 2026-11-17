@@ -11,7 +11,7 @@ Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move gene
 - **Simulates every candidate**: every legal play, every distinct exchange and passing are played out under Crossplay rules, with an anytime scheduler (every candidate gets a playout floor, then the contenders race) that streams results into the table live. For each candidate the table shows playouts, mean final spread ± standard error, win% ± standard error, the paired difference to the best candidate, bingo rates and a status (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
 - **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
 - **Move generation checked against RefEngine** play for play (its answers on 32 reference positions are kept as test fixtures)
-- **Leave values trained by self-play** on Crossplay's own rules (`data/leaves.rlv`, every one of the 921,298 possible leaves); over 20,000 paired games they beat RefEngine's table by 2.1 ± 0.9 points of spread per game
+- **Leave values trained by self-play** on Crossplay's own rules (`data/leaves.rlv`, every one of the 921,298 possible leaves); over 20,000 paired games they beat RefEngine's table by 2.1 ± 0.9 points of spread per game, and by 2.2 ± 2.0 when both sides choose moves by simulation (4,600 games)
 - **Opponent modeling**: rack inference (what the opponent probably kept, given their play; checked against RefEngine's) biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
 - **Mouse support** with clickable board squares, suggestions (double-click applies), dialog buttons and menu options
 - **Fluid layout** that adapts to any terminal size: board and sidebar side by side; from 80 columns (the classic 80×24 included) a mini board with a compact sidebar of rack, score and the move list; a stacked board, one-line rack and short list on narrower but tall terminals; and a clear message below the minimum size (50×22)
@@ -98,7 +98,7 @@ cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/1
 | `preendgame` | one tile in the bag: every play and the pass, exact over each possible last tile |
 | `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
 | `train-leaves` | fits leave values by self-play (`--games`, `--generations`, `--from`, `--out`); no position needed |
-| `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic) |
+| `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic; `--sim C,P` to choose moves by simulation) |
 
 `--rules scrabble` plays standard Scrabble instead of Crossplay (its board, values and tiles, a 50-point bingo, and the go-out ending: rack penalties and six scoreless turns). The word list is still the one in `data/`. `--data DIR` (or `$RAVYN_DATA`) points at the directory holding `data/words.fst` and the leave table; `--help` lists everything.
 
