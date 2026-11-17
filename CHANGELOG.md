@@ -82,6 +82,15 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- Best-play searches prune by anchor: each anchor's plays are bounded
+  (the rack's most valuable tiles on the most multiplied squares, plus the
+  best leave of that size), anchors are searched best-first, and the
+  search stops when no remaining anchor can change the answer. Playouts
+  run 1.4-2.3x faster, the endgame solver 1.6x, and simulating every play
+  of a 40,503-play position went from 5,497 to 9,700 playouts a second.
+  Equal plays now follow one canonical order in every search and in the
+  move list. A test checks the pruned searches against the full list on
+  160 random racks.
 - Opponent rack inference is the engine's own (`ravyn::inference`)
   instead of RefEngine's. Every leave the opponent could have kept is tried
   and kept if their play was within 5 points of that rack's best, weighted
