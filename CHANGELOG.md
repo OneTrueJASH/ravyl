@@ -82,6 +82,15 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- Scrabble rules in the engine: a `SCRABBLE` preset (standard board,
+  values and tiles, 50-point bingo) and the go-out ending. Playouts play
+  the bag-empty finish until someone goes out (twice the opponent's rack)
+  or six scoreless turns pass; `ravyn::negamax` solves the endgame
+  exactly (negamax with alpha-beta, a transposition table and iterative
+  deepening), reporting an estimate when the time budget runs out.
+  `ravyn --rules scrabble` uses all of it.
+- The board analysis (anchors and cross-checks) can be updated after a
+  move instead of recomputed; the endgame search does so at each node.
 - A command-line tool for the engine, `ravyn`, with RefEngine-style commands
   on CGP positions: `gen` (moves by static equity), `sim` (simulation with
   spread and win%), `endgame`, `preendgame` and `infer`. Scores and a

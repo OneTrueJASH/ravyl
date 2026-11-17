@@ -95,11 +95,11 @@ cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/1
 |---|---|
 | `gen` | every play, exchange and pass, best static equity first |
 | `sim` | simulates the best candidates (`--candidates`, `--seconds`) and ranks them by mean final spread, with win% |
-| `endgame` | bag empty: exact search; uses the opponent's rack after the `/` when given, otherwise every unseen tile (`--last us\|them`) |
+| `endgame` | bag empty: exact search; uses the opponent's rack after the `/` when given, otherwise every unseen tile. Crossplay: our play and their reply (`--last us\|them`); Scrabble: negamax to the end of the game within `--seconds`, saying whether it solved it |
 | `preendgame` | one tile in the bag: every play and the pass, exact over each possible last tile |
 | `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
 
-`--data DIR` (or `$RAVYN_DATA`) points at the directory holding `data/words.fst` and the leave table; `--help` lists everything.
+`--rules scrabble` plays standard Scrabble instead of Crossplay (its board, values and tiles, a 50-point bingo, and the go-out ending: rack penalties and six scoreless turns). The word list is still the one in `data/`. `--data DIR` (or `$RAVYN_DATA`) points at the directory holding `data/words.fst` and the leave table; `--help` lists everything.
 
 ### Self-play harness
 
