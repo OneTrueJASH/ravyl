@@ -248,7 +248,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cc",
- "criterion",
  "dirs",
  "fastrand",
  "fst",
@@ -1345,6 +1344,7 @@ name = "ravyn"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "criterion",
  "fastrand",
  "fst",
  "log",

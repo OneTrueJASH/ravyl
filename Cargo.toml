@@ -40,13 +40,8 @@ dirs = "6.0"
 signal-hook = "0.3"
 
 [dev-dependencies]
-criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
 insta = "1"
 proptest = "1"
-
-[[bench]]
-name = "engine"
-harness = false
 
 [build-dependencies]
 cc = { version = "1.2", optional = true }
