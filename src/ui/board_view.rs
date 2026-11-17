@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, BorderType, Padding, Widget};
 
 use crate::board::{Direction, Premium, BOARD_SIZE};
 use crate::game::SolverState;
-use crate::tile::{letter_value, Tile};
+use crate::tile::Tile;
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
 
@@ -394,7 +394,7 @@ impl Widget for BoardWidget<'_> {
                     let value = if tile.is_blank {
                         0
                     } else {
-                        letter_value(tile.letter)
+                        self.state.board.rules().letter_value(tile.letter)
                     };
                     self.draw_cell(
                         buf,
@@ -425,7 +425,7 @@ impl Widget for BoardWidget<'_> {
                     let value = if preview_tile.is_blank {
                         0
                     } else {
-                        letter_value(preview_tile.letter)
+                        self.state.board.rules().letter_value(preview_tile.letter)
                     };
                     self.draw_cell(
                         buf,

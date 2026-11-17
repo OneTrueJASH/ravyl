@@ -66,6 +66,11 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   own crate, RAVYN, in `crates/ravyn`, MIT licensed and free of RefEngine.
   It logs through the `log` facade; the app forwards those lines to its
   log. The app re-exports the engine's modules at their old paths.
+- The game's rules are data: board layout, start square, letter values,
+  tile distribution, bingo bonus and ending live in `ravyn::rules::Rules`,
+  carried by every board, with `CROSSPLAY` as the preset. Scoring, move
+  generation, tile counts and leave values read them from the position
+  instead of constants (move generation measured 2-6% faster).
 - Works on an 80×24 terminal: from 80 columns a mini board keeps a
   compact sidebar beside it (rack, score and bag, the sort row and the
   move list). Before, only the board was drawn and Tab focused panes that

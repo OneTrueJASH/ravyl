@@ -15,4 +15,4 @@ pub mod settings;
 pub mod ui;
 
 // The engine's modules, at the paths the app has always used.
-pub use ravyn::{board, endgame, game, leaves, mcts, sim, solver, stats, tile};
+pub use ravyn::{board, endgame, game, leaves, mcts, rules, sim, solver, stats, tile};

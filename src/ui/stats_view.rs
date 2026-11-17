@@ -10,7 +10,7 @@ use crate::endgame::FinalTurn;
 use crate::game::SolverState;
 use crate::refengine_mcts::InferenceResult;
 use crate::stats::{GamePhase, GameStats};
-use crate::tile::{letter_value, Rack};
+use crate::tile::Rack;
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
 
@@ -233,7 +233,7 @@ impl Widget for RackStatsWidget<'_> {
                     let value = if tile.is_blank {
                         0
                     } else {
-                        letter_value(tile.letter)
+                        self.state.board.rules().letter_value(tile.letter)
                     };
                     Self::draw_tile(buf, tile_x, row, letter, value, tile.is_blank);
                 } else {
