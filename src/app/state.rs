@@ -449,6 +449,9 @@ pub struct App {
     pub help_max_scroll: Cell<u16>,
     /// Evaluation results for the current suggestions (playouts or endgame).
     pub sim_results: Option<Vec<SimResult>>,
+    /// For each suggestion, the index of its entry in `sim_results`, as
+    /// of the last sort (the table checks each entry before using it).
+    pub sim_index: Vec<Option<usize>>,
     pub(super) sim_job: Option<SimJob>,
     /// Saved state of the last simulation run, so M on the same position
     /// continues where it stopped.
@@ -574,6 +577,7 @@ impl App {
             help_scroll: 0,
             help_max_scroll: Cell::new(0),
             sim_results: None,
+            sim_index: Vec::new(),
             sim_job: None,
             sim_cache: Arc::new(Mutex::new(SimCache::default())),
             inference_receiver: None,

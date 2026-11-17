@@ -7,6 +7,8 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
+use crate::board::Direction;
+use crate::solver::{Move, MoveKind};
 use crate::ui::events::AppAction;
 use crate::ui::hit::{resolve_click, HitTarget};
 use crate::ui::menu_popup::EscapeMenuOption;
@@ -563,14 +565,11 @@ impl App {
         let Some(filter) = self.filter.as_deref().filter(|f| !f.is_empty()) else {
             return (0..self.suggestions.len()).collect();
         };
-        let q = filter.to_ascii_uppercase();
+        let q = filter.as_bytes();
         self.suggestions
             .iter()
             .enumerate()
-            .filter(|(_, m)| {
-                m.word.to_ascii_uppercase().contains(&q)
-                    || m.coords().to_ascii_uppercase().starts_with(&q)
-            })
+            .filter(|(_, m)| contains_ignore_case(m.word.as_bytes(), q) || coords_start_with(m, q))
             .map(|(i, _)| i)
             .collect()
     }
@@ -682,4 +681,36 @@ impl App {
         }
         AppAction::Redraw
     }
+}
+
+/// True if `needle` occurs in `hay`, ignoring ASCII case.
+fn contains_ignore_case(hay: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty()
+        || hay
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// True if the move's coordinates ([`Move::coords`]) start with `prefix`,
+/// ignoring ASCII case. The filter runs over every suggestion on every
+/// frame, so this writes the coordinates into a stack buffer instead of a
+/// new string.
+fn coords_start_with(mv: &Move, prefix: &[u8]) -> bool {
+    use std::io::Write;
+    let mut buf = [0u8; 8];
+    let len = {
+        let mut w = &mut buf[..];
+        let col = (b'A' + mv.col as u8) as char;
+        let _ = if mv.kind != MoveKind::Play {
+            write!(w, "-")
+        } else if mv.direction == Direction::Horizontal {
+            write!(w, "{}{}", mv.row + 1, col)
+        } else {
+            write!(w, "{}{}", col, mv.row + 1)
+        };
+        8 - w.len()
+    };
+    buf[..len]
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }

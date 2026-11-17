@@ -77,6 +77,11 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   position went from 4,478 to 5,497 playouts a second, and twice as many
   plays (3,274 against 1,692) reached the playout floor in 12 seconds.
   Each playout is still the same deal in every run.
+- The interface stays responsive while tens of thousands of plays are
+  simulated: on a 40,504-play list a live update now takes 4.6 ms instead
+  of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
+  1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
+  the table reuses that pairing, and the filter no longer builds strings.
 - Works on an 80×24 terminal: from 80 columns a mini board keeps a
   compact sidebar beside it (rack, score and bag, the sort row and the
   move list). Before, only the board was drawn and Tab focused panes that

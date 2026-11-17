@@ -143,6 +143,7 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             suggestions_area,
             crate::ui::suggestions::ListView {
                 moves: &app.suggestions,
+                sim_index: &app.sim_index,
                 visible: &visible,
                 selected: app.selected_suggestion,
                 offset: &app.list_offset,

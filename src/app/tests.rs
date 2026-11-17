@@ -1565,3 +1565,34 @@ fn autosave_is_throttled_and_runs_on_exit() {
     assert!(!games::lock_path(&dir, "eve").exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The filter matches what the string version did: a word containing the
+/// query, or coordinates starting with it, ignoring case.
+#[test]
+fn filter_matches_words_and_coordinates() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let Some(mut app) = solved_app() else {
+        return;
+    };
+    if let Some(job) = app.sim_job.take() {
+        job.cancel.store(true, AtomicOrdering::Relaxed);
+    }
+    for query in ["", "e", "RE", "ch", "8", "8h", "H8", "h1", "12", "-", "zz"] {
+        app.filter = Some(query.to_string());
+        let q = query.to_ascii_uppercase();
+        let expected: Vec<usize> = if query.is_empty() {
+            (0..app.suggestions.len()).collect()
+        } else {
+            app.suggestions
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| {
+                    m.word.to_ascii_uppercase().contains(&q)
+                        || m.coords().to_ascii_uppercase().starts_with(&q)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
+        assert_eq!(app.visible_suggestions(), expected, "query {query:?}");
+    }
+}

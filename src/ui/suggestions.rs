@@ -1,8 +1,6 @@
 //! Suggestions table: every candidate with its static equity and, once
 //! evaluated, its simulation results.
 
-use std::collections::HashMap;
-
 use ratatui::layout::{Alignment, Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::symbols;
@@ -10,7 +8,6 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Cell, LineGauge, Padding, Paragraph, Row, Table, TableState, Tabs};
 
 use crate::app::{group_thousands, SimProgress, SimResult, SimStatus, SortMode};
-use crate::board::Direction;
 use crate::solver::Move;
 use crate::ui::hit::{register_hit, HitTarget};
 use crate::ui::theme;
@@ -18,32 +15,51 @@ use crate::ui::theme;
 /// Width of the selection marker the table reserves on the left.
 const HIGHLIGHT_SYMBOL: &str = "> ";
 
-/// Maps moves to their evaluation results (playouts or endgame search).
+/// Finds a move's evaluation result (playouts or endgame search).
+///
+/// Uses the app's per-suggestion index ([`crate::app::App::sim_index`]),
+/// so a frame costs a lookup per shown row rather than a map over every
+/// result. Each indexed entry is checked against the move; an index from
+/// before the list last changed falls back to a search.
 pub struct SimEquityLookup<'a> {
-    map: HashMap<(String, usize, usize, Direction), &'a SimResult>,
+    results: &'a [SimResult],
+    index: &'a [Option<usize>],
+    /// The index matches the list's length, so a missing entry means the
+    /// move has no result.
+    trusted: bool,
 }
 
 impl<'a> SimEquityLookup<'a> {
-    pub fn new(results: Option<&'a [SimResult]>) -> Self {
-        let map = results
-            .map(|results| {
-                results
-                    .iter()
-                    .map(|r| ((r.word.to_uppercase(), r.row, r.col, r.direction), r))
-                    .collect()
-            })
-            .unwrap_or_default();
-        SimEquityLookup { map }
+    pub fn new(results: Option<&'a [SimResult]>, index: &'a [Option<usize>], len: usize) -> Self {
+        SimEquityLookup {
+            results: results.unwrap_or(&[]),
+            index,
+            trusted: index.len() == len,
+        }
     }
 
-    pub fn get(&self, mv: &Move) -> Option<&'a SimResult> {
-        self.map
-            .get(&(mv.word.to_uppercase(), mv.row, mv.col, mv.direction))
-            .copied()
+    /// The result for `mv`, the move at position `i` of the list.
+    pub fn get(&self, i: usize, mv: &Move) -> Option<&'a SimResult> {
+        let is_for = |r: &SimResult| {
+            r.row == mv.row
+                && r.col == mv.col
+                && r.direction == mv.direction
+                && r.word.eq_ignore_ascii_case(&mv.word)
+        };
+        match self.index.get(i) {
+            Some(Some(j)) => {
+                if let Some(r) = self.results.get(*j).filter(|r| is_for(r)) {
+                    return Some(r);
+                }
+            }
+            Some(None) if self.trusted => return None,
+            _ => {}
+        }
+        self.results.iter().find(|r| is_for(r))
     }
 
     pub fn has_data(&self) -> bool {
-        !self.map.is_empty()
+        !self.results.is_empty()
     }
 }
 
@@ -285,6 +301,9 @@ const SCROLL_OFF: usize = 2;
 pub struct ListView<'a> {
     /// Every suggestion.
     pub moves: &'a [Move],
+    /// For each suggestion, its entry in the results (see
+    /// [`SimEquityLookup`]).
+    pub sim_index: &'a [Option<usize>],
     /// Indices into `moves` of the rows shown (all, or the filter's matches).
     pub visible: &'a [usize],
     /// Index into `moves` of the selected suggestion.
@@ -336,7 +355,7 @@ pub fn render_suggestions(
     };
 
     let moves = view.moves;
-    let lookup = SimEquityLookup::new(sim_results);
+    let lookup = SimEquityLookup::new(sim_results, view.sim_index, moves.len());
     let has_sim = lookup.has_data();
     let pos = view.visible.iter().position(|&i| i == view.selected);
 
@@ -480,7 +499,7 @@ pub fn render_suggestions(
         .iter()
         .map(|&i| {
             let mv = &moves[i];
-            let sim = lookup.get(mv).filter(|r| r.is_simulated());
+            let sim = lookup.get(i, mv).filter(|r| r.is_simulated());
             let cells: Vec<Cell> = cols
                 .iter()
                 .map(|c| match c.title {
@@ -576,11 +595,12 @@ pub fn render_suggestions(
                         _ => dash(),
                     },
                     "Status" => {
-                        let text = match lookup.get(mv) {
+                        let result = lookup.get(i, mv);
+                        let text = match result {
                             Some(r) => status_text(r),
                             None => "\u{2013}".to_string(),
                         };
-                        let color = match lookup.get(mv).map(|r| r.status) {
+                        let color = match result.map(|r| r.status) {
                             Some(SimStatus::Racing) => theme::current().sim_equity_fg,
                             Some(SimStatus::Exact) => theme::current().win_good,
                             _ => theme::current().text_dim,
