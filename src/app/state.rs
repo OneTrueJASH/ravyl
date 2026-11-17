@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::board::{Board, Direction};
 use crate::dictionary::Dictionary;
-use crate::endgame::{EndgameMove, FinalTurn};
+use crate::endgame::FinalTurn;
 use crate::game::SolverState;
 use crate::logging::log;
 use crate::refengine_mcts::InferenceResult;
@@ -369,6 +369,14 @@ pub(super) struct UndoState {
 }
 
 /// A background evaluation: its result channel, the position stamp it was
+/// What an exact search (endgame or pre-endgame) found, ready to show:
+/// the moves for the list, results for those it solved, and a summary.
+pub(super) struct ExactOutcome {
+    pub(super) moves: Vec<Move>,
+    pub(super) results: Vec<SimResult>,
+    pub(super) message: String,
+}
+
 /// started for, and the flag that stops it.
 pub(super) struct Job<T> {
     pub(super) stamp: u64,
@@ -459,7 +467,8 @@ pub struct App {
     /// The in-flight inference, tagged with the opponent-move stamp it was
     /// started for so a late result for an old move is dropped.
     pub(super) inference_receiver: Option<(u64, Receiver<Option<InferenceResult>>)>,
-    pub(super) endgame_job: Option<Job<Vec<EndgameMove>>>,
+    /// An exact search (endgame or pre-endgame) in progress.
+    pub(super) exact_job: Option<Job<ExactOutcome>>,
     /// Bumped on every change to the position (board, rack, scores, final
     /// turn, apply, undo, reset, re-solve). Evaluation results carry the
     /// stamp they were started under and are dropped if it moved on.
@@ -568,7 +577,7 @@ impl App {
             sim_job: None,
             sim_cache: Arc::new(Mutex::new(SimCache::default())),
             inference_receiver: None,
-            endgame_job: None,
+            exact_job: None,
             position_stamp: 0,
             mcts_progress: None,
             sim_progress: None,

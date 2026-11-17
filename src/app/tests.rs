@@ -1594,3 +1594,75 @@ fn filter_matches_words_and_coordinates() {
         assert_eq!(app.visible_suggestions(), expected, "query {query:?}");
     }
 }
+
+/// With one tile in the bag, M solves every play exactly over the
+/// possible last tiles instead of simulating: results arrive marked exact,
+/// the best play is solved, and passing stays in the list.
+#[test]
+fn one_tile_in_the_bag_is_solved_exactly() {
+    let _lock = crate::datafiles::test_data::refengine_lock();
+    let Some(dict) = crate::datafiles::test_data::dictionary() else {
+        return;
+    };
+    // Greedy self-play until the side to move faces one tile in the bag.
+    let position = (0..200u64).find_map(|seed| {
+        let mut rng = fastrand::Rng::with_seed(seed);
+        let mut bag = crate::rules::CROSSPLAY.full_tile_set();
+        rng.shuffle(&mut bag);
+        let mut racks = [bag.split_off(bag.len() - 7), bag.split_off(bag.len() - 7)];
+        let mut board = crate::board::Board::new();
+        let mut to_move = 0;
+        while bag.len() > 1 {
+            let mv =
+                crate::solver::Solver::new(&board, &dict).best_move_by_equity(&racks[to_move])?;
+            for (r, c, t) in &mv.tiles_used {
+                board.place_tile(*r, *c, *t);
+            }
+            for t in mv.tiles_from_rack() {
+                let i = racks[to_move]
+                    .iter()
+                    .position(|x| x.is_blank == t.is_blank && (t.is_blank || x.letter == t.letter))
+                    .unwrap();
+                racks[to_move].swap_remove(i);
+            }
+            let draw = mv.tiles_used.len().min(bag.len());
+            racks[to_move].extend(bag.split_off(bag.len() - draw));
+            to_move = 1 - to_move;
+        }
+        (bag.len() == 1).then(|| (board, racks[to_move].clone()))
+    });
+    let Some((board, rack)) = position else {
+        return;
+    };
+    let mut app = test_app();
+    app.set_dictionary(dict);
+    app.state = SolverState::new();
+    app.state.board = board;
+    for t in &rack {
+        assert!(app
+            .state
+            .add_to_rack(if t.is_blank { '?' } else { t.letter }));
+    }
+    assert_eq!(app.state.bag_size(), 1);
+    app.find_moves();
+    if let Some(job) = app.sim_job.take() {
+        job.cancel.store(true, AtomicOrdering::Relaxed);
+    }
+    app.run_mcts_evaluation();
+    assert!(
+        app.sim_job.is_none(),
+        "no simulation with one tile in the bag"
+    );
+    finish_evaluation(&mut app);
+    let results = app.sim_results.as_ref().expect("exact results");
+    let top = &app.suggestions[0];
+    let first = results
+        .iter()
+        .find(|r| r.word == top.word && r.row == top.row && r.col == top.col)
+        .expect("the top play is solved");
+    assert_eq!(first.status, SimStatus::Exact);
+    assert!(app
+        .suggestions
+        .iter()
+        .any(|m| m.kind == crate::solver::MoveKind::Pass));
+}

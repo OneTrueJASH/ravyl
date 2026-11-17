@@ -82,6 +82,14 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- Exact pre-endgame with one tile in the bag: M solves every play against
+  each tile that could be the last one (the opponent's best turn, then
+  our best final play, with perfect information), giving each play's
+  exact win probability and expected spread. Plays are capped cheaply
+  first and solved best-first, so a rack with a blank (7,354 plays) takes
+  about 9 s and most racks under a second; the best play is always
+  solved exactly (a test checks it against solving every play). Passing
+  to leave the bag to the opponent is not evaluated yet.
 - Best-play searches prune by anchor: each anchor's plays are bounded
   (the rack's most valuable tiles on the most multiplied squares, plus the
   best leave of that size), anchors are searched best-first, and the

@@ -6,16 +6,19 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::endgame::{EndgameSolver, FinalTurn};
+use crate::endgame::{EndgameMove, EndgameSolver, FinalTurn};
 use crate::game::observed_move_loss;
 use crate::logging::log;
 use crate::sim::{SimSettings, SimSnapshot, Simulation};
 use crate::solver::Move;
+use crate::tile::{Tile, RACK_SIZE};
+use ravyn::preendgame::PreEndgameMove;
 
 use super::format::group_thousands;
 use super::opponent::OPP_LOSS_SAMPLES;
 use super::state::{
-    App, Focus, Job, MctsProgress, MessageKind, SimJob, SimProgress, SimResult, SimStatus, SortMode,
+    App, ExactOutcome, Focus, Job, MctsProgress, MessageKind, SimJob, SimProgress, SimResult,
+    SimStatus, SortMode,
 };
 
 /// Run `f` on a new thread, catching a panic so it cannot take the app
@@ -36,7 +39,7 @@ impl App {
 
     /// Returns true if any background evaluation is in progress.
     pub fn is_mcts_running(&self) -> bool {
-        self.sim_job.is_some() || self.endgame_job.is_some()
+        self.sim_job.is_some() || self.exact_job.is_some()
     }
 
     /// Stop any running evaluation and forget its result. Returns true if
@@ -47,7 +50,7 @@ impl App {
             job.cancel.store(true, AtomicOrdering::Relaxed);
             cancelled = true;
         }
-        if let Some(job) = self.endgame_job.take() {
+        if let Some(job) = self.exact_job.take() {
             job.cancel();
             cancelled = true;
         }
@@ -149,96 +152,32 @@ impl App {
             }
         }
 
-        // Crossplay endgame solver results.
-        if let Some(ref job) = self.endgame_job {
+        // Exact results: the endgame or pre-endgame solver.
+        if let Some(ref job) = self.exact_job {
             match job.rx.try_recv() {
                 Ok(_) if job.stamp != self.position_stamp => {
-                    log("Dropped a stale endgame result (the position changed)");
-                    self.endgame_job = None;
+                    log("Dropped a stale exact result (the position changed)");
+                    self.exact_job = None;
                     self.mcts_progress = None;
                 }
-                Ok(endgame_results) => {
-                    let count = endgame_results.len();
-
-                    // Convert EndgameMove results into display records. The
-                    // game ends after these two plies, so the final margin is
-                    // known exactly: win% is 100/50/0.
-                    let score_diff = self.our_score as i32 - self.opp_score as i32;
-                    let sim_results: Vec<SimResult> = endgame_results
-                        .iter()
-                        .map(|eg| {
-                            let val = eg.endgame_value as f32;
-                            let final_margin = score_diff + eg.endgame_value;
-                            let best = endgame_results
-                                .first()
-                                .map_or(0.0, |b| b.endgame_value as f32);
-                            SimResult {
-                                word: eg.mv.word.clone(),
-                                row: eg.mv.row,
-                                col: eg.mv.col,
-                                direction: eg.mv.direction,
-                                win_pct: match final_margin.cmp(&0) {
-                                    std::cmp::Ordering::Greater => 100.0,
-                                    std::cmp::Ordering::Less => 0.0,
-                                    std::cmp::Ordering::Equal => 50.0,
-                                },
-                                win_se: 0.0,
-                                sim_equity: val,
-                                spread_se: 0.0,
-                                delta: val - best,
-                                delta_se: 0.0,
-                                ply1_bingo_pct: 0.0,
-                                ply2_bingo_pct: 0.0,
-                                is_endgame: true,
-                                iterations: 0,
-                                status: SimStatus::Exact,
-                            }
-                        })
-                        .collect();
-
-                    // Replace suggestions with fully-evaluated endgame moves
-                    // (preserves all moves, not just top N)
-                    let mut new_suggestions = Vec::with_capacity(endgame_results.len());
-                    for eg in &endgame_results {
-                        let mut mv = eg.mv.clone();
-                        mv.equity = eg.endgame_value as f32;
-                        new_suggestions.push(mv);
-                    }
-                    self.suggestions = new_suggestions;
-
-                    self.sim_results = Some(sim_results);
+                Ok(outcome) => {
+                    self.suggestions = outcome.moves;
+                    self.sim_results = Some(outcome.results);
                     self.sort_mode = SortMode::MctsEquity;
                     self.apply_sort();
                     self.selected_suggestion = 0;
-                    self.endgame_job = None;
+                    self.exact_job = None;
                     self.mcts_progress = None;
-
-                    // Log PV for best move
-                    if let Some(best) = endgame_results.first() {
-                        let pv_str: Vec<String> = best
-                            .pv
-                            .iter()
-                            .map(|p| format!("P{}:{} {}pts", p.player + 1, p.word, p.score))
-                            .collect();
-                        log(&format!("Endgame PV: {}", pv_str.join(" → ")));
-                    }
-
-                    self.set_message(
-                        MessageKind::Success,
-                        format!(
-                            "Endgame: {} moves ranked by score minus opponent's best reply",
-                            count
-                        ),
-                    );
+                    self.set_message(MessageKind::Success, outcome.message);
                     return true;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.endgame_job = None;
+                    self.exact_job = None;
                     self.mcts_progress = None;
                     self.set_message(
                         MessageKind::Error,
-                        "Endgame evaluation failed (see the log)".to_string(),
+                        "Exact evaluation failed (see the log)".to_string(),
                     );
                     return true;
                 }
@@ -507,9 +446,10 @@ impl App {
                 ),
             );
 
+            let score_diff = self.our_score as i32 - self.opp_score as i32;
             let (tx, rx) = mpsc::channel();
             let cancel = Arc::new(AtomicBool::new(false));
-            self.endgame_job = Some(Job {
+            self.exact_job = Some(Job {
                 stamp: self.position_stamp,
                 rx,
                 cancel: Arc::clone(&cancel),
@@ -539,7 +479,57 @@ impl App {
                     FinalTurn::Opponent,
                     Some(&cancel),
                 ) {
-                    let _ = tx.send(results);
+                    let _ = tx.send(endgame_outcome(results, score_diff));
+                }
+            });
+            return;
+        }
+
+        // One tile in the bag: every play empties it, so each play and each
+        // possible last tile is solved exactly (ravyn::preendgame).
+        if self.state.bag_size() == 1 && self.state.unseen_tile_count() == RACK_SIZE + 1 {
+            let state = self.state.clone();
+            self.last_applied_board = Some(self.state.board.clone());
+            self.mcts_progress = Some(MctsProgress {
+                started: Instant::now(),
+                sim: None,
+            });
+            self.set_message(
+                MessageKind::Progress,
+                "Pre-endgame: solving every play against each possible last tile...".to_string(),
+            );
+            let score_diff = self.our_score as i32 - self.opp_score as i32;
+            let (tx, rx) = mpsc::channel();
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.exact_job = Some(Job {
+                stamp: self.position_stamp,
+                rx,
+                cancel: Arc::clone(&cancel),
+            });
+            spawn_worker(move || {
+                let unseen: Vec<Tile> = state
+                    .unseen_tiles()
+                    .iter()
+                    .flat_map(|(&c, &n)| {
+                        (0..n).map(move |_| {
+                            if c == '?' {
+                                Tile::blank(' ')
+                            } else {
+                                Tile::new(c)
+                            }
+                        })
+                    })
+                    .collect();
+                let ours = state.rack.tiles();
+                if let Some(results) = ravyn::preendgame::solve_one_in_bag(
+                    &state.board,
+                    &dict,
+                    &ours,
+                    &unseen,
+                    score_diff,
+                    Some(&cancel),
+                ) {
+                    let _ = tx.send(preendgame_outcome(results, Move::pass(&ours)));
                 }
             });
             return;
@@ -649,5 +639,107 @@ impl App {
             self.focus = Focus::Suggestions;
             self.run_mcts_evaluation();
         }
+    }
+}
+
+/// An exact result for one move, as the table shows it.
+fn exact_result(mv: &Move, win_pct: f32, value: f32, best: f32) -> SimResult {
+    SimResult {
+        word: mv.word.clone(),
+        row: mv.row,
+        col: mv.col,
+        direction: mv.direction,
+        win_pct,
+        win_se: 0.0,
+        sim_equity: value,
+        spread_se: 0.0,
+        delta: value - best,
+        delta_se: 0.0,
+        ply1_bingo_pct: 0.0,
+        ply2_bingo_pct: 0.0,
+        is_endgame: true,
+        iterations: 0,
+        status: SimStatus::Exact,
+    }
+}
+
+/// The endgame solver's ranking, for the table. The game ends after these
+/// two plies, so the final margin is known exactly: win% is 100/50/0.
+fn endgame_outcome(results: Vec<EndgameMove>, score_diff: i32) -> ExactOutcome {
+    let best = results.first().map_or(0.0, |b| b.endgame_value as f32);
+    if let Some(top) = results.first() {
+        let pv: Vec<String> = top
+            .pv
+            .iter()
+            .map(|p| format!("P{}:{} {}pts", p.player + 1, p.word, p.score))
+            .collect();
+        log(&format!("Endgame PV: {}", pv.join(" \u{2192} ")));
+    }
+    let message = format!(
+        "Endgame: {} moves ranked by score minus opponent's best reply",
+        results.len()
+    );
+    let mut moves = Vec::with_capacity(results.len());
+    let mut rows = Vec::with_capacity(results.len());
+    for eg in results {
+        let win = match (score_diff + eg.endgame_value).cmp(&0) {
+            std::cmp::Ordering::Greater => 100.0,
+            std::cmp::Ordering::Less => 0.0,
+            std::cmp::Ordering::Equal => 50.0,
+        };
+        rows.push(exact_result(&eg.mv, win, eg.endgame_value as f32, best));
+        let mut mv = eg.mv;
+        mv.equity = eg.endgame_value as f32;
+        moves.push(mv);
+    }
+    ExactOutcome {
+        moves,
+        results: rows,
+        message,
+    }
+}
+
+/// The pre-endgame solver's ranking, for the table: solved plays with
+/// their exact win chance and expected spread over the possible last
+/// tiles; plays it proved cannot be best are listed without results.
+fn preendgame_outcome(results: Vec<PreEndgameMove>, pass: Move) -> ExactOutcome {
+    let best = results.first().map_or(0.0, |b| b.spread);
+    let solved = results.iter().filter(|r| r.exact).count();
+    if let Some(top) = results.first() {
+        let cases: Vec<String> = top
+            .outcomes
+            .iter()
+            .map(|o| format!("{} {:+}", o.tile, o.value))
+            .collect();
+        log(&format!(
+            "Pre-endgame: best {} {} win {:.1}% spread {:+.1} (by last tile: {})",
+            top.mv.coords(),
+            top.mv.word,
+            top.win * 100.0,
+            top.spread,
+            cases.join(", ")
+        ));
+    }
+    let message = format!(
+        "Pre-endgame: {} of {} plays solved exactly over every possible last tile; the rest cannot be best",
+        group_thousands(solved as u64),
+        group_thousands(results.len() as u64)
+    );
+    let mut moves = Vec::with_capacity(results.len() + 1);
+    let mut rows = Vec::with_capacity(solved);
+    for r in results {
+        let mut mv = r.mv;
+        if r.exact {
+            rows.push(exact_result(&mv, r.win * 100.0, r.spread, best));
+            mv.equity = r.spread;
+        }
+        moves.push(mv);
+    }
+    // Passing is not evaluated yet; keep it in the list.
+    moves.push(pass);
+    ExactOutcome {
+        moves,
+        results: rows,
+        message,
     }
 }
