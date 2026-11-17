@@ -27,19 +27,7 @@ jobs:
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      # LFS objects are pulled after the cache restore below so repeated
-      # runs do not spend the repository's LFS bandwidth.
       - uses: actions/checkout@v5
-        with:
-          lfs: false
-      - name: List LFS objects
-        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
-      - uses: actions/cache@v4
-        with:
-          path: .git/lfs
-          key: lfs-${{ hashFiles('.lfs-assets-id') }}
-      - name: Pull LFS objects
-        run: git lfs pull
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -47,18 +35,6 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: cargo test --release
-
-  no-lfs:
-    name: Without LFS data
-    runs-on: ubuntu-latest
-    steps:
-      # No LFS objects: the build must not need them, and data-dependent
-      # tests must skip cleanly on pointer stubs.
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Test (LFS stubs)
         run: cargo test --release
 
   deny:

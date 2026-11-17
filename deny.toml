@@ -1,9 +1,8 @@
 # cargo-deny: licenses and security advisories of the dependency tree.
 # Run with `cargo deny check`. CI runs it on every push and pull request.
 #
-# This covers Rust crates only. The data files (the dictionary and the
-# leave table from RefEngine, GPL-3.0) are not crates and are not checked
-# here; see the License section of README.md.
+# This covers Rust crates only. The data files (the word list and the
+# trained leave table) are not crates and are not checked here.
 
 [graph]
 all-features = true

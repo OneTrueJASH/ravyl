@@ -94,7 +94,7 @@ Usage: cpsolver2 [--game <NAME>] [--data-dir <DIR>]
 Options:
   --game <NAME>     Open the saved game NAME, or start a new game called NAME
   --list            List the saved games and exit
-  --data-dir <DIR>  Directory holding data/words.fst and external/refengine/data/
+  --data-dir <DIR>  Directory holding data/words.fst and data/leaves.rlv
   -h, --help        Print this help
   -V, --version     Print the version
 

@@ -1,10 +1,6 @@
-//! Locating the data files (dictionary FST and the leave table, a RefEngine
-//! data file) and telling a real file from a Git LFS pointer stub.
-//!
-//! The leave table (`external/refengine/data/lexica/AMERICAN.klv2`) is stored
-//! in Git LFS. A checkout without `git lfs pull` leaves a ~130-byte text
-//! pointer in its place; handing that to the leave parser fails with an
-//! unhelpful error, so callers check here first.
+//! Locating the data files (the dictionary FST and the trained leave
+//! table) and telling a real file from a Git LFS pointer stub (older
+//! checkouts kept the leave table in LFS).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// Relative location of the dictionary FST under a data root.
 pub const WORDS_FST: &str = "data/words.fst";
 /// Relative location of the leave table under a data root.
-pub const LEAVES_KLV2: &str = "external/refengine/data/lexica/AMERICAN.klv2";
+pub const LEAVES: &str = "data/leaves.rlv";
 
 /// Hint shown whenever an LFS pointer stub is found instead of data.
 pub const LFS_HINT: &str = "run `git lfs install && git lfs pull`";
@@ -74,7 +70,7 @@ pub fn set_cli_data_dir(dir: PathBuf) {
 /// 4. `<exe>/../share/cpsolver2` (an installed layout)
 /// 5. the working directory (running from a checkout, for development)
 ///
-/// Each holds `data/words.fst` and `external/refengine/data/`. Test builds
+/// Each holds `data/words.fst` and `data/leaves.rlv`. Test builds
 /// search the crate root first so tests do not depend on the working
 /// directory.
 pub fn data_roots() -> Vec<PathBuf> {
@@ -123,7 +119,7 @@ pub fn find_data_file(relative: &str) -> Option<PathBuf> {
 /// (so leave values fall back to the heuristic), or `None` when the real
 /// file is present or nothing is there at all.
 pub fn lfs_warning() -> Option<String> {
-    let stubbed = [LEAVES_KLV2].iter().any(|rel| {
+    let stubbed = [LEAVES].iter().any(|rel| {
         find_data_file(rel).is_none()
             && data_roots()
                 .iter()

@@ -5,7 +5,6 @@
 ```bash
 git clone https://github.com/OneTrueJASH/cpsolver2
 cd cpsolver2
-git lfs install && git lfs pull   # the leave table is in Git LFS
 ```
 
 You need Rust 1.88 or newer; nothing else is compiled.
@@ -34,9 +33,9 @@ cargo clippy --all-targets -- -D warnings
 cargo test --release
 ```
 
-CI runs the same on Linux and macOS, again without the LFS data (so
-data-dependent tests must skip cleanly when a file is missing or an LFS
-pointer), checks the MSRV, and runs `cargo deny check`.
+CI runs the same on Linux and macOS, checks the MSRV, and runs
+`cargo deny check`. Data-dependent tests skip cleanly when a data file is
+missing.
 
 Keep `README.md` and `PRIMER.md` true in the same change as any behavior,
 key binding or constant change, and add a line to `CHANGELOG.md`.
@@ -49,9 +48,8 @@ key binding or constant change, and add a line to `CHANGELOG.md`.
   an intended UI change, review them with `cargo insta review` (or rerun
   with `INSTA_UPDATE=always` and read the diff).
 - `crates/ravyn/tests/` holds the integration and property tests, and
-  `reference_movegen.rs`: move generation, static equity and rack
-  inference against RefEngine's answers, recorded in `fixtures/` before
-  RefEngine left the repository. App tests that start background work hold
+  `reference_movegen.rs`: move generation against RefEngine's answers,
+  recorded in `fixtures/` before RefEngine left the repository. App tests that start background work hold
   `datafiles::test_data::app_lock()` so their time budgets hold.
 - Self-play studies that fitted the engine's constants are ignored tests
   in `crates/ravyn/src/mcts/studies.rs`; each says how to run it.

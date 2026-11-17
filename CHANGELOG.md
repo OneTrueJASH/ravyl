@@ -82,6 +82,16 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- Our own leave values, trained by self-play: `ravyn train-leaves` plays
+  greedy self-play games, fits every leave's value from what keeping it
+  was worth a turn later (with a smooth model for rare leaves) and repeats
+  with the new values. Three generations of 500,000 games produced
+  `data/leaves.rlv` (all 921,298 leaves, 1.8 MB), which beat RefEngine's
+  table by 2.1 +- 0.9 points of spread per game over 20,000 paired games.
+  `ravyn match` compares leave tables.
+- The last of RefEngine is gone: its leave table (`AMERICAN.klv2`), the KLV2
+  reader and Git LFS (nothing is stored in LFS any more). Only a record of
+  its move generation remains, as test fixtures.
 - Scrabble rules in the engine: a `SCRABBLE` preset (standard board,
   values and tiles, 50-point bingo) and the go-out ending. Playouts play
   the bag-empty finish until someone goes out (twice the opponent's rack)

@@ -34,9 +34,7 @@ fn main() {
     let stepped = load(PhaseScaling::Stepped);
     let smoothed = load(PhaseScaling::Smoothed);
     if !stepped.has_leave_table() {
-        eprintln!(
-            "warning: no leave table (AMERICAN.klv2 missing or an LFS stub); heuristic leaves"
-        );
+        eprintln!("warning: no leave table (data/leaves.rlv missing); heuristic leaves");
     }
 
     let (a, b) = match experiment {

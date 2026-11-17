@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn draw_ui_snapshots() {
         let _lock = crate::datafiles::test_data::app_lock();
-        if crate::datafiles::test_data::file(crate::datafiles::LEAVES_KLV2).is_none() {
+        if crate::datafiles::test_data::file(crate::datafiles::LEAVES).is_none() {
             return;
         }
         let Some(mut app) = sample_app() else {

@@ -12,7 +12,7 @@ use ravyn::leaves::LeaveValues;
 use crate::datafiles;
 
 /// Load the dictionary and leave table from one data root: `data/words.fst`
-/// plus `external/refengine/data/lexica/AMERICAN.klv2` when it is real data. A
+/// plus the trained leave table `data/leaves.rlv` when it is real data. A
 /// missing table or an LFS pointer stub falls back to heuristic leaves.
 pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
     let fst_path = root.join(datafiles::WORDS_FST);
@@ -25,7 +25,7 @@ pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
     }
     let dict = Dictionary::load_from_fst(&fst_path)
         .with_context(|| format!("loading {}", fst_path.display()))?;
-    let leaves_path = root.join(datafiles::LEAVES_KLV2);
+    let leaves_path = root.join(datafiles::LEAVES);
     match datafiles::file_status(&leaves_path) {
         datafiles::FileStatus::Present => {}
         datafiles::FileStatus::LfsPointer => {
@@ -49,11 +49,11 @@ pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
 }
 
 /// Load the default dictionary (`data/words.fst`) from the first data root
-/// that has it, attaching RefEngine's leave table (`AMERICAN.klv2`) when present.
+/// that has it, attaching the leave table (`data/leaves.rlv`) when present.
 pub fn load_default_dictionary() -> Result<Dictionary> {
     let fst_path = datafiles::find_data_file(datafiles::WORDS_FST).context(
         "Could not find the dictionary (data/words.fst). Point --data-dir or \
-         CPSOLVER_DATA_DIR at a directory holding data/ and external/refengine/data/, \
+         CPSOLVER_DATA_DIR at a directory holding data/, \
          install them under the user data directory (cpsolver2/), or run from \
          the repository root.",
     )?;

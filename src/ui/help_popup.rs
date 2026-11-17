@@ -208,7 +208,7 @@ impl<'a> HelpPopup<'a> {
         vec![
             Line::from(""),
             Line::from(Span::styled(
-                "Leave values: RefEngine's table (RefEngine, GPL-3.0)",
+                "Leave values: trained by RAVYN self-play",
                 desc,
             )),
             Line::from(Span::styled(
