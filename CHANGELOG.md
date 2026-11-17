@@ -82,6 +82,11 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- A command-line tool for the engine, `ravyn`, with RefEngine-style commands
+  on CGP positions: `gen` (moves by static equity), `sim` (simulation with
+  spread and win%), `endgame`, `preendgame` and `infer`. Scores and a
+  known opponent rack are read from the CGP; `--data` or `$RAVYN_DATA`
+  locate the data files.
 - RefEngine is out of the repository: its source submodule, the build
   script, the C bindings, the `refengine` feature and its unused data files
   (lexicon, layouts, letter distribution) are gone, so cloning needs no

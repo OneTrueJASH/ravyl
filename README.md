@@ -83,6 +83,24 @@ cargo bench --bench engine
 
 Criterion benchmarks for move generation (EMPTY, MID, END and blank-heavy BEECH positions), playouts per second for a fixed candidate set, and the endgame solver.
 
+### The engine from the command line
+
+The engine, RAVYN, has its own command-line tool for scripting and analysis without the TUI. Positions are CGP strings (`BOARD RACK[/OPP] [OURS/THEIRS ...]`):
+
+```bash
+cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/15/15/15/15/15 AEINRST/ 0/0 0'
+```
+
+| Command | What it does |
+|---|---|
+| `gen` | every play, exchange and pass, best static equity first |
+| `sim` | simulates the best candidates (`--candidates`, `--seconds`) and ranks them by mean final spread, with win% |
+| `endgame` | bag empty: exact search; uses the opponent's rack after the `/` when given, otherwise every unseen tile (`--last us\|them`) |
+| `preendgame` | one tile in the bag: every play and the pass, exact over each possible last tile |
+| `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
+
+`--data DIR` (or `$RAVYN_DATA`) points at the directory holding `data/words.fst` and the leave table; `--help` lists everything.
+
 ### Self-play harness
 
 ```bash
