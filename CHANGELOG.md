@@ -71,6 +71,12 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   carried by every board, with `CROSSPLAY` as the preset. Scoring, move
   generation, tile counts and leave values read them from the position
   instead of constants (move generation measured 2-6% faster).
+- Simulation keeps every core busy: jobs run as a continuous pipeline
+  instead of rounds that waited for their slowest job (workers had been
+  idle about 30% of the time). Simulating every play of a 40,503-play
+  position went from 4,478 to 5,497 playouts a second, and twice as many
+  plays (3,274 against 1,692) reached the playout floor in 12 seconds.
+  Each playout is still the same deal in every run.
 - Works on an 80×24 terminal: from 80 columns a mini board keeps a
   compact sidebar beside it (rack, score and bag, the sort row and the
   move list). Before, only the board was drawn and Tab focused panes that
