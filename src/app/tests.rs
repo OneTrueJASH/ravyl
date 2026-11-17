@@ -230,12 +230,10 @@ fn inference_is_polled_after_ranking() {
     }
     assert!(!app.has_background_work());
     assert!(app.sim_results.is_some());
-    if app.refengine_simulator.is_some() {
-        assert!(
-            app.inferred_opponent_rack.is_some(),
-            "inference result never arrived"
-        );
-    }
+    assert!(
+        app.inferred_opponent_rack.is_some(),
+        "inference result never arrived"
+    );
 }
 
 #[test]

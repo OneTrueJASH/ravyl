@@ -258,13 +258,14 @@ impl App {
         }
     }
 
-    /// Ask RefEngine what the opponent probably kept, if their last move was
-    /// detected on the board and the bag still has tiles. Runs in the
-    /// background; the result updates the stats pane, and the returned
-    /// second receiver lets the evaluation thread wait briefly for it so
-    /// fresh inference can bias the playout deals.
+    /// Infer what the opponent probably kept, if their last move was
+    /// detected on the board and the bag still has tiles
+    /// ([`ravyn::inference`]). Runs in the background; the result updates
+    /// the stats pane, and the returned second receiver lets the evaluation
+    /// thread wait briefly for it so fresh inference can bias the playout
+    /// deals.
     pub(super) fn start_inference(&mut self) -> Option<Receiver<Option<InferenceResult>>> {
-        let refengine = self.refengine_simulator.as_ref()?;
+        let dictionary = Arc::clone(self.dictionary.as_ref()?);
         if self.inference_receiver.is_some() || self.state.is_endgame() {
             return None;
         }
@@ -274,27 +275,45 @@ impl App {
             .pending_opponent_tiles
             .take()
             .or_else(|| self.detect_opponent_tiles())?;
-        let pre_opponent_board = self
+        // The board as the opponent saw it, before their play.
+        let board = self
             .pre_opponent_board
             .take()
-            .or_else(|| self.last_applied_board.clone());
-        // RefEngine wants the scores before the opponent's move.
+            .or_else(|| self.last_applied_board.clone())
+            .unwrap_or_else(|| self.state.board.clone());
+        let played: Vec<Tile> = opponent_tiles
+            .chars()
+            .map(|c| {
+                if c == '?' {
+                    Tile::blank(' ')
+                } else {
+                    Tile::new(c)
+                }
+            })
+            .collect();
         let move_score = self.pending_opponent_score;
-        let scores = (self.our_score, self.opp_score.saturating_sub(move_score));
-        let state = self.state.clone();
-        let refengine = Arc::clone(refengine);
+        let our_rack = self.state.rack.tiles();
 
         let (tx, rx) = mpsc::channel();
         let (tx_eval, rx_eval) = mpsc::channel();
         self.inference_receiver = Some((self.opp_move_stamp, rx));
         spawn_worker(move || {
-            let result = refengine.infer_opponent_rack(
-                &state,
-                &opponent_tiles,
+            log(&format!(
+                "Inference: opponent played {} for {}",
+                opponent_tiles, move_score
+            ));
+            let result = ravyn::inference::infer_leave(
+                &board,
+                &dictionary,
+                &our_rack,
+                &played,
                 move_score,
-                pre_opponent_board.as_ref(),
-                scores,
+                &ravyn::inference::InferenceSettings::default(),
+                None,
             );
+            if result.is_none() {
+                log("Inference: no rack is consistent with that play");
+            }
             let _ = tx_eval.send(result.clone());
             let _ = tx.send(result);
         });

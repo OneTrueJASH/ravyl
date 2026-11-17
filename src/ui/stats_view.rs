@@ -30,9 +30,6 @@ pub struct RackStatsWidget<'a> {
     /// Mean measured equity loss per opponent move and how many were
     /// measured, once any have been.
     opp_skill: Option<(f32, u32)>,
-    /// Shown instead of the inference lines when inference cannot run
-    /// (e.g. a build without RefEngine).
-    inference_note: Option<&'a str>,
 }
 
 impl<'a> RackStatsWidget<'a> {
@@ -54,14 +51,7 @@ impl<'a> RackStatsWidget<'a> {
             final_turn: final_turn.0,
             final_turn_known: final_turn.1,
             opp_skill,
-            inference_note: None,
         }
-    }
-
-    /// Note to show when opponent inference is unavailable.
-    pub fn with_inference_note(mut self, note: Option<&'a str>) -> Self {
-        self.inference_note = note;
-        self
     }
 
     /// Rows the pane needs to show everything at `width` columns (its
@@ -77,26 +67,22 @@ impl<'a> RackStatsWidget<'a> {
             rows += 1; // final move
         }
         rows += 1; // power tiles
-        match self.inferred_rack {
-            Some(infer) => {
-                if !infer.letter_marginals.is_empty() || !infer.top_leaves.is_empty() {
-                    rows += 1; // separator
-                }
-                if !infer.letter_marginals.is_empty() {
-                    if infer
-                        .letter_marginals
-                        .iter()
-                        .any(|m| m.p_at_least_one >= 1.0)
-                    {
-                        rows += 1; // kept letters
-                    }
-                    rows += 1; // played
-                } else if !infer.top_leaves.is_empty() {
-                    rows += 2; // likely rack, played / kept
-                }
+        if let Some(infer) = self.inferred_rack {
+            if !infer.letter_marginals.is_empty() || !infer.top_leaves.is_empty() {
+                rows += 1; // separator
             }
-            None if self.inference_note.is_some() => rows += 1,
-            None => {}
+            if !infer.letter_marginals.is_empty() {
+                if infer
+                    .letter_marginals
+                    .iter()
+                    .any(|m| m.p_at_least_one >= 1.0)
+                {
+                    rows += 1; // kept letters
+                }
+                rows += 1; // played
+            } else if !infer.top_leaves.is_empty() {
+                rows += 2; // likely rack, played / kept
+            }
         }
         if self.opp_skill.is_some() {
             rows += 1;
@@ -618,22 +604,6 @@ impl Widget for RackStatsWidget<'_> {
                 }
             }
 
-            if self.inferred_rack.is_none() {
-                if let Some(note) = self.inference_note {
-                    if row < inner.y + inner.height {
-                        Self::render_text(
-                            buf,
-                            inner.x,
-                            row,
-                            max_x,
-                            &format!("Opp kept: {}", note),
-                            Style::new().fg(theme::current().text_dim),
-                        );
-                        row += 1;
-                    }
-                }
-            }
-
             // === Measured opponent strength ===
             if let Some((mean_loss, moves)) = self.opp_skill {
                 if row < inner.y + inner.height {
@@ -761,7 +731,6 @@ pub fn render_rack_stats(
     scores: (u32, u32),
     final_turn: (FinalTurn, bool),
     opp_skill: Option<(f32, u32)>,
-    inference_note: Option<&str>,
 ) {
     let widget = RackStatsWidget::new(
         state,
@@ -770,8 +739,7 @@ pub fn render_rack_stats(
         scores,
         final_turn,
         opp_skill,
-    )
-    .with_inference_note(inference_note);
+    );
     frame.render_widget(widget, area);
 }
 
@@ -790,7 +758,6 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// Rows the full stats pane needs at `width` columns, for the layout.
-#[allow(clippy::too_many_arguments)]
 pub fn rack_stats_rows(
     width: u16,
     state: &SolverState,
@@ -798,10 +765,8 @@ pub fn rack_stats_rows(
     scores: (u32, u32),
     final_turn: (FinalTurn, bool),
     opp_skill: Option<(f32, u32)>,
-    inference_note: Option<&str>,
 ) -> u16 {
     RackStatsWidget::new(state, false, inferred_rack, scores, final_turn, opp_skill)
-        .with_inference_note(inference_note)
         .rows_needed(width)
 }
 

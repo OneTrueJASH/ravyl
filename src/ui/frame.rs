@@ -23,7 +23,6 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             (app.our_score, app.opp_score),
             (app.final_turn, app.final_turn_known),
             app.opp_error_estimate(),
-            app.inference_note(),
         )
     };
     let first = AppLayout::compute(size, app.sidebar_visible);
@@ -101,7 +100,6 @@ pub fn draw_ui(frame: &mut Frame, app: &App) {
             (app.our_score, app.opp_score),
             (app.final_turn, app.final_turn_known),
             opp_skill,
-            app.inference_note(),
         );
     }
     if let Some(summary) = layout.rack_summary {
@@ -534,13 +532,12 @@ mod tests {
 
     /// Snapshots of the whole UI at three terminal sizes, as text. The
     /// position and messages are fixed so the renders are deterministic;
-    /// they need the real leave table (static equity is on screen), so
-    /// builds without RefEngine or LFS data skip them.
-    #[cfg(feature = "refengine")]
+    /// they need the real leave table (static equity is on screen), so a
+    /// checkout without LFS data skips them.
     #[test]
     fn draw_ui_snapshots() {
         let _lock = crate::datafiles::test_data::refengine_lock();
-        if crate::datafiles::test_data::refengine_data().is_none() {
+        if crate::datafiles::test_data::file(crate::datafiles::LEAVES_KLV2).is_none() {
             return;
         }
         let Some(mut app) = sample_app() else {

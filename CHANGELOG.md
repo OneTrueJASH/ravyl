@@ -82,6 +82,14 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   of 32 ms, a redraw 0.28 ms instead of 3.6 ms, and a filtered redraw
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
+- Opponent rack inference is the engine's own (`ravyn::inference`)
+  instead of RefEngine's. Every leave the opponent could have kept is tried
+  and kept if their play was within 5 points of that rack's best, weighted
+  by how likely it was to be drawn; it agrees with RefEngine to within 0.06
+  tiles per letter (a test checks it) and is as fast or faster. The app
+  no longer starts RefEngine (68 ms less at launch), builds without RefEngine
+  now infer too, and the `refengine` feature is off by default: it only
+  serves as a reference in tests, so building needs no C compiler.
 - Works on an 80×24 terminal: from 80 columns a mini board keeps a
   compact sidebar beside it (rack, score and bag, the sort row and the
   move list). Before, only the board was drawn and Tab focused panes that

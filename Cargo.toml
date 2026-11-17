@@ -11,9 +11,10 @@ rust-version = "1.88"
 publish = false
 
 [features]
-default = ["refengine"]
-# Opponent-rack inference (and the reference move generator in tests) via
-# the RefEngine C engine, compiled from external/refengine-src.
+default = []
+# The RefEngine C engine, compiled from external/refengine-src, as a reference
+# for tests: its move generator and rack inference are checked against the
+# engine's. The app itself does not use it.
 refengine = ["dep:cc"]
 
 [workspace]

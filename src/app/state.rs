@@ -13,8 +13,8 @@ use crate::dictionary::Dictionary;
 use crate::endgame::{EndgameMove, FinalTurn};
 use crate::game::SolverState;
 use crate::logging::log;
-use crate::refengine_mcts::{InferenceResult, RefSimulator};
-use crate::settings::{self, Settings};
+use crate::refengine_mcts::InferenceResult;
+use crate::settings::Settings;
 use crate::sim::{ArmStatus, ArmSummary, SimSnapshot, SimState};
 use crate::solver::Move;
 use crate::ui::menu_popup::EscapeMenuOption;
@@ -468,9 +468,6 @@ pub struct App {
     /// Coverage of the last simulation on this position (kept after it
     /// ends, for the suggestions header).
     pub sim_progress: Option<SimProgress>,
-    pub(super) refengine_simulator: Option<Arc<RefSimulator>>,
-    /// Why RefEngine could not be started, when it could not.
-    pub(super) refengine_unavailable: Option<String>,
     pub dialog: DialogState,
     pub should_quit: bool,
     pub board_tab: BoardTab,
@@ -542,16 +539,6 @@ impl App {
 
     /// Create a new App with the given settings.
     pub fn with_settings(settings: Settings) -> Self {
-        let refengine = crate::datafiles::refengine_data_dir()
-            .and_then(|dir| RefSimulator::shared(&dir.to_string_lossy(), settings::LEXICON));
-        let (refengine_simulator, refengine_unavailable) = match refengine {
-            Ok(sim) => (Some(sim), None),
-            Err(e) => {
-                log(&format!("Opponent inference unavailable: {}", e));
-                (None, Some(e))
-            }
-        };
-
         let sidebar_visible = settings.display.sidebar_visible;
         let sort_mode = settings.display.default_sort.to_sort_mode();
 
@@ -585,8 +572,6 @@ impl App {
             position_stamp: 0,
             mcts_progress: None,
             sim_progress: None,
-            refengine_simulator,
-            refengine_unavailable,
             inferred_opponent_rack: None,
             last_applied_board: None,
             pending_opponent_tiles: None,
@@ -621,13 +606,6 @@ impl App {
     pub fn set_message(&mut self, kind: MessageKind, text: impl Into<String>) {
         self.message = Some(text.into());
         self.message_kind = kind;
-    }
-
-    /// Note for the stats pane when opponent inference cannot run.
-    pub fn inference_note(&self) -> Option<&'static str> {
-        self.refengine_unavailable
-            .as_ref()
-            .map(|_| "inference unavailable")
     }
 
     /// Toggle the board typing direction between horizontal and vertical.

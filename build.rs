@@ -1,7 +1,7 @@
 //! Compiles the vendored RefEngine C engine into a static library when the
-//! `refengine` feature is on (the default). RefEngine is only used for opponent
-//! rack inference and as the reference move generator in tests; without the
-//! feature the pure-Rust solver builds on its own.
+//! `refengine` feature is on (it is off by default). RefEngine is only a
+//! reference in tests, for move generation and rack inference; the app
+//! builds and runs without it.
 
 #[cfg(feature = "refengine")]
 use std::env;
