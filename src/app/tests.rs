@@ -1597,7 +1597,7 @@ fn filter_matches_words_and_coordinates() {
 
 /// With one tile in the bag, M solves every play exactly over the
 /// possible last tiles instead of simulating: results arrive marked exact,
-/// the best play is solved, and passing stays in the list.
+/// and the best play and the pass are solved.
 #[test]
 fn one_tile_in_the_bag_is_solved_exactly() {
     let _lock = crate::datafiles::test_data::refengine_lock();
@@ -1661,8 +1661,9 @@ fn one_tile_in_the_bag_is_solved_exactly() {
         .find(|r| r.word == top.word && r.row == top.row && r.col == top.col)
         .expect("the top play is solved");
     assert_eq!(first.status, SimStatus::Exact);
-    assert!(app
-        .suggestions
+    let pass = results
         .iter()
-        .any(|m| m.kind == crate::solver::MoveKind::Pass));
+        .find(|r| r.word == crate::solver::PASS_WORD)
+        .expect("the pass is solved");
+    assert_eq!(pass.status, SimStatus::Exact);
 }

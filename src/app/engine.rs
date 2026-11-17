@@ -529,7 +529,7 @@ impl App {
                     score_diff,
                     Some(&cancel),
                 ) {
-                    let _ = tx.send(preendgame_outcome(results, Move::pass(&ours)));
+                    let _ = tx.send(preendgame_outcome(results));
                 }
             });
             return;
@@ -701,8 +701,9 @@ fn endgame_outcome(results: Vec<EndgameMove>, score_diff: i32) -> ExactOutcome {
 
 /// The pre-endgame solver's ranking, for the table: solved plays with
 /// their exact win chance and expected spread over the possible last
-/// tiles; plays it proved cannot be best are listed without results.
-fn preendgame_outcome(results: Vec<PreEndgameMove>, pass: Move) -> ExactOutcome {
+/// tiles (passing included); plays it proved cannot be best are listed
+/// without results.
+fn preendgame_outcome(results: Vec<PreEndgameMove>) -> ExactOutcome {
     let best = results.first().map_or(0.0, |b| b.spread);
     let solved = results.iter().filter(|r| r.exact).count();
     if let Some(top) = results.first() {
@@ -725,7 +726,7 @@ fn preendgame_outcome(results: Vec<PreEndgameMove>, pass: Move) -> ExactOutcome 
         group_thousands(solved as u64),
         group_thousands(results.len() as u64)
     );
-    let mut moves = Vec::with_capacity(results.len() + 1);
+    let mut moves = Vec::with_capacity(results.len());
     let mut rows = Vec::with_capacity(solved);
     for r in results {
         let mut mv = r.mv;
@@ -735,8 +736,6 @@ fn preendgame_outcome(results: Vec<PreEndgameMove>, pass: Move) -> ExactOutcome 
         }
         moves.push(mv);
     }
-    // Passing is not evaluated yet; keep it in the list.
-    moves.push(pass);
     ExactOutcome {
         moves,
         results: rows,

@@ -88,8 +88,10 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   exact win probability and expected spread. Plays are capped cheaply
   first and solved best-first, so a rack with a blank (7,354 plays) takes
   about 9 s and most racks under a second; the best play is always
-  solved exactly (a test checks it against solving every play). Passing
-  to leave the bag to the opponent is not evaluated yet.
+  solved exactly (a test checks it against solving every play). Passing,
+  which leaves the bag for the opponent, is solved too: each of their
+  replies, then our turn, then their last play (their passing back
+  counts as ending the game, so a pass is never overrated).
 - Best-play searches prune by anchor: each anchor's plays are bounded
   (the rack's most valuable tiles on the most multiplied squares, plus the
   best leave of that size), anchors are searched best-first, and the
