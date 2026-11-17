@@ -25,6 +25,15 @@ The repository is a Cargo workspace:
 Engine changes go in `crates/ravyn`; anything about the terminal or files
 stays in the root package.
 
+RAVYN also has its own repository, [OneTrueJASH/ravyn](https://github.com/OneTrueJASH/ravyn)
+(private for now), with the engine's full history. Until it is public,
+`crates/ravyn` here is where the engine is changed; after engine changes
+land, mirror them there with `scripts/sync-ravyn.sh [path to ravyn]`, which
+copies the crate and its data and shows what changed for you to commit.
+The engine finds `data/` in its own directory when it has one (the
+standalone repository) and in the workspace root otherwise, so the same
+files work in both.
+
 ## Before every push
 
 ```bash
