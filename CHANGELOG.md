@@ -27,6 +27,11 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   gains `preendgame::solve_two_in_bag` and `proven`,
   `EndgameSolver::best_value_with` and `Solver::top_moves_by_score`;
   `DrawOutcome::tile` became `tiles` (a string).
+- The one-tile pre-endgame got the same machinery (solved best-first with
+  per-case abandonment, the pass's cases sharing the opponent's replies)
+  and a deadline: the app's simulation budget, `--seconds` on the
+  command line. On six self-played positions it is 25–56% faster; the
+  slowest went from 79 s to 39 s. `solve_one_in_bag` takes a `deadline`.
 - `ravyn match` shows its progress on stderr: games played, time elapsed
   and left, and the running score and spread with their confidence
   intervals (rewritten in place on a terminal, a line a minute when

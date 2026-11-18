@@ -545,6 +545,7 @@ impl App {
                         &unseen,
                         score_diff,
                         Some(&cancel),
+                        Some(Instant::now() + budget),
                     )
                 } else {
                     ravyn::preendgame::solve_two_in_bag(
@@ -750,9 +751,15 @@ fn preendgame_outcome(results: Vec<PreEndgameMove>, bag: usize) -> ExactOutcome 
             cases.join(", ")
         ));
     }
-    let message = if bag == 1 {
+    let message = if bag == 1 && ravyn::preendgame::proven(&results) {
         format!(
             "Pre-endgame: {} of {} plays solved exactly over every possible last tile; the rest cannot be best",
+            group_thousands(solved as u64),
+            group_thousands(results.len() as u64)
+        )
+    } else if bag == 1 {
+        format!(
+            "Pre-endgame: time ran out after solving {} of {} plays; the best of those is shown, unsolved plays might be better",
             group_thousands(solved as u64),
             group_thousands(results.len() as u64)
         )
