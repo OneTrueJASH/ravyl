@@ -23,7 +23,7 @@ fi
 rsync -a --delete \
     --exclude /.git/ --exclude /target/ --exclude /data/ \
     --exclude /README.md --exclude /.github/ --exclude /Cargo.lock \
-    --exclude /.gitignore --exclude /fuzz/target/ \
+    --exclude /.gitignore --exclude /fuzz/target/ --exclude /assets/ \
     "$here/crates/ravyn/" "$dest/"
 mkdir -p "$dest/data"
 # Only the leave values: the word list comes from the data repository.

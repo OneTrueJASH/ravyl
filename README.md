@@ -1,4 +1,10 @@
-# ravyl
+<p align="center">
+  <img src="assets/banner.jpg" alt="RAVYL: RAVYN's companion. A raven perched on a terminal window watching ranked moves." width="100%">
+</p>
+
+# RAVYL
+
+**Pronunciation:** *RAV-əl* (/ˈrævəl/), like "ravel", as in *unravel*.
 
 A terminal UI for analyzing [NYT Crossplay](https://www.nytimes.com/games/crossplay) word game positions.
 
