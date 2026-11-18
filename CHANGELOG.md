@@ -17,6 +17,8 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   remain).
 
 ### Added
+- `Dictionary::from_fst_bytes`: load a word list from bytes, without a
+  file system.
 - The Scrabble endgame searches in parallel: after the previous depth's
   best move, the remaining root moves run across all cores, sharing one
   transposition table. With the earlier speedups (positions one ply from
