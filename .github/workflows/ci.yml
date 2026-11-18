@@ -38,6 +38,18 @@ jobs:
           toolchain: stable
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Fetch the word list
+        # From the private data repository: a read-only token in the
+        # RAVYN_DATA_TOKEN secret. Without it (pull requests from forks get
+        # no secrets) the tests that need the word list skip.
+        env:
+          RAVYN_DATA_TOKEN: ${{ secrets.RAVYN_DATA_TOKEN }}
+        run: |
+          if [ -n "$RAVYN_DATA_TOKEN" ]; then
+            cargo run --release -p ravyn --bin ravyn -- fetch-data --data .
+          else
+            echo "::warning::RAVYN_DATA_TOKEN is not set: tests that need the word list will skip"
+          fi
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Test

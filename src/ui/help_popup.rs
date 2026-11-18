@@ -212,7 +212,7 @@ impl<'a> HelpPopup<'a> {
                 desc,
             )),
             Line::from(Span::styled(
-                "cpsolver2 by OneTrueJASH (github.com/OneTrueJASH/cpsolver2)",
+                "ravyl by OneTrueJASH (github.com/OneTrueJASH/ravyl)",
                 desc,
             )),
             Line::from(Span::styled(

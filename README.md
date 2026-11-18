@@ -1,8 +1,8 @@
-# cpsolver2
+# ravyl
 
 A terminal UI for analyzing [NYT Crossplay](https://www.nytimes.com/games/crossplay) word game positions.
 
-Built with [ratatui](https://ratatui.rs), cpsolver2 provides real-time move generation, Monte Carlo simulation, and an exhaustive endgame solver — all tuned for Crossplay's rules rather than standard Scrabble.
+Built with [ratatui](https://ratatui.rs), ravyl provides real-time move generation, Monte Carlo simulation, and an exhaustive endgame solver — all tuned for Crossplay's rules rather than standard Scrabble.
 
 ## Features
 
@@ -43,18 +43,19 @@ With more tiles in the bag the app plays each candidate out many times under the
 ### Prerequisites
 
 - Rust 1.88+
-- The data files `data/words.fst` (the word list) and `data/leaves.rlv` (the leave values), both in the repository
+- The word list, `data/words.fst`, fetched from the data repository (below); the leave values, `data/leaves.rlv`, are in this repository
 
 ```bash
-git clone https://github.com/OneTrueJASH/cpsolver2
-cd cpsolver2
+git clone https://github.com/OneTrueJASH/ravyl
+cd ravyl
+cargo run --release -p ravyn --bin ravyn -- fetch-data
 ```
 
 `data/leaves.rlv` was trained by `ravyn train-leaves` (three generations of 500,000 self-play games, each playing with the last one's values); a per-letter heuristic is used if it is missing.
 
 The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst` is built without them.
 
-The data files also live in their own repository, versioned and checksummed (as RefEngine keeps its lexica in a separate data repository), and `ravyn fetch-data` installs them in `~/.ravyn/data`, which cpsolver2 also searches. While that repository is private it needs a token (`$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN`, or a `gh auth login`). The engine's crate package leaves the word list out.
+The word list lives in its own repository, versioned and checksummed (as RefEngine keeps its lexica in a separate data repository), and `ravyn fetch-data` installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. While that repository is private it needs a token (`$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN`, or a `gh auth login`). The engine's crate package leaves the word list out.
 
 ### Build and run
 
@@ -66,14 +67,14 @@ cargo run --release
 The binary is pure Rust with no runtime library dependency. It needs the data files at run time and looks for a directory holding `data/words.fst` and `data/leaves.rlv` in this order:
 
 1. `--data-dir <DIR>`
-2. `$CPSOLVER_DATA_DIR`
-3. the user data directory: `~/.local/share/cpsolver2` on Linux, `~/Library/Application Support/cpsolver2` on macOS
-4. `<exe>/../share/cpsolver2`
+2. `$RAVYL_DATA_DIR`
+3. the user data directory: `~/.local/share/ravyl` on Linux, `~/Library/Application Support/ravyl` on macOS
+4. `<exe>/../share/ravyl`
 5. the working directory (running from a checkout)
 
 ```text
-cpsolver2 [--game <NAME>] [--data-dir <DIR>]
-cpsolver2 --list   cpsolver2 --help   cpsolver2 --version
+ravyl [--game <NAME>] [--data-dir <DIR>]
+ravyl --list   ravyl --help   ravyl --version
 ```
 
 `--game <NAME>` opens the saved game called NAME (matched by its file name, so case and punctuation do not matter) or starts a new game with that name; `--list` prints the saved games (name, score, tiles in the bag, last played) and exits.
@@ -182,7 +183,7 @@ Mouse: click to focus a pane, square or row; double-click a suggestion to apply 
 
 ### Saved games
 
-Every game is saved as you play, one file per game in `games/` under the user data directory (`~/.local/share/cpsolver2/games/` on Linux, `~/Library/Application Support/cpsolver2/games/` on macOS): the position, rack, scores, who has the final turn, and the opponent-strength measurement. Saves happen at most about once a second while the position changes, and on exit, including when the terminal window is closed (SIGHUP) or the app is killed with SIGTERM or SIGINT.
+Every game is saved as you play, one file per game in `games/` under the user data directory (`~/.local/share/ravyl/games/` on Linux, `~/Library/Application Support/ravyl/games/` on macOS): the position, rack, scores, who has the final turn, and the opponent-strength measurement. Saves happen at most about once a second while the position changes, and on exit, including when the terminal window is closed (SIGHUP) or the app is killed with SIGTERM or SIGINT.
 
 A new game is called `Untitled YYYY-MM-DD HH:MM` until you name it (Esc menu → Save Game As…, usually with the opponent's name, which the title bar then shows). Saving under the name of another saved game asks before replacing it. Quitting an untitled game offers to name it first, but never insists.
 
@@ -217,7 +218,7 @@ Key architectural choices:
 
 ## Configuration
 
-Preferences are automatically saved to `~/.config/cpsolver2/settings.toml` (written atomically):
+Preferences are automatically saved to `~/.config/ravyl/settings.toml` (written atomically):
 
 - **Default sort** — persisted when you cycle sort mode with `S` in the suggestions pane or click a sort tab
 - **Sidebar visibility** — persisted when you toggle with `\`
@@ -229,12 +230,12 @@ Missing keys take their defaults. If the file cannot be parsed, it is moved asid
 
 ### Logs
 
-Each run logs to `cpsolver2-<pid>.log` in `~/.local/state/cpsolver2/` on Linux, or `~/Library/Caches/cpsolver2/` on macOS. The file is created with mode 0600. Logs older than a week are pruned at startup, and at most 20 are kept. The Logs tab (`` ` ``) shows the current solve's lines from memory.
+Each run logs to `ravyl-<pid>.log` in `~/.local/state/ravyl/` on Linux, or `~/Library/Caches/ravyl/` on macOS. The file is created with mode 0600. Logs older than a week are pruned at startup, and at most 20 are kept. The Logs tab (`` ` ``) shows the current solve's lines from memory.
 
 ## License
 
 Copyright (c) 2026 OneTrueJASH.
 
-cpsolver2 and its engine, RAVYN (`crates/ravyn`), are licensed under the [MIT License](LICENSE).
+ravyl and its engine, RAVYN (`crates/ravyn`), are licensed under the [MIT License](LICENSE).
 
-Versions up to and including 0da908c were GPL-3.0-or-later, because they built on RefEngine; nothing from RefEngine remains in the repository but a record of its move generation on reference positions, kept as test fixtures.
+Versions up to and including 5433194 were GPL-3.0-or-later, because they built on RefEngine; nothing from RefEngine remains in the repository but a record of its move generation on reference positions, kept as test fixtures.

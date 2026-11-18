@@ -16,6 +16,16 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   opponent. The list is in `data/crossplay-removed.txt` (196,419 words
   remain).
 
+### Changed
+- cpsolver2 is now **RAVYL**, RAVYN's companion: the package, the
+  `ravyl` binary, and the settings, saved-game and log directories
+  (`ravyl/`). On first start, settings and saved games move from the old
+  `cpsolver2/` directories; `$RAVYL_DATA_DIR` replaces
+  `$CPSOLVER_DATA_DIR`, which is still read; games saved before keep
+  loading (their `cpsolver.final` opcodes are read, `ravyl.final` written).
+- The word list is no longer in the repository: `ravyn fetch-data`
+  installs it (see README).
+
 ### Security
 - GCG files holding control characters are refused: a terminal escape
   sequence in a player's name or note (say, an OSC 52 clipboard write)

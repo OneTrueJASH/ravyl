@@ -53,9 +53,9 @@ pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
 pub fn load_default_dictionary() -> Result<Dictionary> {
     let fst_path = datafiles::find_data_file(datafiles::WORDS_FST).context(
         "Could not find the dictionary (data/words.fst). Run `ravyn fetch-data` \
-         (installs it in ~/.ravyn), point --data-dir or CPSOLVER_DATA_DIR at a \
+         (installs it in ~/.ravyn), point --data-dir or RAVYL_DATA_DIR at a \
          directory holding data/, install them under the user data directory \
-         (cpsolver2/), or run from the repository root.",
+         (ravyl/), or run from the repository root.",
     )?;
     let root = fst_path
         .parent()

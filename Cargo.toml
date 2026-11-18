@@ -1,10 +1,10 @@
 [package]
-name = "cpsolver2"
+name = "ravyl"
 version = "0.1.0"
 edition = "2021"
 description = "TUI solver for NYT Crossplay word game positions"
 license = "MIT"
-repository = "https://github.com/OneTrueJASH/cpsolver2"
+repository = "https://github.com/OneTrueJASH/ravyl"
 keywords = ["crossplay", "word-game", "solver", "tui", "scrabble"]
 categories = ["command-line-utilities", "games"]
 rust-version = "1.88"

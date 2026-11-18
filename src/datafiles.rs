@@ -51,7 +51,57 @@ pub fn file_status(path: &Path) -> FileStatus {
 }
 
 /// Environment variable naming the data directory.
-pub const DATA_DIR_ENV: &str = "CPSOLVER_DATA_DIR";
+pub const DATA_DIR_ENV: &str = "RAVYL_DATA_DIR";
+
+/// Its name before the rename to RAVYL, still honoured.
+pub const LEGACY_DATA_DIR_ENV: &str = "CPSOLVER_DATA_DIR";
+
+/// The name of the app's directories before the rename to RAVYL.
+const LEGACY_NAME: &str = "cpsolver2";
+
+/// Move the app's directories from their names before the rename to RAVYL
+/// (`cpsolver2/` under the user config and data directories, holding the
+/// settings and saved games) to `ravyl/`, once: only when the old one
+/// exists and the new one does not. Returns what was moved.
+pub fn migrate_legacy_dirs() -> Vec<(PathBuf, PathBuf)> {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    let bases: Vec<PathBuf> = [dirs::config_dir(), dirs::data_dir()]
+        .into_iter()
+        .flatten()
+        .collect();
+    migrate_in(&bases)
+}
+
+/// [`migrate_legacy_dirs`] under these base directories.
+fn migrate_in(bases: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
+    let mut moved = Vec::new();
+    for base in bases {
+        let (old, new) = (base.join(LEGACY_NAME), base.join("ravyl"));
+        if old.is_dir() && !new.exists() && !in_use(&old) && std::fs::rename(&old, &new).is_ok() {
+            moved.push((old, new));
+        }
+    }
+    moved
+}
+
+/// True while a running window of the old app holds a game in `dir`
+/// open (a live process's `games/<slug>.lock`): moving the directory
+/// then would pull it out from under that window.
+fn in_use(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir.join("games")) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let path = e.path();
+        path.extension().is_some_and(|x| x == "lock")
+            && std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| t.trim().parse::<u32>().ok())
+                .is_some_and(crate::games::pid_alive)
+    })
+}
 
 /// The `--data-dir` command-line choice, set once at startup.
 static CLI_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -64,11 +114,11 @@ pub fn set_cli_data_dir(dir: PathBuf) {
 /// Directories searched for data files, in order:
 ///
 /// 1. `--data-dir`
-/// 2. `$CPSOLVER_DATA_DIR`
-/// 3. the user data directory (`~/.local/share/cpsolver2`,
-///    `~/Library/Application Support/cpsolver2`)
+/// 2. `$RAVYL_DATA_DIR`
+/// 3. the user data directory (`~/.local/share/ravyl`,
+///    `~/Library/Application Support/ravyl`)
 /// 4. `~/.ravyn`, where `ravyn fetch-data` installs them
-/// 5. `<exe>/../share/cpsolver2` (an installed layout)
+/// 5. `<exe>/../share/ravyl` (an installed layout)
 /// 6. the working directory (running from a checkout, for development)
 ///
 /// Each holds `data/words.fst` and `data/leaves.rlv`. Test builds
@@ -79,7 +129,9 @@ pub fn data_roots() -> Vec<PathBuf> {
     #[cfg(test)]
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
     roots.extend(ordered_roots(
-        std::env::var_os(DATA_DIR_ENV).map(PathBuf::from),
+        std::env::var_os(DATA_DIR_ENV)
+            .or_else(|| std::env::var_os(LEGACY_DATA_DIR_ENV))
+            .map(PathBuf::from),
         CLI_DATA_DIR.get().cloned(),
         dirs::data_dir(),
         dirs::home_dir(),
@@ -100,12 +152,12 @@ fn ordered_roots(
     let mut roots = Vec::new();
     roots.extend(cli);
     roots.extend(env.filter(|p| !p.as_os_str().is_empty()));
-    roots.extend(user_data.map(|d| d.join("cpsolver2")));
+    roots.extend(user_data.map(|d| d.join("ravyl")));
     roots.extend(home.map(|h| h.join(".ravyn")));
     roots.extend(
         exe.as_deref()
             .and_then(Path::parent)
-            .map(|d| d.join("..").join("share").join("cpsolver2")),
+            .map(|d| d.join("..").join("share").join("ravyl")),
     );
     roots.push(PathBuf::from("."));
     roots
@@ -201,20 +253,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_dirs_move_once() {
+        let base = std::env::temp_dir().join(format!("ravyl-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("cpsolver2/games")).unwrap();
+        std::fs::write(base.join("cpsolver2/games/g.toml"), "x").unwrap();
+        let moved = migrate_in(std::slice::from_ref(&base));
+        assert_eq!(moved.len(), 1);
+        assert!(base.join("ravyl/games/g.toml").is_file());
+        assert!(!base.join("cpsolver2").exists());
+        // Never over an existing ravyl/ directory.
+        std::fs::create_dir_all(base.join("cpsolver2")).unwrap();
+        assert!(migrate_in(std::slice::from_ref(&base)).is_empty());
+        assert!(base.join("cpsolver2").is_dir());
+        // Not while a live process holds a game open there (this test's
+        // own pid stands in for an old window).
+        std::fs::remove_dir_all(base.join("ravyl")).unwrap();
+        std::fs::create_dir_all(base.join("cpsolver2/games")).unwrap();
+        std::fs::write(
+            base.join("cpsolver2/games/g.lock"),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        assert!(migrate_in(std::slice::from_ref(&base)).is_empty());
+        // A stale lock (no such process) does not hold it back.
+        std::fs::write(base.join("cpsolver2/games/g.lock"), "999999999").unwrap();
+        assert_eq!(migrate_in(std::slice::from_ref(&base)).len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn data_roots_are_searched_in_order() {
         let roots = ordered_roots(
             Some("/env".into()),
             Some("/cli".into()),
             Some("/home/u/.local/share".into()),
             Some("/home/u".into()),
-            Some("/opt/cp/bin/cpsolver2".into()),
+            Some("/opt/cp/bin/ravyl".into()),
         );
         let expect: Vec<PathBuf> = vec![
             "/cli".into(),
             "/env".into(),
-            "/home/u/.local/share/cpsolver2".into(),
+            "/home/u/.local/share/ravyl".into(),
             "/home/u/.ravyn".into(),
-            "/opt/cp/bin/../share/cpsolver2".into(),
+            "/opt/cp/bin/../share/ravyl".into(),
             ".".into(),
         ];
         assert_eq!(roots, expect);
@@ -225,7 +307,7 @@ mod tests {
 
     #[test]
     fn detects_lfs_pointers() {
-        let dir = std::env::temp_dir().join(format!("cpsolver2-lfs-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ravyl-lfs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stub = dir.join("stub.kwg");
         std::fs::write(

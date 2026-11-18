@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/OneTrueJASH/cpsolver2
-cd cpsolver2
+git clone https://github.com/OneTrueJASH/ravyl
+cd ravyl
 ```
 
 You need Rust 1.88 or newer; nothing else is compiled.
@@ -18,9 +18,9 @@ The repository is a Cargo workspace:
   with no dependency on the app; it logs through the `log` facade. Its
   integration, property and RefEngine-reference tests, benchmarks and fuzz
   targets live with it.
-- The root package `cpsolver2`: the TUI, saved games, settings and data
+- The root package `ravyl`: the TUI, saved games, settings and data
   file discovery (MIT, like the engine). It re-exports the engine's modules at their
-  old paths (`cpsolver2::solver`, ...), so either path works.
+  old paths (`ravyl::solver`, ...), so either path works.
 
 Engine changes go in `crates/ravyn`; anything about the terminal or files
 stays in the root package.

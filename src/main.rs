@@ -20,9 +20,9 @@ use ratatui::crossterm::terminal::{
 use ratatui::crossterm::{event, execute};
 use ratatui::prelude::*;
 
-use cpsolver2::app::{self, App};
-use cpsolver2::ui::events::AppAction;
-use cpsolver2::{datafiles, dictionary, games, logging, settings, ui};
+use ravyl::app::{self, App};
+use ravyl::ui::events::AppAction;
+use ravyl::{datafiles, dictionary, games, logging, settings, ui};
 
 /// Put the terminal back the way we found it. Safe to call more than once.
 fn restore_terminal() {
@@ -86,10 +86,10 @@ fn install_panic_hook() {
 }
 
 const USAGE: &str = "\
-cpsolver2 - NYT Crossplay solver (terminal UI)
+ravyl - NYT Crossplay solver (terminal UI)
 
-Usage: cpsolver2 [--game <NAME>] [--data-dir <DIR>]
-       cpsolver2 --list
+Usage: ravyl [--game <NAME>] [--data-dir <DIR>]
+       ravyl --list
 
 Options:
   --game <NAME>     Open the saved game NAME, or start a new game called NAME
@@ -99,11 +99,11 @@ Options:
   -V, --version     Print the version
 
 Every game is saved as you play, one file per game in the user data
-directory (cpsolver2/games/). Without --game the app starts with a list
+directory (ravyl/games/). Without --game the app starts with a list
 of saved games to pick from, when there are any.
 
-Data is looked for in --data-dir, then $CPSOLVER_DATA_DIR, then the user
-data directory (cpsolver2/), then <exe>/../share/cpsolver2, then the
+Data is looked for in --data-dir, then $RAVYL_DATA_DIR, then the user
+data directory (ravyl/), then <exe>/../share/ravyl, then the
 working directory.
 ";
 
@@ -127,13 +127,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
                 return Cli::Exit(ExitCode::SUCCESS);
             }
             "-V" | "--version" => {
-                println!("cpsolver2 {}", env!("CARGO_PKG_VERSION"));
+                println!("ravyl {}", env!("CARGO_PKG_VERSION"));
                 return Cli::Exit(ExitCode::SUCCESS);
             }
             "--data-dir" => match args.next() {
                 Some(dir) => datafiles::set_cli_data_dir(dir.into()),
                 None => {
-                    eprintln!("cpsolver2: --data-dir needs a directory\n\n{USAGE}");
+                    eprintln!("ravyl: --data-dir needs a directory\n\n{USAGE}");
                     return Cli::Exit(ExitCode::from(2));
                 }
             },
@@ -143,7 +143,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
             "--game" => match args.next().filter(|n| !n.trim().is_empty()) {
                 Some(name) => game = Some(name),
                 None => {
-                    eprintln!("cpsolver2: --game needs a name\n\n{USAGE}");
+                    eprintln!("ravyl: --game needs a name\n\n{USAGE}");
                     return Cli::Exit(ExitCode::from(2));
                 }
             },
@@ -152,7 +152,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
             }
             "--list" => list = true,
             other => {
-                eprintln!("cpsolver2: unknown argument '{other}'\n\n{USAGE}");
+                eprintln!("ravyl: unknown argument '{other}'\n\n{USAGE}");
                 return Cli::Exit(ExitCode::from(2));
             }
         }
@@ -168,7 +168,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
 /// takes no locks and leaves the old session file for the app to import.
 fn list_games() -> ExitCode {
     let Some(dir) = games::default_dir() else {
-        eprintln!("cpsolver2: no user data directory");
+        eprintln!("ravyl: no user data directory");
         return ExitCode::FAILURE;
     };
     let entries = games::list(&dir);
@@ -277,7 +277,20 @@ fn watch_signals(exit: &Arc<ExitState>) {
 }
 
 fn main() -> ExitCode {
-    let game = match parse_args(std::env::args().skip(1)) {
+    let cli = parse_args(std::env::args().skip(1));
+    if matches!(cli, Cli::Exit(_)) {
+        // --help, --version and bad arguments touch nothing.
+        if let Cli::Exit(code) = cli {
+            return code;
+        }
+    }
+    // Settings and saved games from before the rename move to ravyl/ once,
+    // and only once nothing still uses them: not while an old window
+    // holds a game open.
+    for (old, new) in datafiles::migrate_legacy_dirs() {
+        eprintln!("ravyl: moved {} to {}", old.display(), new.display());
+    }
+    let game = match cli {
         Cli::Exit(code) => return code,
         Cli::List => return list_games(),
         Cli::Run(game) => game,
@@ -286,21 +299,21 @@ fn main() -> ExitCode {
     // taken over.
     if let (Some(dir), Some(name)) = (games::default_dir(), game.as_deref()) {
         if games::lock_holder(&dir, &games::slug(name)).is_some() {
-            eprintln!("cpsolver2: {} is open in another window", name.trim());
+            eprintln!("ravyl: {} is open in another window", name.trim());
             return ExitCode::FAILURE;
         }
     }
     let exit = Arc::new(ExitState::default());
     watch_signals(&exit);
     install_panic_hook();
-    cpsolver2::logging::install_engine_bridge();
+    ravyl::logging::install_engine_bridge();
 
     // Data is loaded before the terminal is taken over, so a missing file
     // is reported plainly on stderr with a non-zero exit code.
     let dict = match dictionary::load_default_dictionary() {
         Ok(dict) => dict,
         Err(e) => {
-            eprintln!("cpsolver2: failed to load the dictionary: {e:#}");
+            eprintln!("ravyl: failed to load the dictionary: {e:#}");
             return ExitCode::FAILURE;
         }
     };
@@ -309,7 +322,7 @@ fn main() -> ExitCode {
 
     let res = run_tui(settings, settings_warning, dict, game, &exit);
     if let Err(err) = res {
-        eprintln!("cpsolver2: {err:#}");
+        eprintln!("ravyl: {err:#}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

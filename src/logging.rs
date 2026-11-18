@@ -1,8 +1,8 @@
 //! Per-instance logging.
 //!
-//! Each process writes `cpsolver2-<pid>.log` under the user's state
-//! directory (`~/.local/state/cpsolver2` on Linux; the cache directory,
-//! `~/Library/Caches/cpsolver2`, on macOS where there is no state
+//! Each process writes `ravyl-<pid>.log` under the user's state
+//! directory (`~/.local/state/ravyl` on Linux; the cache directory,
+//! `~/Library/Caches/ravyl`, on macOS where there is no state
 //! directory). The file is created fresh with mode 0600 and never through a
 //! symlink. Logs older than a week are pruned at startup, keeping at most
 //! [`MAX_KEPT_LOGS`] files.
@@ -23,7 +23,7 @@ pub const RING_CAPACITY: usize = 10_000;
 const MAX_KEPT_LOGS: usize = 20;
 /// Log files older than this are pruned at startup.
 const MAX_LOG_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
-const LOG_PREFIX: &str = "cpsolver2-";
+const LOG_PREFIX: &str = "ravyl-";
 
 struct LogState {
     file: Option<File>,
@@ -83,7 +83,7 @@ fn state() -> MutexGuard<'static, LogState> {
 pub fn log_dir() -> Option<PathBuf> {
     dirs::state_dir()
         .or_else(dirs::cache_dir)
-        .map(|d| d.join("cpsolver2"))
+        .map(|d| d.join("ravyl"))
 }
 
 /// Create this process's log file. Tests keep their logs in memory only.
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn prunes_old_and_excess_logs() {
-        let dir = std::env::temp_dir().join(format!("cpsolver2-prune-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ravyl-prune-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for i in 0..(MAX_KEPT_LOGS + 3) {
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn log_file_is_private_and_refuses_symlinks() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("cpsolver2-perm-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ravyl-perm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

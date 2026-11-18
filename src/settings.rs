@@ -1,6 +1,6 @@
 //! Application settings with TOML persistence.
 //!
-//! Settings are stored in `~/.config/cpsolver2/settings.toml`.
+//! Settings are stored in `~/.config/ravyl/settings.toml`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -113,7 +113,7 @@ impl Settings {
         if cfg!(test) {
             return None;
         }
-        dirs::config_dir().map(|p| p.join("cpsolver2").join("settings.toml"))
+        dirs::config_dir().map(|p| p.join("ravyl").join("settings.toml"))
     }
 
     /// Load settings from file, or return defaults if file doesn't exist
@@ -213,7 +213,7 @@ mod tests {
 
     fn temp_settings_path(tag: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("cpsolver2-settings-{}-{}", tag, std::process::id()));
+            std::env::temp_dir().join(format!("ravyl-settings-{}-{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir.join("settings.toml")

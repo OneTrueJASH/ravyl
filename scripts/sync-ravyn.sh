@@ -26,9 +26,10 @@ rsync -a --delete \
     --exclude /.gitignore --exclude /fuzz/target/ \
     "$here/crates/ravyn/" "$dest/"
 mkdir -p "$dest/data"
-cp "$here/data/words.fst" "$here/data/leaves.rlv" "$here/data/crossplay-removed.txt" "$dest/data/"
+# Only the leave values: the word list comes from the data repository.
+cp "$here/data/leaves.rlv" "$dest/data/"
 
 rev=$(git -C "$here" rev-parse --short HEAD)
-echo "Synced from cpsolver2 $rev. Changes in $dest:"
+echo "Synced from ravyl $rev. Changes in $dest:"
 git -C "$dest" status --short
-echo "Commit there with: git -C $dest commit -am 'Sync from cpsolver2 $rev'"
+echo "Commit there with: git -C $dest commit -am 'Sync from ravyl $rev'"

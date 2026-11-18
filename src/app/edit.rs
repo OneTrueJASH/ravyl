@@ -572,7 +572,7 @@ impl App {
     /// the final turn (see [`Self::load_position`]).
     pub fn position_cgp(&self) -> String {
         format!(
-            "{} cpsolver.final {}; cpsolver.final_known {};",
+            "{} ravyl.final {}; ravyl.final_known {};",
             self.state.to_cgp((self.our_score, self.opp_score)),
             match self.final_turn {
                 FinalTurn::Us => "us",
@@ -614,12 +614,15 @@ impl App {
             self.our_score = ours;
             self.opp_score = theirs;
         }
-        match opcode("cpsolver.final ") {
+        // Games saved before the rename to RAVYL carry `cpsolver.` opcodes.
+        let final_turn = opcode("ravyl.final ").or_else(|| opcode("cpsolver.final "));
+        let final_known = opcode("ravyl.final_known ").or_else(|| opcode("cpsolver.final_known "));
+        match final_turn {
             Some("us") => self.final_turn = FinalTurn::Us,
             Some("opp") => self.final_turn = FinalTurn::Opponent,
             _ => {}
         }
-        self.final_turn_known = opcode("cpsolver.final_known ") == Some("1");
+        self.final_turn_known = final_known == Some("1");
         self.last_applied_board = Some(self.state.board.clone());
         self.awaiting_opp_reply = false;
         self.record = super::record::Record::starting_at(&self.state.board);

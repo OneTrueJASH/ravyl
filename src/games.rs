@@ -1,5 +1,5 @@
 //! Saved games: one TOML file per game in the user data directory
-//! (`cpsolver2/games/<slug>.toml`), a lock file per open game so two
+//! (`ravyl/games/<slug>.toml`), a lock file per open game so two
 //! windows never edit the same game, the game list for the picker and
 //! `--list`, and the one-time import of the old single `session.cgp`.
 //!
@@ -88,7 +88,7 @@ pub fn default_dir() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
-    dirs::data_dir().map(|d| d.join("cpsolver2").join("games"))
+    dirs::data_dir().map(|d| d.join("ravyl").join("games"))
 }
 
 /// The file name stem for a game name: lowercase ASCII letters and digits
@@ -430,7 +430,7 @@ pub(crate) fn test_dir(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "cpsolver2-games-{}-{}-{}",
+        "ravyl-games-{}-{}-{}",
         tag,
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)

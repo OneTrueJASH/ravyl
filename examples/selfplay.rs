@@ -16,8 +16,8 @@
 use std::path::Path;
 use std::time::Instant;
 
-use cpsolver2::dictionary::{load_dictionary_from, PhaseScaling};
-use cpsolver2::mcts::{self_play_match, MatchEngine, SimChoice};
+use ravyl::dictionary::{load_dictionary_from, PhaseScaling};
+use ravyl::mcts::{self_play_match, MatchEngine, SimChoice};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
