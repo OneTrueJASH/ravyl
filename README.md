@@ -34,6 +34,8 @@ The endgame difference is the most strategically significant. In Scrabble, empty
 
 With exactly one tile in the bag, every play empties it, so the app solves the rest of the game exactly instead: for each play and each tile that could be the last one, it finds the opponent's best turn given your best final play, and reports each play's exact win probability and expected spread over the possible last tiles (shown as exact). Passing, which leaves the bag for the opponent to empty, is solved the same way; if they pass back, that is counted as ending the game, which can only make passing look worse, never better.
 
+With two tiles in the bag it does the same over every way the last two tiles can come out: a play of two or more tiles empties the bag, while a one-tile play draws one of them and leaves the opponent the last. This search is larger, so it runs within the simulation's time budget and says whether the best play is proven or time ran out first; passing is not evaluated with two in the bag.
+
 With more tiles in the bag the app plays each candidate out many times under these rules (both sides may exchange while the bag holds 7 or more tiles), reports the expected final spread, and estimates the win probability from a variance model fitted on Crossplay self-play. After each opponent play the app also infers what they probably kept: every leave they could have held is tried, and kept if their play was within 5 points of equity of that rack's best play, weighted by how likely it was to be drawn. Those per-letter probabilities (shown in the stats pane as `Opp kept:`) tilt the deal of the opponent's hidden rack inside the playouts. The app also grades every opponent move it auto-scores against the best plays available from sampled completions of their rack; the running error rate (shown as `Opp error:`, calibrated on self-play so a perfect opponent reads zero) makes the simulated opponent in playouts err at the same rate instead of always punishing maximally.
 
 ## Building
@@ -95,7 +97,7 @@ cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/1
 | `gen` | every play, exchange and pass, best static equity first |
 | `sim` | simulates the best candidates (`--candidates`, `--seconds`) and ranks them by mean final spread, with win% |
 | `endgame` | bag empty: exact search; uses the opponent's rack after the `/` when given, otherwise every unseen tile. Crossplay: our play and their reply (`--last us\|them`); Scrabble: negamax to the end of the game within `--seconds`, saying whether it solved it |
-| `preendgame` | one tile in the bag: every play and the pass, exact over each possible last tile |
+| `preendgame` | one or two tiles in the bag: with one, every play and the pass, exact over each possible last tile; with two, every play exact over each way the last two tiles can come out, within `--seconds` (saying whether the best is proven; passing not evaluated) |
 | `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
 | `train-leaves` | fits leave values by self-play (`--games`, `--generations`, `--from`, `--out`); no position needed |
 | `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic; `--sim C,P` to choose moves by simulation); shows its progress, with the running result and time left, on stderr |

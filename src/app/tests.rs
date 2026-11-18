@@ -1667,6 +1667,49 @@ fn one_tile_in_the_bag_is_solved_exactly() {
     assert_eq!(pass.status, SimStatus::Exact);
 }
 
+/// With two tiles in the bag, M solves plays exactly over every way the
+/// last two tiles can come out: the top play arrives marked exact, and the
+/// message says the best is proven.
+#[test]
+fn two_tiles_in_the_bag_are_solved_exactly() {
+    let _lock = crate::datafiles::test_data::app_lock();
+    let Some(dict) = crate::datafiles::test_data::dictionary() else {
+        return;
+    };
+    let mut app = test_app();
+    app.set_dictionary(dict);
+    app.load_position(
+        "VETO2MENSCH3/1DEFTLY8/3F11/3E3U7/2BRAZING6/1COSTA1S7/1I4RAKER4/1N5WAXED3/\
+         1E3JANE1MELD1/1R9S2H/1I2OUTA1QOPH1O/1N3POLlinIA1O/11S2L/10WEDGY/11R3 IIIIUTR/ 0/0 0",
+        false,
+    )
+    .unwrap();
+    assert_eq!(app.state.bag_size(), 2);
+    app.find_moves();
+    if let Some(job) = app.sim_job.take() {
+        job.cancel.store(true, AtomicOrdering::Relaxed);
+    }
+    app.run_mcts_evaluation();
+    assert!(
+        app.sim_job.is_none(),
+        "no simulation with two tiles in the bag"
+    );
+    finish_evaluation(&mut app);
+    let results = app.sim_results.as_ref().expect("exact results");
+    let best = results
+        .iter()
+        .find(|r| r.word == "TUI")
+        .expect("the best play is solved");
+    assert_eq!(best.status, SimStatus::Exact);
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|m| m.contains("the rest cannot be best")),
+        "{:?}",
+        app.message
+    );
+}
+
 /// Our moves and the opponent's are recorded as we play; `G` copies the
 /// record as GCG, and pasting it back imports the game with the side to
 /// move as us. Undo takes the import back.

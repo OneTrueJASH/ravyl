@@ -17,6 +17,16 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   remain).
 
 ### Added
+- Exact pre-endgame with two tiles in the bag (Crossplay): every play is
+  solved against each way the last two tiles can come out (a play of two
+  or more tiles empties the bag; a one-tile play leaves the opponent one to
+  draw), within the simulation's time budget, saying whether the best play
+  is proven. Passing is not evaluated with two in the bag. On ten
+  self-played positions the median solve takes about 3 s and the slowest
+  38 s. In the app (M) and `ravyn preendgame` (`--seconds`). The engine
+  gains `preendgame::solve_two_in_bag` and `proven`,
+  `EndgameSolver::best_value_with` and `Solver::top_moves_by_score`;
+  `DrawOutcome::tile` became `tiles` (a string).
 - `ravyn match` shows its progress on stderr: games played, time elapsed
   and left, and the running score and spread with their confidence
   intervals (rewritten in place on a terminal, a line a minute when

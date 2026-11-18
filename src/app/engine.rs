@@ -490,9 +490,12 @@ impl App {
             return;
         }
 
-        // One tile in the bag: every play empties it, so each play and each
-        // possible last tile is solved exactly (ravyn::preendgame).
-        if self.state.bag_size() == 1 && self.state.unseen_tile_count() == RACK_SIZE + 1 {
+        // One or two tiles in the bag: each play is solved exactly against
+        // every possible last tile, or every way the last two can come
+        // out (ravyn::preendgame); two within the simulation's time budget.
+        let bag = self.state.bag_size();
+        if (bag == 1 || bag == 2) && self.state.unseen_tile_count() == RACK_SIZE + bag {
+            let budget = Duration::from_secs(self.settings.simulation.budget_secs.max(1));
             let state = self.state.clone();
             self.last_applied_board = Some(self.state.board.clone());
             self.mcts_progress = Some(MctsProgress {
@@ -501,7 +504,15 @@ impl App {
             });
             self.set_message(
                 MessageKind::Progress,
-                "Pre-endgame: solving every play against each possible last tile...".to_string(),
+                if bag == 1 {
+                    "Pre-endgame: solving every play against each possible last tile...".to_string()
+                } else {
+                    format!(
+                        "Pre-endgame: solving plays against every way the last two tiles can \
+                         come out (up to {}s)...",
+                        budget.as_secs()
+                    )
+                },
             );
             let score_diff = self.our_score as i32 - self.opp_score as i32;
             let (tx, rx) = mpsc::channel();
@@ -526,15 +537,28 @@ impl App {
                     })
                     .collect();
                 let ours = state.rack.tiles();
-                if let Some(results) = ravyn::preendgame::solve_one_in_bag(
-                    &state.board,
-                    &dict,
-                    &ours,
-                    &unseen,
-                    score_diff,
-                    Some(&cancel),
-                ) {
-                    let _ = tx.send(preendgame_outcome(results));
+                let results = if bag == 1 {
+                    ravyn::preendgame::solve_one_in_bag(
+                        &state.board,
+                        &dict,
+                        &ours,
+                        &unseen,
+                        score_diff,
+                        Some(&cancel),
+                    )
+                } else {
+                    ravyn::preendgame::solve_two_in_bag(
+                        &state.board,
+                        &dict,
+                        &ours,
+                        &unseen,
+                        score_diff,
+                        Some(&cancel),
+                        Some(Instant::now() + budget),
+                    )
+                };
+                if let Some(results) = results {
+                    let _ = tx.send(preendgame_outcome(results, bag));
                 }
             });
             return;
@@ -708,17 +732,17 @@ fn endgame_outcome(results: Vec<EndgameMove>, score_diff: i32) -> ExactOutcome {
 /// their exact win chance and expected spread over the possible last
 /// tiles (passing included); plays it proved cannot be best are listed
 /// without results.
-fn preendgame_outcome(results: Vec<PreEndgameMove>) -> ExactOutcome {
+fn preendgame_outcome(results: Vec<PreEndgameMove>, bag: usize) -> ExactOutcome {
     let best = results.first().map_or(0.0, |b| b.spread);
     let solved = results.iter().filter(|r| r.exact).count();
     if let Some(top) = results.first() {
         let cases: Vec<String> = top
             .outcomes
             .iter()
-            .map(|o| format!("{} {:+}", o.tile, o.value))
+            .map(|o| format!("{} {:+}", o.tiles, o.value))
             .collect();
         log(&format!(
-            "Pre-endgame: best {} {} win {:.1}% spread {:+.1} (by last tile: {})",
+            "Pre-endgame: best {} {} win {:.1}% spread {:+.1} (by tiles in the bag: {})",
             top.mv.coords(),
             top.mv.word,
             top.win * 100.0,
@@ -726,11 +750,25 @@ fn preendgame_outcome(results: Vec<PreEndgameMove>) -> ExactOutcome {
             cases.join(", ")
         ));
     }
-    let message = format!(
-        "Pre-endgame: {} of {} plays solved exactly over every possible last tile; the rest cannot be best",
-        group_thousands(solved as u64),
-        group_thousands(results.len() as u64)
-    );
+    let message = if bag == 1 {
+        format!(
+            "Pre-endgame: {} of {} plays solved exactly over every possible last tile; the rest cannot be best",
+            group_thousands(solved as u64),
+            group_thousands(results.len() as u64)
+        )
+    } else if ravyn::preendgame::proven(&results) {
+        format!(
+            "Pre-endgame (2 in the bag): {} of {} plays solved exactly over every way the last two tiles can come out; the rest cannot be best (passing not evaluated)",
+            group_thousands(solved as u64),
+            group_thousands(results.len() as u64)
+        )
+    } else {
+        format!(
+            "Pre-endgame (2 in the bag): time ran out after solving {} of {} plays; the best of those is shown, unsolved plays might be better",
+            group_thousands(solved as u64),
+            group_thousands(results.len() as u64)
+        )
+    };
     let mut moves = Vec::with_capacity(results.len());
     let mut rows = Vec::with_capacity(solved);
     for r in results {
