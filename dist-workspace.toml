@@ -17,3 +17,6 @@ targets = [
 ]
 dispatch-releases = true
 pr-run-mode = "skip"
+# release.yml has its actions pinned to commit SHAs by hand (supply-chain
+# safety), so it differs from what dist generates.
+allow-dirty = ["ci"]

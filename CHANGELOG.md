@@ -16,6 +16,15 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   opponent. The list is in `data/crossplay-removed.txt` (196,419 words
   remain).
 
+### Security
+- GCG files holding control characters are refused: a terminal escape
+  sequence in a player's name or note (say, an OSC 52 clipboard write)
+  could otherwise reach the screen through `ravyn gcg` or a pasted import.
+- `ravyn fetch-data` checks each file against a SHA-256 checksum built
+  into the program, not one fetched with it, and hands its token to curl
+  on standard input instead of the command line.
+- CI runs with a read-only token and every action pinned to a commit.
+
 ### Added
 - `ravyn fetch-data`: the data files (word list, leave values) live in
   their own repository, in versioned directories with a `SHA256SUMS`, and
@@ -213,7 +222,7 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   keeps F1 Help; dialogs fit their text (the quit prompt's Esc hint, the
   score prompt, and confirmations naming a long game).
 - Licensed under GPL-3.0-or-later (was MIT), since the binary links
-  GPL-3.0 RefEngine; copyright holder corrected to OneTrueJASH.
+  GPL-3.0 RefEngine; copyright holder corrected.
 - `--data-dir` now takes precedence over `$CPSOLVER_DATA_DIR`.
 - RefEngine is compiled from vendored source (a pinned submodule) and linked
   statically, behind the default `refengine` cargo feature; without it the
