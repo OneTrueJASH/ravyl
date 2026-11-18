@@ -54,6 +54,8 @@ cd cpsolver2
 
 The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst` is built without them.
 
+The data files also live in their own repository, versioned and checksummed (as RefEngine keeps its lexica in a separate data repository), and `ravyn fetch-data` installs them in `~/.ravyn/data`, which cpsolver2 also searches. While that repository is private it needs a token (`$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN`, or a `gh auth login`). The engine's crate package leaves the word list out.
+
 ### Build and run
 
 ```bash
@@ -100,6 +102,7 @@ cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/1
 | `preendgame` | one or two tiles in the bag: with one, every play and the pass, exact over each possible last tile; with two, every play exact over each way the last two tiles can come out (passing not evaluated); within `--seconds`, saying whether the best is proven |
 | `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
 | `train-leaves` | fits leave values by self-play (`--games`, `--generations`, `--from`, `--out`); no position needed |
+| `fetch-data` | downloads the data files (word list, leave values) into `~/.ravyn/data` (or `--data DIR`), installing only what matches the published checksums |
 | `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic; `--sim C,P` to choose moves by simulation); shows its progress, with the running result and time left, on stderr |
 | `gcg` | reviews a game record (`ravyn gcg game.gcg`): each move whose rack is recorded against the best by static equity, flagging words not in the word list, and the equity each player gave up; `--at N` prints the position before event N as CGP, ready for `sim`, `endgame` or `preendgame` |
 

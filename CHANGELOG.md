@@ -17,6 +17,13 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   remain).
 
 ### Added
+- `ravyn fetch-data`: the data files (word list, leave values) live in
+  their own repository, in versioned directories with a `SHA256SUMS`, and
+  this downloads the version the engine pins into `~/.ravyn/data` (or
+  `--data DIR`), installing nothing whose checksum does not match. The
+  engine and cpsolver2 look there after their other data locations. The
+  engine's crate package excludes the word list. (Downloads use `curl`;
+  checksums are SHA-256, implemented in the CLI.)
 - `Dictionary::from_fst_bytes`: load a word list from bytes, without a
   file system.
 - The Scrabble endgame searches in parallel: after the previous depth's

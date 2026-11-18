@@ -67,8 +67,9 @@ pub fn set_cli_data_dir(dir: PathBuf) {
 /// 2. `$CPSOLVER_DATA_DIR`
 /// 3. the user data directory (`~/.local/share/cpsolver2`,
 ///    `~/Library/Application Support/cpsolver2`)
-/// 4. `<exe>/../share/cpsolver2` (an installed layout)
-/// 5. the working directory (running from a checkout, for development)
+/// 4. `~/.ravyn`, where `ravyn fetch-data` installs them
+/// 5. `<exe>/../share/cpsolver2` (an installed layout)
+/// 6. the working directory (running from a checkout, for development)
 ///
 /// Each holds `data/words.fst` and `data/leaves.rlv`. Test builds
 /// search the crate root first so tests do not depend on the working
@@ -81,23 +82,26 @@ pub fn data_roots() -> Vec<PathBuf> {
         std::env::var_os(DATA_DIR_ENV).map(PathBuf::from),
         CLI_DATA_DIR.get().cloned(),
         dirs::data_dir(),
+        dirs::home_dir(),
         std::env::current_exe().ok(),
     ));
     roots
 }
 
 /// [`data_roots`] from its inputs (the environment variable, the option,
-/// the user data directory and the executable's path).
+/// the user data directory, the home directory and the executable's path).
 fn ordered_roots(
     env: Option<PathBuf>,
     cli: Option<PathBuf>,
     user_data: Option<PathBuf>,
+    home: Option<PathBuf>,
     exe: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     roots.extend(cli);
     roots.extend(env.filter(|p| !p.as_os_str().is_empty()));
     roots.extend(user_data.map(|d| d.join("cpsolver2")));
+    roots.extend(home.map(|h| h.join(".ravyn")));
     roots.extend(
         exe.as_deref()
             .and_then(Path::parent)
@@ -202,18 +206,20 @@ mod tests {
             Some("/env".into()),
             Some("/cli".into()),
             Some("/home/u/.local/share".into()),
+            Some("/home/u".into()),
             Some("/opt/cp/bin/cpsolver2".into()),
         );
         let expect: Vec<PathBuf> = vec![
             "/cli".into(),
             "/env".into(),
             "/home/u/.local/share/cpsolver2".into(),
+            "/home/u/.ravyn".into(),
             "/opt/cp/bin/../share/cpsolver2".into(),
             ".".into(),
         ];
         assert_eq!(roots, expect);
         // Unset or empty inputs are skipped.
-        let roots = ordered_roots(Some("".into()), None, None, None);
+        let roots = ordered_roots(Some("".into()), None, None, None, None);
         assert_eq!(roots, vec![PathBuf::from(".")]);
     }
 
