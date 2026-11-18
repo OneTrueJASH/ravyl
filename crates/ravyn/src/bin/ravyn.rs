@@ -17,7 +17,7 @@ use ravyn::gcg::{self, Action, Game};
 use ravyn::inference::{infer_leave, InferenceSettings};
 use ravyn::leavegen::{train_generation, TrainingSettings};
 use ravyn::leaves::LeaveValues;
-use ravyn::mcts::{self_play_match, MatchEngine, SimChoice};
+use ravyn::mcts::{self_play_match_with_progress, MatchEngine, MatchResult, SimChoice};
 use ravyn::negamax::{solve_go_out, GoOutSettings};
 use ravyn::preendgame::solve_one_in_bag;
 use ravyn::rules::{Ending, Rules, CROSSPLAY, SCRABBLE};
@@ -689,7 +689,15 @@ fn leave_match(o: &Options) -> Result<(), String> {
         sim: o.sim,
     };
     let started = std::time::Instant::now();
-    let r = self_play_match(&engine(a, &da), &engine(b, &db), o.pairs.max(1), o.seed);
+    let reporter = Progress::new(o.pairs.max(1) * 2);
+    let r = self_play_match_with_progress(
+        &engine(a, &da),
+        &engine(b, &db),
+        o.pairs.max(1),
+        o.seed,
+        &|r| reporter.update(r),
+    );
+    reporter.finish();
     println!(
         "{a} vs {b}: {} games in {:.0}s; A scores {:.3} +- {:.3}, spread {:+.2} +- {:.2} per game",
         r.games,
@@ -827,4 +835,74 @@ fn review_game(o: &Options) -> Result<(), String> {
         println!("{unreviewed} moves have no recorded rack and were not reviewed");
     }
     Ok(())
+}
+
+/// Progress of a long match on stderr: one line rewritten in place on a
+/// terminal, a line every minute otherwise.
+struct Progress {
+    total: usize,
+    started: std::time::Instant,
+    tty: bool,
+    /// When the last line was printed (the start, before any), and whether
+    /// one has been.
+    last: std::sync::Mutex<(std::time::Instant, bool)>,
+}
+
+impl Progress {
+    fn new(total: usize) -> Self {
+        use std::io::IsTerminal;
+        let now = std::time::Instant::now();
+        Progress {
+            total,
+            started: now,
+            tty: std::io::stderr().is_terminal(),
+            last: std::sync::Mutex::new((now, false)),
+        }
+    }
+
+    fn update(&self, r: &MatchResult) {
+        let every = Duration::from_secs(if self.tty { 1 } else { 60 });
+        let Ok(mut last) = self.last.lock() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if now - last.0 < every || r.games >= self.total {
+            return;
+        }
+        *last = (now, true);
+        let elapsed = self.started.elapsed().as_secs_f64();
+        let left = elapsed * (self.total - r.games) as f64 / r.games.max(1) as f64;
+        let line = format!(
+            "{}/{} games, {} elapsed, ~{} left; A scores {:.3} +- {:.3}, spread {:+.2} +- {:.2}",
+            r.games,
+            self.total,
+            clock(elapsed),
+            clock(left),
+            r.score,
+            r.score_ci95,
+            r.spread,
+            r.spread_ci95
+        );
+        if self.tty {
+            eprint!("\r\x1b[2K{line}");
+        } else {
+            eprintln!("{line}");
+        }
+    }
+
+    fn finish(&self) {
+        if self.tty && self.last.lock().is_ok_and(|l| l.1) {
+            eprint!("\r\x1b[2K");
+        }
+    }
+}
+
+/// `1h02m`, `3m05s` or `12s`.
+fn clock(seconds: f64) -> String {
+    let s = seconds.round() as u64;
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}m{:02}s", s / 60, s % 60),
+        _ => format!("{}h{:02}m", s / 3600, s % 3600 / 60),
+    }
 }

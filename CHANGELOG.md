@@ -17,6 +17,10 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   remain).
 
 ### Added
+- `ravyn match` shows its progress on stderr: games played, time elapsed
+  and left, and the running score and spread with their confidence
+  intervals (rewritten in place on a terminal, a line a minute when
+  redirected). The engine gains `mcts::self_play_match_with_progress`.
 - Game records (GCG). The app records every move, ours as applied and the
   opponent's as auto-scored (a turn that puts nothing down is recorded as
   a pass, noted "passed or exchanged"); `G` in the suggestions pane copies

@@ -98,7 +98,7 @@ cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/1
 | `preendgame` | one tile in the bag: every play and the pass, exact over each possible last tile |
 | `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
 | `train-leaves` | fits leave values by self-play (`--games`, `--generations`, `--from`, `--out`); no position needed |
-| `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic; `--sim C,P` to choose moves by simulation) |
+| `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic; `--sim C,P` to choose moves by simulation); shows its progress, with the running result and time left, on stderr |
 | `gcg` | reviews a game record (`ravyn gcg game.gcg`): each move whose rack is recorded against the best by static equity, flagging words not in the word list, and the equity each player gave up; `--at N` prints the position before event N as CGP, ready for `sim`, `endgame` or `preendgame` |
 
 `--rules scrabble` plays standard Scrabble instead of Crossplay (its board, values and tiles, a 50-point bingo, and the go-out ending: rack penalties and six scoreless turns). The word list is still the one in `data/`. `--data DIR` (or `$RAVYN_DATA`) points at the directory holding `data/words.fst` and the leave table; `--help` lists everything.
