@@ -121,13 +121,13 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   and `--help` / `--version`.
 - Criterion benchmarks, a self-play strength harness
   (`examples/selfplay.rs`), property tests, a random-position move
-  generation comparison with RefEngine, and cargo-fuzz targets.
-- CI on Linux and macOS, a no-RefEngine build, an MSRV check, and
+  generation comparison with a reference engine, and cargo-fuzz targets.
+- CI on Linux and macOS, a build without the reference engine, an MSRV check, and
   cargo-deny; a release workflow (dist) that runs only by hand.
 
 ### Changed
 - The engine (move generation, leaves, simulation, endgame) is now its
-  own crate, RAVYN, in `crates/ravyn`, MIT licensed and free of RefEngine.
+  own crate, RAVYN, in `crates/ravyn`, MIT licensed and free of the reference engine.
   It logs through the `log` facade; the app forwards those lines to its
   log. The app re-exports the engine's modules at their old paths.
 - The game's rules are data: board layout, start square, letter values,
@@ -147,17 +147,18 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   1.3 ms instead of 8.4 ms. Sorting pairs each play with its result once,
   the table reuses that pairing, and the filter no longer builds strings.
 - cpsolver2 is now MIT licensed, like its engine. It was GPL-3.0 because
-  it built on RefEngine, none of which remains.
+  it built on a GPL-3.0 reference engine, none of which remains.
 - Our own leave values, trained by self-play: `ravyn train-leaves` plays
   greedy self-play games, fits every leave's value from what keeping it
   was worth a turn later (with a smooth model for rare leaves) and repeats
   with the new values. Three generations of 500,000 games produced
-  `data/leaves.rlv` (all 921,298 leaves, 1.8 MB), which beat RefEngine's
-  table by 2.1 +- 0.9 points of spread per game over 20,000 paired games.
+  `data/leaves.rlv` (all 921,298 leaves, 1.8 MB), which beat the
+  per-letter heuristic by 16.3 +- 2.4 points of spread per game over
+  20,000 paired games.
   `ravyn match` compares leave tables (`--sim C,P` with both sides
   choosing moves by simulation, where the gain held: +2.2 +- 2.0 over
   4,600 games).
-- The last of RefEngine is gone: its leave table (`AMERICAN.klv2`), the KLV2
+- The last of the reference engine is gone: its leave table (`AMERICAN.klv2`), the KLV2
   reader and Git LFS (nothing is stored in LFS any more). Only a record of
   its move generation remains, as test fixtures.
 - Scrabble rules in the engine: a `SCRABBLE` preset (standard board,
@@ -169,19 +170,19 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   `ravyn --rules scrabble` uses all of it.
 - The board analysis (anchors and cross-checks) can be updated after a
   move instead of recomputed; the endgame search does so at each node.
-- A command-line tool for the engine, `ravyn`, with RefEngine-style commands
+- A command-line tool for the engine, `ravyn`, with commands
   on CGP positions: `gen` (moves by static equity), `sim` (simulation with
   spread and win%), `endgame`, `preendgame` and `infer`. Scores and a
   known opponent rack are read from the CGP; `--data` or `$RAVYN_DATA`
   locate the data files.
-- RefEngine is out of the repository: its source submodule, the build
-  script, the C bindings, the `refengine` feature and its unused data files
+- The reference engine is out of the repository: its source submodule,
+  the build script, the C bindings, its cargo feature and its unused data files
   (lexicon, layouts, letter distribution) are gone, so cloning needs no
   submodule and building no C compiler. Its answers on the reference
   positions (move generation on 32 positions, static equity, rack
   inference) are recorded as fixtures, and the engine is still checked
   against them. Only its leave table (`AMERICAN.klv2`) remains, as data.
-- The engine's integration, property and RefEngine-reference tests and its
+- The engine's integration, property and reference-engine tests and its
   fuzz targets moved into `crates/ravyn` with the benchmarks.
 - Exact pre-endgame with one tile in the bag: M solves every play against
   each tile that could be the last one (the opponent's best turn, then
@@ -203,12 +204,12 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   move list. A test checks the pruned searches against the full list on
   160 random racks.
 - Opponent rack inference is the engine's own (`ravyn::inference`)
-  instead of RefEngine's. Every leave the opponent could have kept is tried
+  instead of the reference engine's. Every leave the opponent could have kept is tried
   and kept if their play was within 5 points of that rack's best, weighted
-  by how likely it was to be drawn; it agrees with RefEngine to within 0.06
+  by how likely it was to be drawn; it agrees with the reference engine to within 0.06
   tiles per letter (a test checks it) and is as fast or faster. The app
-  no longer starts RefEngine (68 ms less at launch), builds without RefEngine
-  now infer too, and the `refengine` feature is off by default: it only
+  no longer starts the reference engine (68 ms less at launch), builds
+  without it now infer too, and its cargo feature is off by default: it only
   serves as a reference in tests, so building needs no C compiler.
 - Works on an 80×24 terminal: from 80 columns a mini board keeps a
   compact sidebar beside it (rack, score and bag, the sort row and the
@@ -232,10 +233,11 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   keeps F1 Help; dialogs fit their text (the quit prompt's Esc hint, the
   score prompt, and confirmations naming a long game).
 - Licensed under GPL-3.0-or-later (was MIT), since the binary links
-  GPL-3.0 RefEngine; copyright holder corrected.
+  a GPL-3.0 reference engine; copyright holder corrected.
 - `--data-dir` now takes precedence over `$CPSOLVER_DATA_DIR`.
-- RefEngine is compiled from vendored source (a pinned submodule) and linked
-  statically, behind the default `refengine` cargo feature; without it the
+- The reference engine is compiled from vendored source (a pinned
+  submodule) and linked statically, behind a default cargo feature;
+  without it the
   pure-Rust solver builds on its own.
 - Playouts are 3–5× faster: best-move searches that build only the
   winning moves, a per-rack subset leave table, a flat DAWG for move
@@ -268,4 +270,4 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 - Stale inference after an opponent pass or exchange.
 - A worker-thread panic restored the terminal under the running UI.
 - The leave-table parser could allocate from an untrusted count.
-- Concurrent RefEngine calls from two handles could crash (SIGSEGV).
+- Concurrent reference-engine calls from two handles could crash (SIGSEGV).

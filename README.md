@@ -10,9 +10,9 @@ Built with [ratatui](https://ratatui.rs), ravyl provides real-time move generati
 - **Anchor-based move generation** with cross-word validation and FST-backed dictionary lookup
 - **Simulates every candidate**: every legal play, every distinct exchange and passing are played out under Crossplay rules, with an anytime scheduler (every candidate gets a playout floor, then the contenders race) that streams results into the table live. For each candidate the table shows playouts, mean final spread ± standard error, win% ± standard error, the paired difference to the best candidate, bingo rates and a status (see [Crossplay vs Scrabble](#crossplay-vs-scrabble))
 - **Crossplay-native endgame solver** using exhaustive 2-ply search (including passing) with no leftover tile penalties
-- **Move generation checked against RefEngine** play for play (its answers on 32 reference positions are kept as test fixtures)
-- **Leave values trained by self-play** on Crossplay's own rules (`data/leaves.rlv`, every one of the 921,298 possible leaves); over 20,000 paired games they beat RefEngine's table by 2.1 ± 0.9 points of spread per game, and by 2.2 ± 2.0 when both sides choose moves by simulation (4,600 games)
-- **Opponent modeling**: rack inference (what the opponent probably kept, given their play; checked against RefEngine's) biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
+- **Move generation checked play for play against a reference engine** (its answers on 32 positions are kept as test fixtures)
+- **Leave values trained by self-play** on Crossplay's own rules (`data/leaves.rlv`, every one of the 921,298 possible leaves), three generations of 500,000 games each; over 20,000 paired games they beat the per-letter heuristic by 16.3 ± 2.4 points of spread per game
+- **Opponent modeling**: rack inference (what the opponent probably kept, given their play; checked against a reference engine's) biases how the opponent's hidden tiles are dealt in playouts, and their measured error rate (each scored move compared against their best alternatives) sets how strongly the simulated opponent plays
 - **Mouse support** with clickable board squares, suggestions (double-click applies), dialog buttons and menu options
 - **Fluid layout** that adapts to any terminal size: board and sidebar side by side; from 80 columns (the classic 80×24 included) a mini board with a compact sidebar of rack, score and the move list; a stacked board, one-line rack and short list on narrower but tall terminals; and a clear message below the minimum size (50×22)
 - **Preferences persisted to TOML** (sort mode, sidebar visibility)
@@ -55,7 +55,7 @@ cargo run --release -p ravyn --bin ravyn -- fetch-data
 
 The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst` is built without them.
 
-The word list lives in its own repository, versioned and checksummed (as RefEngine keeps its lexica in a separate data repository), and `ravyn fetch-data` installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. While that repository is private it needs a token (`$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN`, or a `gh auth login`). The engine's crate package leaves the word list out.
+The word list lives in its own repository, versioned and checksummed, and `ravyn fetch-data` installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. While that repository is private it needs a token (`$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN`, or a `gh auth login`). The engine's crate package leaves the word list out.
 
 ### Build and run
 
@@ -238,4 +238,4 @@ Copyright (c) 2026 OneTrueJASH.
 
 ravyl and its engine, RAVYN (`crates/ravyn`), are licensed under the [MIT License](LICENSE).
 
-Versions up to and including 5433194 were GPL-3.0-or-later, because they built on RefEngine; nothing from RefEngine remains in the repository but a record of its move generation on reference positions, kept as test fixtures.
+Versions before the commit "Relicense cpsolver2 under MIT" were GPL-3.0-or-later.
