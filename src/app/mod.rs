@@ -19,6 +19,7 @@ mod engine;
 mod format;
 mod input;
 mod opponent;
+mod record;
 mod session;
 mod sort;
 mod state;

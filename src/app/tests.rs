@@ -1090,6 +1090,7 @@ fn store_game(dir: &std::path::Path, name: &str, updated: u64) {
         cgp: "15/15/15/15/15/15/15/4CAT8/15/15/15/15/15/15/15 EINRST/ 12/8 0".to_string(),
         updated,
         opp_losses: OppLosses::default(),
+        record: None,
     };
     games::save(dir, &game).unwrap();
 }
@@ -1664,4 +1665,70 @@ fn one_tile_in_the_bag_is_solved_exactly() {
         .find(|r| r.word == crate::solver::PASS_WORD)
         .expect("the pass is solved");
     assert_eq!(pass.status, SimStatus::Exact);
+}
+
+/// Our moves and the opponent's are recorded as we play; `G` copies the
+/// record as GCG, and pasting it back imports the game with the side to
+/// move as us. Undo takes the import back.
+#[test]
+fn moves_are_recorded_exported_and_imported() {
+    let _lock = crate::datafiles::test_data::app_lock();
+    let Some(dict) = crate::datafiles::test_data::dictionary() else {
+        return;
+    };
+    let mut app = test_app();
+    app.dictionary = Some(Arc::new(dict));
+    for ch in "AEINRST".chars() {
+        app.state.add_to_rack(ch);
+    }
+    app.find_moves();
+    app.focus = Focus::Suggestions;
+    app.handle_key(key(KeyCode::Char('G')));
+    assert!(app.pending_clipboard.is_none(), "nothing recorded yet");
+
+    let ours = app.suggestions[0].clone();
+    app.apply_suggestion();
+    // The opponent plays CAT in the corner, then a pass.
+    app.state.place_tile(0, 0, Tile::new('C'));
+    app.state.place_tile(0, 1, Tile::new('A'));
+    app.state.place_tile(0, 2, Tile::new('T'));
+    for ch in "EEIOUSL".chars() {
+        app.state.add_to_rack(ch);
+    }
+    app.find_moves();
+    app.apply_suggestion();
+    app.clear_rack();
+    for ch in "DGRTWYZ".chars() {
+        app.state.add_to_rack(ch);
+    }
+    app.find_moves();
+    assert_eq!(app.record.game.events.len(), 4, "{:?}", app.record.game);
+
+    app.focus = Focus::Suggestions;
+    app.handle_key(key(KeyCode::Char('G')));
+    let gcg = app.pending_clipboard.take().expect("the record is copied");
+    let first = format!(
+        ">me: AEINRST {} {} +{} {}",
+        ravyn::gcg::Placement::of_move(&ours).unwrap().position(),
+        ours.word,
+        ours.score,
+        ours.score
+    );
+    assert!(gcg.contains(&first), "{gcg}");
+    assert!(gcg.contains(">opp: 1A CAT +"), "{gcg}");
+    assert!(gcg.contains(">opp: - +0"), "{gcg}");
+    let parsed = ravyn::gcg::Game::parse(&gcg).unwrap();
+    assert_eq!(parsed.events.len(), 4);
+
+    // A fresh app imports it: we are to move, with the same board and scores.
+    let (board, ours_now, theirs_now) = (app.state.board_cgp(), app.our_score, app.opp_score);
+    let mut other = test_app();
+    other.handle_paste(&gcg);
+    assert_eq!(other.state.board_cgp(), board);
+    assert_eq!((other.our_score, other.opp_score), (ours_now, theirs_now));
+    assert_eq!(other.record.us, 0);
+    assert!(other.state.rack.is_empty());
+    other.undo();
+    assert_eq!((other.our_score, other.opp_score), (0, 0));
+    assert!(other.record.is_empty());
 }

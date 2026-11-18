@@ -17,6 +17,16 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   remain).
 
 ### Added
+- Game records (GCG). The app records every move, ours as applied and the
+  opponent's as auto-scored (a turn that puts nothing down is recorded as
+  a pass, noted "passed or exchanged"); `G` in the suggestions pane copies
+  it as GCG, and it is saved with the game and undone with Undo. Pasting a
+  GCG file imports it: its final position and scores, with the side to
+  move as you. The engine gains `ravyn::gcg` (read, write, replay and
+  review GCG, including exchanges, withdrawn phonies, challenge bonuses
+  and end-of-game rack points) and `ravyn gcg FILE`, which reviews a game
+  move by move against the best by static equity, or prints any of its
+  positions as CGP (`--at N`).
 - Named saved games: one file per game (`games/<name>.toml` in the user
   data directory), saved as you play (at most about once a second) and on
   exit, including when the terminal closes (SIGHUP) or the app is killed

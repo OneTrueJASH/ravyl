@@ -268,6 +268,7 @@ impl App {
             self.final_turn_known = true;
         }
 
+        self.record.ours(&self.state.rack.tiles(), &mv);
         self.state.apply_move(&mv);
         self.our_score += mv.score;
         self.last_applied_board = Some(self.state.board.clone());
@@ -319,6 +320,7 @@ impl App {
         self.opp_loss_total = saved.opp_loss_total;
         self.opp_moves_measured = saved.opp_moves_measured;
         self.awaiting_opp_reply = saved.awaiting_opp_reply;
+        self.record = saved.record;
         self.clear_suggestions();
     }
 
@@ -363,6 +365,7 @@ impl App {
             opp_loss_total: self.opp_loss_total,
             opp_moves_measured: self.opp_moves_measured,
             awaiting_opp_reply: self.awaiting_opp_reply,
+            record: self.record.clone(),
             message,
         }
     }
@@ -397,6 +400,7 @@ impl App {
         self.final_turn_known = false;
         self.opp_loss_total = 0.0;
         self.opp_moves_measured = 0;
+        self.record = super::record::Record::default();
         self.set_message(MessageKind::Info, "Reset complete".to_string());
     }
 
@@ -618,7 +622,61 @@ impl App {
         self.final_turn_known = opcode("cpsolver.final_known ") == Some("1");
         self.last_applied_board = Some(self.state.board.clone());
         self.awaiting_opp_reply = false;
+        self.record = super::record::Record::starting_at(&self.state.board);
         self.clear_suggestions();
+        Ok(())
+    }
+
+    /// Copy the game record (GCG) to the clipboard.
+    pub(super) fn copy_game_record(&mut self) {
+        if self.record.is_empty() {
+            self.set_message(
+                MessageKind::Error,
+                "No moves recorded yet: the record starts with the next move",
+            );
+            return;
+        }
+        let opponent = self
+            .game_name
+            .as_deref()
+            .filter(|n| !crate::games::is_automatic_name(n));
+        self.pending_clipboard = Some(self.record.to_gcg(opponent));
+        let moves = self.record.game.events.len();
+        self.set_message(
+            MessageKind::Success,
+            if self.record.partial {
+                format!("Copied the game record (GCG, {moves} moves since the position was loaded)")
+            } else {
+                format!("Copied the game record (GCG, {moves} moves)")
+            },
+        );
+    }
+
+    /// Import a GCG game record: its final position, the scores, and its
+    /// moves as this game's record. The side to move becomes us; the rack
+    /// is left for typing in.
+    pub fn import_gcg(&mut self, text: &str) -> Result<(), String> {
+        let imported = super::record::import(text)?;
+        self.push_undo("Imported a game record".to_string());
+        self.state.board = imported.board;
+        self.state.clear_rack();
+        (self.our_score, self.opp_score) = imported.scores;
+        self.final_turn = FinalTurn::default();
+        self.final_turn_known = false;
+        self.last_applied_board = Some(self.state.board.clone());
+        self.awaiting_opp_reply = false;
+        self.inferred_opponent_rack = None;
+        self.opp_move_stamp += 1;
+        let nick = imported.record.game.players[imported.record.us]
+            .nick
+            .clone();
+        let moves = imported.record.game.events.len();
+        self.record = imported.record;
+        self.clear_suggestions();
+        self.set_message(
+            MessageKind::Success,
+            format!("Imported {moves} moves; you are {nick}, to move \u{2014} type your rack"),
+        );
         Ok(())
     }
 }

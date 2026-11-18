@@ -79,7 +79,7 @@ const SECTIONS: &[Section] = &[
             ("Enter", "Apply move"),
             ("M (or m)", "Simulate every candidate"),
             ("s / S", "Cycle sort"),
-            ("y / Y", "Copy move / position (CGP)"),
+            ("y / Y / G", "Copy move / position (CGP) / game (GCG)"),
         ],
     ),
     (

@@ -13,6 +13,7 @@ use std::time::Duration;
 use ravyn::dictionary::Dictionary;
 use ravyn::endgame::{EndgameSolver, FinalTurn};
 use ravyn::game::SolverState;
+use ravyn::gcg::{self, Action, Game};
 use ravyn::inference::{infer_leave, InferenceSettings};
 use ravyn::leavegen::{train_generation, TrainingSettings};
 use ravyn::leaves::LeaveValues;
@@ -30,6 +31,7 @@ ravyn: the RAVYN crossword-game engine
 usage: ravyn <command> '<CGP>' [options]
        ravyn train-leaves [--games N] [--generations G] [--out FILE] [--from FILE]
        ravyn match --a FILE --b FILE [--pairs N]
+       ravyn gcg FILE [--at N]
 
 commands:
   gen         every play, exchange and pass, best static equity first
@@ -44,6 +46,10 @@ commands:
               each playing with the last one's values (the first with
               --from, or the per-letter heuristic); saves to --out
               (default leaves.rlv) after every generation
+  gcg         review a game record (GCG): each move whose rack is
+              recorded against the best by static equity, and the
+              equity each player gave up; --at N prints the position
+              before event N as CGP instead (for sim, endgame, ...)
   match       self-play match between two leave tables (--a, --b: a
               leave table file, or `none` for the heuristic): A's score and
               mean spread over --pairs paired games (default 1000);
@@ -62,6 +68,7 @@ options:
   --games N       train-leaves: games per generation (default 200000)
   --generations G train-leaves: generations (default 3)
   --seed S        train-leaves and match: seed (default 1)
+  --at N          gcg: the position before event N (1 = the first move)
   --data DIR      directory holding data/words.fst and data/leaves.rlv
                   (default:
                   $RAVYN_DATA, then the current directory)
@@ -69,8 +76,9 @@ options:
 CGP: BOARD RACK[/OPP] [OURS/THEIRS ...], e.g.
   ravyn gen '15/15/15/15/15/15/15/15/15/15/15/15/15/15/15 AEINRST/ 0/0 0'";
 
-const COMMANDS: [&str; 7] = [
+const COMMANDS: [&str; 8] = [
     "gen",
+    "gcg",
     "sim",
     "endgame",
     "preendgame",
@@ -118,6 +126,8 @@ struct Options {
     pairs: usize,
     /// match: both sides choose moves by simulation (candidates, playouts).
     sim: Option<SimChoice>,
+    /// gcg: print the position before this event (1-based).
+    at: Option<usize>,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
@@ -142,6 +152,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         b: None,
         pairs: 1000,
         sim: None,
+        at: None,
     };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -168,6 +179,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 o.generations = number("--generations", value("--generations")?)? as usize
             }
             "--seed" => o.seed = number("--seed", value("--seed")?)?,
+            "--at" => o.at = Some(number("--at", value("--at")?)? as usize),
             "--pairs" => o.pairs = number("--pairs", value("--pairs")?)? as usize,
             "--out" => o.out = PathBuf::from(value("--out")?),
             "--from" => o.from = Some(PathBuf::from(value("--from")?)),
@@ -212,7 +224,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
             COMMANDS.join(", ")
         ));
     }
-    if !NO_POSITION.contains(&o.command.as_str()) {
+    if o.command == "gcg" {
+        o.cgp = positional.next().ok_or("missing the GCG file")?;
+    } else if !NO_POSITION.contains(&o.command.as_str()) {
         o.cgp = positional.next().ok_or("missing the position (CGP)")?;
     }
     if let Some(extra) = positional.next() {
@@ -313,6 +327,7 @@ fn run(args: &[String]) -> Result<(), String> {
     match o.command.as_str() {
         "train-leaves" => return train_leaves(&o),
         "match" => return leave_match(&o),
+        "gcg" => return review_game(&o),
         _ => {}
     }
     let state = SolverState::from_cgp_with_rules(&o.cgp, o.rules)?;
@@ -684,5 +699,132 @@ fn leave_match(o: &Options) -> Result<(), String> {
         r.spread,
         r.spread_ci95
     );
+    Ok(())
+}
+
+/// Review a GCG game record, or print one of its positions.
+fn review_game(o: &Options) -> Result<(), String> {
+    let path = Path::new(&o.cgp);
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let game = Game::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let replay = game
+        .replay(o.rules)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    for w in &replay.warnings {
+        eprintln!("ravyn: {}: {w}", path.display());
+    }
+    let nick = |p: usize| game.players[p].nick.as_str();
+
+    if let Some(at) = o.at {
+        if at == 0 || at > game.events.len() + 1 {
+            return Err(format!(
+                "--at: events run from 1 to {} ({} for the final position)",
+                game.events.len(),
+                game.events.len() + 1
+            ));
+        }
+        let index = at - 1;
+        // The side to move, its rack when recorded, and the scores with
+        // the mover's first.
+        let (mover, rack) = match game.events.get(index) {
+            Some(e) => (e.player, e.rack.clone()),
+            None => (
+                game.events.last().map_or(0, |e| 1 - e.player),
+                String::new(),
+            ),
+        };
+        let scores = game.scores_before(index);
+        let state = SolverState {
+            board: replay.boards[index].clone(),
+            ..SolverState::new()
+        };
+        println!(
+            "{} {}/ {}/{} 0",
+            state.board_cgp(),
+            rack,
+            scores[mover],
+            scores[1 - mover]
+        );
+        eprintln!("{} to move", nick(mover));
+        return Ok(());
+    }
+
+    let dict = load_dictionary(o.data.as_deref())?.for_rules(o.rules);
+    let (reviews, skipped) = gcg::review(&game, &replay, &dict);
+    for e in &skipped {
+        eprintln!("ravyn: {}: {e}; not reviewed", path.display());
+    }
+    println!(
+        "{:>3} {:<10} {:<22} {:>5} {:>7}  {:<22} {:>7} {:>6}",
+        "#", "player", "played", "score", "equity", "best", "equity", "lost"
+    );
+    let mut lost = [0.0f32; 2];
+    let mut reviewed = [0usize; 2];
+    let mut matched = [0usize; 2];
+    for r in &reviews {
+        let mut flags = String::new();
+        if r.unknown_word {
+            flags.push_str("  not in word list");
+        }
+        if let Some(s) = r.rescored {
+            flags.push_str(&format!("  (engine scores it {s})"));
+        }
+        if r.bag == 0 {
+            flags.push_str("  bag empty: static only");
+        }
+        let same = r.loss.abs() < 1e-3;
+        println!(
+            "{:>3} {:<10} {:<22} {:>5} {:>7.2}  {:<22} {:>7.2} {:>6}{}",
+            r.event + 1,
+            nick(r.player),
+            label(&r.played),
+            r.played.score,
+            r.played.equity,
+            if same {
+                "=".to_string()
+            } else {
+                label(&r.best)
+            },
+            r.best.equity,
+            if same {
+                "-".to_string()
+            } else {
+                format!("{:.2}", r.loss)
+            },
+            flags
+        );
+        lost[r.player] += r.loss.max(0.0);
+        reviewed[r.player] += 1;
+        matched[r.player] += usize::from(same);
+    }
+    let finals = game.scores_before(game.events.len());
+    for p in 0..2 {
+        if reviewed[p] == 0 {
+            continue;
+        }
+        println!(
+            "{}: {} points; {} moves reviewed, {} the engine's best, {:.1} equity given up ({:.2} a move)",
+            nick(p),
+            finals[p],
+            reviewed[p],
+            matched[p],
+            lost[p],
+            lost[p] / reviewed[p] as f32
+        );
+    }
+    let unreviewed = game
+        .events
+        .iter()
+        .filter(|e| {
+            e.rack.is_empty()
+                && matches!(
+                    e.action,
+                    Action::Play(_) | Action::Exchange(_) | Action::Pass
+                )
+        })
+        .count();
+    if unreviewed > 0 {
+        println!("{unreviewed} moves have no recorded rack and were not reviewed");
+    }
     Ok(())
 }

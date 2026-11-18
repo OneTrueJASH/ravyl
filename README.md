@@ -99,6 +99,7 @@ cargo run --release -p ravyn --bin ravyn -- gen '15/15/15/15/15/15/15/15/15/15/1
 | `infer` | what the opponent kept, from the board before their play (`--played`, `--score`) |
 | `train-leaves` | fits leave values by self-play (`--games`, `--generations`, `--from`, `--out`); no position needed |
 | `match` | self-play match between two leave tables (`--a`, `--b`, `--pairs`; `none` for the heuristic; `--sim C,P` to choose moves by simulation) |
+| `gcg` | reviews a game record (`ravyn gcg game.gcg`): each move whose rack is recorded against the best by static equity, flagging words not in the word list, and the equity each player gave up; `--at N` prints the position before event N as CGP, ready for `sim`, `endgame` or `preendgame` |
 
 `--rules scrabble` plays standard Scrabble instead of Crossplay (its board, values and tiles, a 50-point bingo, and the go-out ending: rack penalties and six scoreless turns). The word list is still the one in `data/`. `--data DIR` (or `$RAVYN_DATA`) points at the directory holding `data/words.fst` and the leave table; `--help` lists everything.
 
@@ -157,7 +158,7 @@ Suggestions:
 | **Enter** | Apply the selected move (also a double-click); after an exchange the rack gets the focus |
 | **M** (or **m**) | Simulate every candidate (anytime, results stream in; the endgame solver when the bag is empty). M again on the same position continues the stopped or finished run |
 | **s** / **S** | Cycle sort mode (Equity → Sim → Win% → n → Bingo → Score → Leave → Length → A-Z); clicking a column header sorts by it |
-| **y** / **Y** | Copy the selected move (`8D QUIXOTIC`) / the whole position (CGP) to the clipboard (OSC 52) |
+| **y** / **Y** / **G** | Copy the selected move (`8D QUIXOTIC`) / the whole position (CGP) / the game record (GCG) to the clipboard (OSC 52) |
 
 Esc menu: **Open Game…** (the picker), **Save Game As…** (name or rename the game), **New Game**, **Reset Board**, **Quit Game**, **Cancel**.
 
@@ -172,7 +173,7 @@ Game picker (Ctrl+O, the Esc menu, or at startup):
 | **d** | Delete the selected game (asks first) |
 | **Esc** | Close (at startup: start a new game) |
 
-Mouse: click to focus a pane, square or row; double-click a suggestion to apply it; click a column header or sort tab to sort; the wheel scrolls the pane under the pointer. Pasting a CGP line (bracketed paste) loads that position.
+Mouse: click to focus a pane, square or row; double-click a suggestion to apply it; click a column header or sort tab to sort; the wheel scrolls the pane under the pointer. Pasting a CGP line (bracketed paste) loads that position; pasting a GCG game record loads its final position and scores, with the side to move as you, and continues its record.
 
 ### Saved games
 

@@ -365,6 +365,7 @@ pub(super) struct UndoState {
     pub(super) opp_loss_total: f32,
     pub(super) opp_moves_measured: u32,
     pub(super) awaiting_opp_reply: bool,
+    pub(super) record: super::record::Record,
     pub(super) message: String,
 }
 
@@ -494,6 +495,8 @@ pub struct App {
     /// True after we apply a move until the next solve: if that solve finds
     /// no new tiles, the opponent passed or exchanged.
     pub(super) awaiting_opp_reply: bool,
+    /// Every move of the game so far, for GCG export.
+    pub(super) record: super::record::Record,
     /// Last click on a suggestion row, for double-click detection.
     pub(super) last_row_click: Option<(usize, Instant)>,
     /// Terminal size from the last frame, so focus cycling can skip panes
@@ -570,6 +573,7 @@ impl App {
             list_offset: Cell::new(0),
             list_height: Cell::new(10),
             pending_clipboard: None,
+            record: super::record::Record::default(),
             help_scroll: 0,
             help_max_scroll: Cell::new(0),
             sim_results: None,

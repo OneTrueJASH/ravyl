@@ -99,6 +99,7 @@ impl App {
                 total: self.opp_loss_total,
                 moves: self.opp_moves_measured,
             },
+            record: self.record.saved(),
         };
         Some((dir, game))
     }
@@ -209,6 +210,7 @@ impl App {
         self.pre_opponent_board = None;
         self.pending_opponent_score = 0;
         self.awaiting_opp_reply = false;
+        self.record = super::record::Record::default();
         if let Ok(mut cache) = self.sim_cache.lock() {
             cache.clear();
         }
@@ -259,6 +261,15 @@ impl App {
         }
         self.opp_loss_total = game.opp_losses.total;
         self.opp_moves_measured = game.opp_losses.moves;
+        if let Some(saved) = &game.record {
+            match super::record::Record::from_saved(saved) {
+                Ok(record) => self.record = record,
+                Err(e) => log(&format!(
+                    "Saved game {}: unreadable record: {}",
+                    game.name, e
+                )),
+            }
+        }
         self.game_name = Some(game.name);
         self.game_dirty = false;
         self.last_autosave = None;

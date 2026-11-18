@@ -43,6 +43,19 @@ pub struct SavedGame {
     pub updated: u64,
     #[serde(default)]
     pub opp_losses: OppLosses,
+    /// The moves of the game, when recorded (see `app::record`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<SavedRecord>,
+}
+
+/// A game's move record as saved: GCG text, which GCG player is us, and
+/// whether it began mid-game.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedRecord {
+    pub gcg: String,
+    pub us: usize,
+    pub partial: bool,
 }
 
 /// A saved game in a listing, with what the picker shows about it.
@@ -399,6 +412,7 @@ pub fn migrate_session(dir: &Path) -> Option<String> {
         cgp: cgp.to_string(),
         updated,
         opp_losses: OppLosses::default(),
+        record: None,
     };
     if let Err(e) = save(dir, &game) {
         crate::logging::log(&format!("Importing session.cgp failed: {}", e));
@@ -468,6 +482,11 @@ mod tests {
                 total: 31.5,
                 moves: 3,
             },
+            record: Some(SavedRecord {
+                gcg: "#player1 me Me\n#player2 opp Alice\n>me: CAT 8E CAT +10 10\n".to_string(),
+                us: 0,
+                partial: false,
+            }),
         };
         save(&dir, &game).unwrap();
         assert!(game_path(&dir, "alice-smith").is_file());
@@ -494,6 +513,7 @@ mod tests {
                 cgp: "15/15/15/15/15/15/15/15/15/15/15/15/15/15/15 / 0/0 0".to_string(),
                 updated,
                 opp_losses: OppLosses::default(),
+                record: None,
             };
             save(&dir, &game).unwrap();
         }

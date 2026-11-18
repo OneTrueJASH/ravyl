@@ -376,6 +376,7 @@ impl App {
             KeyCode::Char('m') | KeyCode::Char('M') => self.run_mcts_evaluation(),
             KeyCode::Char('y') => self.copy_selected_move(),
             KeyCode::Char('Y') => self.copy_position(),
+            KeyCode::Char('G') => self.copy_game_record(),
             _ => {}
         }
     }
@@ -671,6 +672,15 @@ impl App {
                 | DialogState::ConfirmDelete { .. }
         ) {
             return AppAction::Nothing;
+        }
+        if super::record::looks_like_gcg(text) {
+            if let Err(e) = self.import_gcg(text) {
+                self.set_message(
+                    MessageKind::Error,
+                    format!("Pasted text is not a GCG game record: {}", e),
+                );
+            }
+            return AppAction::Redraw;
         }
         match self.load_position(text, /* undoable= */ true) {
             Ok(()) => self.set_message(MessageKind::Success, "Loaded the pasted position"),

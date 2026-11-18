@@ -279,6 +279,7 @@ impl App {
             // they passed or exchanged. Whatever inference said about the
             // tiles they kept no longer describes their rack.
             self.opp_move_stamp += 1;
+            self.record.their_pass();
             if self.inferred_opponent_rack.take().is_some() {
                 log("Opponent passed or exchanged: cleared the rack inference");
             }
@@ -290,6 +291,9 @@ impl App {
             self.push_undo(format!("Before opp: {}", word));
             self.pending_opponent_score = score;
             self.opp_score += score;
+            if let Some(before) = &self.pre_opponent_board {
+                self.record.their_play(before, &placed, score);
+            }
             // Snapshot the board now so we don't re-score the same tiles next time
             self.last_applied_board = Some(self.state.board.clone());
             // This move changed their rack: the stored inference describes

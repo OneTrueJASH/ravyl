@@ -481,6 +481,7 @@ mod tests {
                     .to_string(),
                 updated,
                 opp_losses: OppLosses::default(),
+                record: None,
             };
             games::save(&dir, &game).unwrap();
         }
