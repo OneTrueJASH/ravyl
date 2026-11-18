@@ -17,6 +17,13 @@ project aims to follow [Semantic Versioning](https://semver.org/).
   remain).
 
 ### Added
+- The Scrabble endgame searches in parallel: after the previous depth's
+  best move, the remaining root moves run across all cores, sharing one
+  transposition table. With the earlier speedups (positions one ply from
+  the depth limit answered by one bounded search, the best move kept per
+  position and tried before generating the rest, board analysis made only
+  where it is used), seven of eight self-played 7-tile endgames are solved
+  within 20 s, up from four; the ones solved before are 1.8–10.8x faster.
 - Exact pre-endgame with two tiles in the bag (Crossplay): every play is
   solved against each way the last two tiles can come out (a play of two
   or more tiles empties the bag; a one-tile play leaves the opponent one to
