@@ -4,6 +4,8 @@
 
 # RAVYL
 
+[![crates.io](https://img.shields.io/crates/v/ravyl.svg)](https://crates.io/crates/ravyl)
+
 **Pronunciation:** *RAV-əl* (/ˈrævəl/), like "ravel", as in *unravel*.
 
 A terminal UI for analyzing Crossplay word game positions.
@@ -43,6 +45,28 @@ With exactly one tile in the bag, every play empties it, so the app solves the r
 With two tiles in the bag it does the same over every way the last two tiles can come out: a play of two or more tiles empties the bag, while a one-tile play draws one of them and leaves the opponent the last. This search is larger, so it runs within the simulation's time budget and says whether the best play is proven or time ran out first; passing is not evaluated with two in the bag.
 
 With more tiles in the bag the app plays each candidate out many times under these rules (both sides may exchange while the bag holds 7 or more tiles), reports the expected final spread, and estimates the win probability from a variance model fitted on Crossplay self-play. After each opponent play the app also infers what they probably kept: every leave they could have held is tried, and kept if their play was within 5 points of equity of that rack's best play, weighted by how likely it was to be drawn. Those per-letter probabilities (shown in the stats pane as `Opp kept:`) tilt the deal of the opponent's hidden rack inside the playouts. The app also grades every opponent move it auto-scores against the best plays available from sampled completions of their rack; the running error rate (shown as `Opp error:`, calibrated on self-play so a perfect opponent reads zero) makes the simulated opponent in playouts err at the same rate instead of always punishing maximally.
+
+## Install
+
+With Rust 1.88 or newer:
+
+```bash
+cargo install ravyn ravyl   # RAVYN's tool fetches the data; ravyl is the app
+ravyn fetch-data            # the word list and leave values, into ~/.ravyn/data
+ravyl
+```
+
+Prebuilt `ravyl` binaries for macOS and Linux are attached to each
+[release](https://github.com/OneTrueJASH/ravyl/releases). Without Rust,
+fetch the data by hand; each file is checked against the published
+checksums:
+
+```bash
+mkdir -p ~/.ravyn/data && cd ~/.ravyn/data
+base=https://raw.githubusercontent.com/OneTrueJASH/ravyn-data/main/v20261118
+for f in words.fst leaves.rlv crossplay-removed.txt SHA256SUMS; do curl -fsSLO "$base/$f"; done
+shasum -a 256 -c SHA256SUMS   # or sha256sum -c SHA256SUMS
+```
 
 ## Building
 

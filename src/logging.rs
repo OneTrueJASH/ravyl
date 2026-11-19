@@ -5,7 +5,7 @@
 //! `~/Library/Caches/ravyl`, on macOS where there is no state
 //! directory). The file is created fresh with mode 0600 and never through a
 //! symlink. Logs older than a week are pruned at startup, keeping at most
-//! [`MAX_KEPT_LOGS`] files.
+//! 20 files.
 //!
 //! The last [`RING_CAPACITY`] lines are also kept in memory for the log
 //! viewer, so drawing a frame never touches the file system.

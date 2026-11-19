@@ -6,7 +6,16 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-19
+
+First release, on crates.io as `ravyl` and `ravyn`.
+
 ### Changed
+- README: install from crates.io or a prebuilt binary, and fetch the
+  data by hand without Rust.
+- CI builds the documentation with warnings as errors, tests on macOS 26,
+  stops jobs after 30 minutes and re-runs jobs GitHub cancels; releases
+  build both macOS targets on macOS 26 and contain only `ravyl`.
 - `ravyn fetch-data` downloads from the public data repository with no
   token, falling back to the GitHub API with a token for a private copy.
   A token is only ever sent to the GitHub API, never to `$RAVYN_DATA_URL`.
