@@ -52,7 +52,7 @@ pub fn load_dictionary_from(root: &Path) -> Result<Dictionary> {
 /// that has it, attaching the leave table (`data/leaves.rlv`) when present.
 pub fn load_default_dictionary() -> Result<Dictionary> {
     let fst_path = datafiles::find_data_file(datafiles::WORDS_FST).context(
-        "Could not find the dictionary (data/words.fst). Run `ravyn fetch-data` \
+        "Could not find the dictionary (data/words.fst). Run `ravyl --fetch-data` \
          (installs it in ~/.ravyn), point --data-dir or RAVYL_DATA_DIR at a \
          directory holding data/, install them under the user data directory \
          (ravyl/), or run from the repository root.",

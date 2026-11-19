@@ -90,10 +90,14 @@ ravyl - Crossplay solver (terminal UI)
 
 Usage: ravyl [--game <NAME>] [--data-dir <DIR>]
        ravyl --list
+       ravyl --fetch-data [--data-dir <DIR>]
 
 Options:
   --game <NAME>     Open the saved game NAME, or start a new game called NAME
   --list            List the saved games and exit
+  --fetch-data      Download the word list and leave values (checked
+                    against built-in checksums) into ~/.ravyn/data,
+                    or into <DIR>/data with --data-dir, and exit
   --data-dir <DIR>  Directory holding data/words.fst and data/leaves.rlv
   -h, --help        Print this help
   -V, --version     Print the version
@@ -103,8 +107,8 @@ directory (ravyl/games/). Without --game the app starts with a list
 of saved games to pick from, when there are any.
 
 Data is looked for in --data-dir, then $RAVYL_DATA_DIR, then the user
-data directory (ravyl/), then <exe>/../share/ravyl, then the
-working directory.
+data directory (ravyl/), then ~/.ravyn (where --fetch-data puts it),
+then <exe>/../share/ravyl, then the working directory.
 ";
 
 /// What the command line asks for.
@@ -112,6 +116,8 @@ enum Cli {
     /// Run the TUI, opening (or creating) the named game if one is given.
     Run(Option<String>),
     List,
+    /// Download the data files into this root (`~/.ravyn` by default).
+    Fetch(Option<std::path::PathBuf>),
     Exit(ExitCode),
 }
 
@@ -120,6 +126,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
     let mut args = args.peekable();
     let mut game = None;
     let mut list = false;
+    let mut fetch = false;
+    let mut data_dir = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
@@ -131,14 +139,14 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
                 return Cli::Exit(ExitCode::SUCCESS);
             }
             "--data-dir" => match args.next() {
-                Some(dir) => datafiles::set_cli_data_dir(dir.into()),
+                Some(dir) => data_dir = Some(std::path::PathBuf::from(dir)),
                 None => {
                     eprintln!("ravyl: --data-dir needs a directory\n\n{USAGE}");
                     return Cli::Exit(ExitCode::from(2));
                 }
             },
             other if other.starts_with("--data-dir=") => {
-                datafiles::set_cli_data_dir(other["--data-dir=".len()..].into());
+                data_dir = Some(other["--data-dir=".len()..].into());
             }
             "--game" => match args.next().filter(|n| !n.trim().is_empty()) {
                 Some(name) => game = Some(name),
@@ -151,16 +159,39 @@ fn parse_args(args: impl Iterator<Item = String>) -> Cli {
                 game = Some(other["--game=".len()..].to_string());
             }
             "--list" => list = true,
+            "--fetch-data" => fetch = true,
             other => {
                 eprintln!("ravyl: unknown argument '{other}'\n\n{USAGE}");
                 return Cli::Exit(ExitCode::from(2));
             }
         }
     }
+    if fetch {
+        return Cli::Fetch(data_dir);
+    }
+    if let Some(dir) = data_dir {
+        datafiles::set_cli_data_dir(dir);
+    }
     if list {
         Cli::List
     } else {
         Cli::Run(game)
+    }
+}
+
+/// `--fetch-data`: download the data files into `root` (`~/.ravyn` by
+/// default), verifying each against the checksum built into the engine.
+fn fetch_data(root: Option<std::path::PathBuf>) -> ExitCode {
+    let Some(root) = root.or_else(ravyn::fetch::default_root) else {
+        eprintln!("ravyl: no home directory: use --fetch-data --data-dir <DIR>");
+        return ExitCode::FAILURE;
+    };
+    match ravyn::fetch::fetch(&root) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("ravyl: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -278,11 +309,12 @@ fn watch_signals(exit: &Arc<ExitState>) {
 
 fn main() -> ExitCode {
     let cli = parse_args(std::env::args().skip(1));
-    if matches!(cli, Cli::Exit(_)) {
+    match cli {
         // --help, --version and bad arguments touch nothing.
-        if let Cli::Exit(code) = cli {
-            return code;
-        }
+        Cli::Exit(code) => return code,
+        // Nor does --fetch-data, beyond the data directory.
+        Cli::Fetch(root) => return fetch_data(root),
+        _ => {}
     }
     // Settings and saved games from before the rename move to ravyl/ once,
     // and only once nothing still uses them: not while an old window
@@ -292,6 +324,7 @@ fn main() -> ExitCode {
     }
     let game = match cli {
         Cli::Exit(code) => return code,
+        Cli::Fetch(_) => unreachable!("handled above"),
         Cli::List => return list_games(),
         Cli::Run(game) => game,
     };
@@ -462,5 +495,42 @@ where
             // The spinner and the live progress line.
             dirty = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        parse_args(args.iter().map(|a| a.to_string()))
+    }
+
+    #[test]
+    fn fetch_data_defaults_to_the_home_data_root() {
+        assert!(matches!(parse(&["--fetch-data"]), Cli::Fetch(None)));
+    }
+
+    #[test]
+    fn fetch_data_takes_data_dir_in_either_order_and_form() {
+        let want = std::path::PathBuf::from("/tmp/d");
+        for args in [
+            &["--fetch-data", "--data-dir", "/tmp/d"][..],
+            &["--data-dir", "/tmp/d", "--fetch-data"][..],
+            &["--data-dir=/tmp/d", "--fetch-data"][..],
+        ] {
+            match parse(args) {
+                Cli::Fetch(Some(dir)) => assert_eq!(dir, want, "{args:?}"),
+                _ => panic!("{args:?} did not parse as --fetch-data"),
+            }
+        }
+    }
+
+    #[test]
+    fn plain_runs_and_lists_are_unchanged() {
+        assert!(matches!(parse(&[]), Cli::Run(None)));
+        assert!(matches!(parse(&["--list"]), Cli::List));
+        assert!(matches!(parse(&["--game", "x"]), Cli::Run(Some(ref g)) if g == "x"));
+        assert!(matches!(parse(&["--bogus"]), Cli::Exit(_)));
     }
 }

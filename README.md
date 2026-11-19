@@ -51,22 +51,15 @@ With more tiles in the bag the app plays each candidate out many times under the
 With Rust 1.88 or newer:
 
 ```bash
-cargo install ravyn ravyl   # RAVYN's tool fetches the data; ravyl is the app
-ravyn fetch-data            # the word list and leave values, into ~/.ravyn/data
+cargo install ravyl
+ravyl --fetch-data   # the word list and leave values, into ~/.ravyn/data
 ravyl
 ```
 
-Prebuilt `ravyl` binaries for macOS and Linux are attached to each
-[release](https://github.com/OneTrueJASH/ravyl/releases). Without Rust,
-fetch the data by hand; each file is checked against the published
-checksums:
-
-```bash
-mkdir -p ~/.ravyn/data && cd ~/.ravyn/data
-base=https://raw.githubusercontent.com/OneTrueJASH/ravyn-data/main/v20261118
-for f in words.fst leaves.rlv crossplay-removed.txt SHA256SUMS; do curl -fsSLO "$base/$f"; done
-shasum -a 256 -c SHA256SUMS   # or sha256sum -c SHA256SUMS
-```
+Or download a prebuilt `ravyl` for macOS or Linux from the
+[releases](https://github.com/OneTrueJASH/ravyl/releases) and run
+`ravyl --fetch-data` once. Each data file is checked against a checksum
+built into the program before it is installed.
 
 ## Building
 
@@ -78,14 +71,14 @@ shasum -a 256 -c SHA256SUMS   # or sha256sum -c SHA256SUMS
 ```bash
 git clone https://github.com/OneTrueJASH/ravyl
 cd ravyl
-cargo run --release -p ravyn --bin ravyn -- fetch-data
+cargo run --release -- --fetch-data
 ```
 
 `data/leaves.rlv` was trained by `ravyn train-leaves` (three generations of 500,000 self-play games, each playing with the last one's values); a per-letter heuristic is used if it is missing.
 
 The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst` is built without them.
 
-The word list lives in its own repository, versioned and checksummed, and `ravyn fetch-data` installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. No account or token is needed; for a private copy of the data repository, `$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN` or a `gh auth login` supplies one. The engine's crate package leaves the word list out.
+The word list lives in its own repository, versioned and checksummed, and `ravyl --fetch-data` (or the engine's `ravyn fetch-data`) installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. No account or token is needed; for a private copy of the data repository, `$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN` or a `gh auth login` supplies one. The engine's crate package leaves the word list out.
 
 ### Build and run
 

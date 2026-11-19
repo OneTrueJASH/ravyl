@@ -10,9 +10,14 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 
 First release, on crates.io as `ravyl` and `ravyn`.
 
+### Added
+- `ravyl --fetch-data` downloads the word list and leave values, so a
+  prebuilt `ravyl` needs nothing else. The download code moved from the
+  `ravyn` command-line tool into the engine's library (`ravyn::fetch`);
+  `ravyn fetch-data` is unchanged.
+
 ### Changed
-- README: install from crates.io or a prebuilt binary, and fetch the
-  data by hand without Rust.
+- README: install from crates.io or a prebuilt binary.
 - CI builds the documentation with warnings as errors, tests on macOS 26,
   stops jobs after 30 minutes and re-runs jobs GitHub cancels; releases
   build both macOS targets on macOS 26 and contain only `ravyl`.
