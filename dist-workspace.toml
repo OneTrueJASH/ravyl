@@ -16,6 +16,10 @@ targets = [
     "x86_64-unknown-linux-gnu",
 ]
 dispatch-releases = true
+# Release only the ravyl app. crates/ravyn also has a binary (the ravyn CLI),
+# but it belongs to RAVYN's own repository, and dist refuses a workspace
+# whose released packages name different repositories.
+packages = ["ravyl"]
 pr-run-mode = "skip"
 # release.yml has its actions pinned to commit SHAs by hand (supply-chain
 # safety), so it differs from what dist generates.
