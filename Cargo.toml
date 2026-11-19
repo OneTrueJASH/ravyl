@@ -2,10 +2,10 @@
 name = "ravyl"
 version = "0.1.0"
 edition = "2021"
-description = "A terminal UI for analyzing Crossplay and Scrabble positions, built on the RAVYN engine"
+description = "A terminal UI for analyzing Crossplay positions, built on the RAVYN engine"
 license = "MIT"
 repository = "https://github.com/OneTrueJASH/ravyl"
-keywords = ["crossplay", "word-game", "solver", "tui", "scrabble"]
+keywords = ["crossplay", "word-game", "solver", "tui", "crossword"]
 categories = ["command-line-utilities", "games"]
 rust-version = "1.88"
 # The banner is shown from GitHub; CI and scripts are not part of the package.
