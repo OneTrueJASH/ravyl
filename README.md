@@ -6,7 +6,7 @@
 
 **Pronunciation:** *RAV-əl* (/ˈrævəl/), like "ravel", as in *unravel*.
 
-A terminal UI for analyzing [NYT Crossplay](https://www.nytimes.com/games/crossplay) word game positions.
+A terminal UI for analyzing Crossplay word game positions.
 
 Built with [ratatui](https://ratatui.rs), ravyl provides real-time move generation, Monte Carlo simulation, and an exhaustive endgame solver — all tuned for Crossplay's rules rather than standard Scrabble.
 
@@ -61,7 +61,7 @@ cargo run --release -p ravyn --bin ravyn -- fetch-data
 
 The word list is Crossplay's: 196,419 words, the 2023 American tournament list less the 182 words Crossplay removed (almost all trademarks, such as BRILLO and VELCRO). The removed words are listed in `data/crossplay-removed.txt`. `data/words.fst` is built without them.
 
-The word list lives in its own repository, versioned and checksummed, and `ravyn fetch-data` installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. While that repository is private it needs a token (`$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN`, or a `gh auth login`). The engine's crate package leaves the word list out.
+The word list lives in its own repository, versioned and checksummed, and `ravyn fetch-data` installs it in `~/.ravyn/data`, which ravyl also searches, checking each file against a checksum built into the program. No account or token is needed; for a private copy of the data repository, `$RAVYN_DATA_TOKEN`, `$GITHUB_TOKEN` or a `gh auth login` supplies one. The engine's crate package leaves the word list out.
 
 ### Build and run
 
@@ -245,3 +245,5 @@ Copyright (c) 2026 OneTrueJASH.
 ravyl and its engine, RAVYN (`crates/ravyn`), are licensed under the [MIT License](LICENSE).
 
 Versions before the commit "Relicense cpsolver2 under MIT" were GPL-3.0-or-later.
+
+RAVYL and RAVYN are independent projects, not affiliated with Crossplay or Scrabble.

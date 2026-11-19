@@ -25,10 +25,10 @@ The repository is a Cargo workspace:
 Engine changes go in `crates/ravyn`; anything about the terminal or files
 stays in the root package.
 
-RAVYN also has its own repository, [OneTrueJASH/ravyn](https://github.com/OneTrueJASH/ravyn)
-(private for now), with the engine's full history. Until it is public,
-`crates/ravyn` here is where the engine is changed; after engine changes
-land, mirror them there with `scripts/sync-ravyn.sh [path to ravyn]`, which
+RAVYN also has its own repository, [OneTrueJASH/ravyn](https://github.com/OneTrueJASH/ravyn),
+with the engine's full history. `crates/ravyn` here is where the engine is
+changed; engine pull requests are welcome in either repository and land
+here. After engine changes land, mirror them there with `scripts/sync-ravyn.sh [path to ravyn]`, which
 copies the crate and its data and shows what changed for you to commit.
 The engine finds `data/` in its own directory when it has one (the
 standalone repository) and in the workspace root otherwise, so the same
@@ -82,3 +82,8 @@ cd crates/ravyn/fuzz && cargo +nightly fuzz run from_cgp   # or leaves_parse
 ## Commits
 
 Small, focused commits with imperative subject lines.
+
+## Reporting problems
+
+Bugs and ideas: open an issue. Security problems: report them privately
+(see [SECURITY.md](SECURITY.md)), never in a public issue.

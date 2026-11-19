@@ -6,6 +6,13 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- `ravyn fetch-data` downloads from the public data repository with no
+  token, falling back to the GitHub API with a token for a private copy.
+  A token is only ever sent to the GitHub API, never to `$RAVYN_DATA_URL`.
+- Both crates are set up for crates.io (RAVYN 0.1.0); issue templates,
+  a security policy and Dependabot configuration were added.
+
 ### Fixed
 - Two-digit counts in the unseen-tile grid ran into the next letter
   (`E:12F:2`).

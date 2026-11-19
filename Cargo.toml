@@ -2,13 +2,14 @@
 name = "ravyl"
 version = "0.1.0"
 edition = "2021"
-description = "TUI solver for NYT Crossplay word game positions"
+description = "A terminal UI for analyzing Crossplay and Scrabble positions, built on the RAVYN engine"
 license = "MIT"
 repository = "https://github.com/OneTrueJASH/ravyl"
 keywords = ["crossplay", "word-game", "solver", "tui", "scrabble"]
 categories = ["command-line-utilities", "games"]
 rust-version = "1.88"
-publish = false
+# The banner is shown from GitHub; CI and scripts are not part of the package.
+exclude = ["/assets", "/.github", "/scripts"]
 
 [workspace]
 members = ["crates/ravyn"]
@@ -16,7 +17,7 @@ members = ["crates/ravyn"]
 default-members = [".", "crates/ravyn"]
 
 [dependencies]
-ravyn = { path = "crates/ravyn" }
+ravyn = { path = "crates/ravyn", version = "0.1.0" }
 log = "0.4"
 ratatui = "0.30"
 fst = "0.4"

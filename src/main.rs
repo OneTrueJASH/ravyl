@@ -86,7 +86,7 @@ fn install_panic_hook() {
 }
 
 const USAGE: &str = "\
-ravyl - NYT Crossplay solver (terminal UI)
+ravyl - Crossplay solver (terminal UI)
 
 Usage: ravyl [--game <NAME>] [--data-dir <DIR>]
        ravyl --list

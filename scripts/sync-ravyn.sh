@@ -1,8 +1,8 @@
 #!/bin/sh
 # Mirror the engine (crates/ravyn) and its data files into a checkout of
 # the standalone RAVYN repository, then show what changed there. Files
-# that only the standalone repository has (README, CI, lockfile,
-# .gitignore) are left alone; everything else mirrors crates/ravyn,
+# that only the standalone repository has (README, CONTRIBUTING, SECURITY,
+# CI, lockfile, .gitignore, banner) are left alone; everything else mirrors crates/ravyn,
 # deletions included. Review and commit in the checkout.
 #
 #   scripts/sync-ravyn.sh [path to the ravyn checkout]   (default ../ravyn)
@@ -24,6 +24,7 @@ rsync -a --delete \
     --exclude /.git/ --exclude /target/ --exclude /data/ \
     --exclude /README.md --exclude /.github/ --exclude /Cargo.lock \
     --exclude /.gitignore --exclude /fuzz/target/ --exclude /assets/ \
+    --exclude /CONTRIBUTING.md --exclude /SECURITY.md \
     "$here/crates/ravyn/" "$dest/"
 mkdir -p "$dest/data"
 # Only the leave values: the word list comes from the data repository.
