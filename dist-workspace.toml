@@ -20,3 +20,9 @@ pr-run-mode = "skip"
 # release.yml has its actions pinned to commit SHAs by hand (supply-chain
 # safety), so it differs from what dist generates.
 allow-dirty = ["ci"]
+
+# dist 0.32 would build Apple Silicon on macos-14, which GitHub retired
+# on 2026-11-02; both macOS builds use macOS 26, like CI.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-26"
+x86_64-apple-darwin = "macos-26-intel"
