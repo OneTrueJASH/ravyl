@@ -8,7 +8,31 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [0.1.0] - 2026-11-19
 
-First release, on crates.io as `ravyl` and `ravyn`.
+First release: the `ravyl` app and the `ravyn` engine on crates.io, with
+prebuilt `ravyl` binaries for macOS and Linux.
+
+### Added
+- A terminal UI for Crossplay positions: enter the board, racks and
+  scores, and see every legal play ranked by score and leave value.
+- Simulation of every candidate (plays, exchanges and passing), racing
+  them on spread and win rate, with results shown live.
+- Exact endgames, and an exact pre-endgame with one or two tiles in the
+  bag.
+- Inference of the opponent's rack from their last play.
+- Leave values trained by self-play.
+- Named games saved as you play, a game picker, and GCG game records:
+  export, import and a move-by-move review.
+- `ravyl --fetch-data` (or `ravyn fetch-data`) downloads the word list
+  and leave values, each checked against a checksum built into the program.
+- Themes, mouse support, and layouts down to an 80×24 terminal.
+- The engine as a library and a command-line tool, `ravyn`, which also
+  plays standard Scrabble (`--rules scrabble`).
+
+## Development history (before 0.1.0)
+
+Changes made while the project was developed, before its first release
+(as cpsolver2 until shortly before it). Kept for reference; the entries
+are not in strict order.
 
 ### Added
 - `ravyl --fetch-data` downloads the word list and leave values, so a
@@ -19,7 +43,7 @@ First release, on crates.io as `ravyl` and `ravyn`.
 ### Changed
 - README: install from crates.io or a prebuilt binary.
 - CI builds the documentation with warnings as errors, tests on macOS 26,
-  stops jobs after 30 minutes and re-runs jobs GitHub cancels; releases
+  stops jobs after 30 minutes; releases
   build both macOS targets on macOS 26 and contain only `ravyl`.
 - `ravyn fetch-data` downloads from the public data repository with no
   token, falling back to the GitHub API with a token for a private copy.
@@ -32,8 +56,8 @@ First release, on crates.io as `ravyl` and `ravyn`.
   (`E:12F:2`).
 - The word list now matches Crossplay's: the 182 words Crossplay removes
   from the tournament list (almost all trademarks, such as BRILLO, VELCRO
-  and TASER) are gone from `data/words.fst`, `AMERICAN.kwg` and
-  `AMERICAN.wmp`, so they are never suggested or played by the simulated
+  and TASER) are gone from `data/words.fst` and the app's other word-list
+  files, so they are never suggested or played by the simulated
   opponent. The list is in `data/crossplay-removed.txt` (196,419 words
   remain).
 
@@ -179,7 +203,7 @@ First release, on crates.io as `ravyl` and `ravyn`.
   `ravyn match` compares leave tables (`--sim C,P` with both sides
   choosing moves by simulation, where the gain held: +2.2 +- 2.0 over
   4,600 games).
-- The last of the reference engine is gone: its leave table (`AMERICAN.klv2`), the KLV2
+- The last of the reference engine is gone: its leave table, that table's
   reader and Git LFS (nothing is stored in LFS any more). Only a record of
   its move generation remains, as test fixtures.
 - Scrabble rules in the engine: a `SCRABBLE` preset (standard board,
@@ -202,7 +226,7 @@ First release, on crates.io as `ravyl` and `ravyn`.
   submodule and building no C compiler. Its answers on the reference
   positions (move generation on 32 positions, static equity, rack
   inference) are recorded as fixtures, and the engine is still checked
-  against them. Only its leave table (`AMERICAN.klv2`) remains, as data.
+  against them. Only its leave table remains, as data.
 - The engine's integration, property and reference-engine tests and its
   fuzz targets moved into `crates/ravyn` with the benchmarks.
 - Exact pre-endgame with one tile in the bag: M solves every play against
@@ -291,4 +315,4 @@ First release, on crates.io as `ravyl` and `ravyn`.
 - Stale inference after an opponent pass or exchange.
 - A worker-thread panic restored the terminal under the running UI.
 - The leave-table parser could allocate from an untrusted count.
-- Concurrent reference-engine calls from two handles could crash (SIGSEGV).
+- Concurrent reference-engine calls from two handles could crash.
