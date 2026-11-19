@@ -1,5 +1,10 @@
 [workspace]
 members = ["cargo:."]
+# Release only the ravyl app. crates/ravyn also has a binary (the ravyn CLI),
+# but it belongs to RAVYN's own repository, and dist refuses a workspace
+# whose released packages name different repositories. (dist 0.32 reads
+# `packages` here, not under [dist].)
+packages = ["ravyl"]
 
 # Release builds with dist (https://opensource.axo.dev/cargo-dist/).
 # Releases are cut only by running the Release workflow by hand
@@ -16,10 +21,6 @@ targets = [
     "x86_64-unknown-linux-gnu",
 ]
 dispatch-releases = true
-# Release only the ravyl app. crates/ravyn also has a binary (the ravyn CLI),
-# but it belongs to RAVYN's own repository, and dist refuses a workspace
-# whose released packages name different repositories.
-packages = ["ravyl"]
 pr-run-mode = "skip"
 # release.yml has its actions pinned to commit SHAs by hand (supply-chain
 # safety), so it differs from what dist generates.
