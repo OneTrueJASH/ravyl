@@ -309,13 +309,13 @@ mod tests {
     fn detects_lfs_pointers() {
         let dir = std::env::temp_dir().join(format!("ravyl-lfs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let stub = dir.join("stub.kwg");
+        let stub = dir.join("stub.bin");
         std::fs::write(
             &stub,
             "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 4719596\n",
         )
         .unwrap();
-        let real = dir.join("real.kwg");
+        let real = dir.join("real.bin");
         std::fs::write(&real, [0u8, 1, 2, 3, 4, 5, 6, 7]).unwrap();
 
         assert!(is_lfs_pointer(&stub));

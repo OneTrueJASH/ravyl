@@ -61,6 +61,19 @@ Or download a prebuilt `ravyl` for macOS or Linux from the
 `ravyl --fetch-data` once. Each data file is checked against a checksum
 built into the program before it is installed.
 
+The macOS binaries are not signed by Apple, so when the archive comes from
+a browser, macOS blocks the first run with a warning that it can't verify
+the developer. Clear the download flag once, from the directory holding
+`ravyl`:
+
+```bash
+xattr -d com.apple.quarantine ravyl
+```
+
+Or try to run it once, then choose **Open Anyway** under **System Settings
+→ Privacy & Security**. Downloads made with `curl` or `cargo install` are
+not flagged.
+
 ## Building
 
 ### Prerequisites
