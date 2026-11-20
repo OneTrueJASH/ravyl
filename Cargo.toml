@@ -1,5 +1,7 @@
 [package]
 name = "ravyl"
+# `cargo run` starts the app; the engine's tool needs `--bin ravyn`.
+default-run = "ravyl"
 version = "0.1.0"
 edition = "2021"
 description = "A terminal UI for analyzing Crossplay positions, built on the RAVYN engine"

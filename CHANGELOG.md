@@ -6,6 +6,10 @@ project aims to follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `cargo run` in a checkout starts the app again (the workspace also
+  builds the engine's `ravyn` tool, so cargo could not choose).
+
 ## [0.1.0] - 2026-11-19
 
 First release: the `ravyl` app and the `ravyn` engine on crates.io, with
