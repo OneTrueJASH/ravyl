@@ -51,10 +51,13 @@ With more tiles in the bag the app plays each candidate out many times under the
 With Rust 1.88 or newer:
 
 ```bash
-cargo install ravyl
-ravyl --fetch-data   # the word list and leave values, into ~/.ravyn/data
+cargo install ravyl ravyn   # the app and the engine's command-line tool
+ravyl --fetch-data          # the word list and leave values, into ~/.ravyn/data
 ravyl
 ```
+
+Both commands land in `~/.cargo/bin`, which the Rust installer puts on
+your `PATH`, so `ravyl` and `ravyn` run from any directory.
 
 Or download a prebuilt `ravyl` for macOS or Linux from the
 [releases](https://github.com/OneTrueJASH/ravyl/releases) and run
@@ -98,6 +101,12 @@ The word list lives in its own repository, versioned and checksummed, and `ravyl
 ```bash
 cargo build --release
 cargo run --release
+```
+
+To put both commands on your `PATH` from the checkout instead:
+
+```bash
+cargo install --path . && cargo install --path crates/ravyn
 ```
 
 The binary is pure Rust with no runtime library dependency. It needs the data files at run time and looks for a directory holding `data/words.fst` and `data/leaves.rlv` in this order:
